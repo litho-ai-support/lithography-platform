@@ -30,6 +30,13 @@ const REQUIRED_TABLES = [
   'base_async_task_record',
   'base_third_party_auth',
   'base_verification_record',
+  'equipment_model',
+  'repair_request',
+  'ai_conversation',
+  'ai_message',
+  'ai_report',
+  'engineer_response',
+  'reference_document',
 ] as const;
 
 const REQUIRED_INDEXES: ReadonlyArray<{ table: string; index: string }> = [
@@ -40,6 +47,36 @@ const REQUIRED_INDEXES: ReadonlyArray<{ table: string; index: string }> = [
   { table: 'ai_workflow_context', index: 'uk_ai_workflow_context_type_active_dedup_hash' },
   { table: 'ai_workflow_context', index: 'uk_ai_workflow_context_queue_job' },
   { table: 'base_verification_record', index: 'uk_token_fp' },
+  { table: 'equipment_model', index: 'uk_equipment_model_code' },
+  { table: 'repair_request', index: 'uk_repair_request_no' },
+  { table: 'ai_message', index: 'uk_ai_message_conversation_seq' },
+  { table: 'ai_report', index: 'uk_ai_report_conversation_type' },
+];
+
+const REQUIRED_COLUMNS: ReadonlyArray<{ table: string; column: string }> = [
+  { table: 'base_user_info', column: 'company_name' },
+  { table: 'ai_conversation', column: 'status' },
+  { table: 'ai_conversation', column: 'ai_feedback' },
+  { table: 'ai_conversation', column: 'completed_at' },
+  { table: 'ai_message', column: 'message_seq' },
+  { table: 'ai_message', column: 'turn_no' },
+  { table: 'reference_document', column: 'deprecated' },
+  { table: 'reference_document', column: 'deleted_at' },
+];
+
+const FORBIDDEN_COLUMNS: ReadonlyArray<{ table: string; column: string }> = [
+  { table: 'ai_conversation', column: 'content_md' },
+];
+
+const REQUIRED_CHECKS: ReadonlyArray<{ table: string; constraint: string }> = [
+  { table: 'equipment_model', constraint: 'chk_equipment_model_enabled' },
+  { table: 'repair_request', constraint: 'chk_repair_request_acceptance_consistency' },
+  { table: 'repair_request', constraint: 'chk_repair_request_deletion_consistency' },
+  { table: 'ai_conversation', constraint: 'chk_ai_conversation_completion' },
+  { table: 'ai_message', constraint: 'chk_ai_message_turn' },
+  { table: 'reference_document', constraint: 'chk_reference_document_deletion_consistency' },
+  { table: 'reference_document', constraint: 'chk_reference_document_storage_pair' },
+  { table: 'reference_document', constraint: 'chk_reference_document_content_source' },
 ];
 
 const REQUIRED_FOREIGN_KEYS: ReadonlyArray<{
@@ -50,6 +87,76 @@ const REQUIRED_FOREIGN_KEYS: ReadonlyArray<{
   {
     table: 'base_user_info',
     constraint: 'base_user_info_ibfk_1',
+    referencedTable: 'base_user_account',
+  },
+  {
+    table: 'repair_request',
+    constraint: 'fk_repair_request_customer_account',
+    referencedTable: 'base_user_account',
+  },
+  {
+    table: 'repair_request',
+    constraint: 'fk_repair_request_equipment_model',
+    referencedTable: 'equipment_model',
+  },
+  {
+    table: 'repair_request',
+    constraint: 'fk_repair_request_engineer_account',
+    referencedTable: 'base_user_account',
+  },
+  {
+    table: 'ai_conversation',
+    constraint: 'fk_ai_conversation_request',
+    referencedTable: 'repair_request',
+  },
+  {
+    table: 'ai_conversation',
+    constraint: 'fk_ai_conversation_engineer_account',
+    referencedTable: 'base_user_account',
+  },
+  {
+    table: 'ai_message',
+    constraint: 'fk_ai_message_conversation',
+    referencedTable: 'ai_conversation',
+  },
+  {
+    table: 'ai_report',
+    constraint: 'fk_ai_report_request',
+    referencedTable: 'repair_request',
+  },
+  {
+    table: 'ai_report',
+    constraint: 'fk_ai_report_conversation',
+    referencedTable: 'ai_conversation',
+  },
+  {
+    table: 'ai_report',
+    constraint: 'fk_ai_report_engineer_account',
+    referencedTable: 'base_user_account',
+  },
+  {
+    table: 'engineer_response',
+    constraint: 'fk_engineer_response_request',
+    referencedTable: 'repair_request',
+  },
+  {
+    table: 'engineer_response',
+    constraint: 'fk_engineer_response_engineer_account',
+    referencedTable: 'base_user_account',
+  },
+  {
+    table: 'engineer_response',
+    constraint: 'fk_engineer_response_customer_account',
+    referencedTable: 'base_user_account',
+  },
+  {
+    table: 'reference_document',
+    constraint: 'fk_reference_document_equipment_model',
+    referencedTable: 'equipment_model',
+  },
+  {
+    table: 'reference_document',
+    constraint: 'fk_reference_document_created_by_account',
     referencedTable: 'base_user_account',
   },
 ];
@@ -261,6 +368,74 @@ async function assertRequiredIndexes(dataSource: DataSource, databaseName: strin
 }
 
 /**
+ * 校验关键字段存在，并防止已废弃字段回归。
+ */
+async function assertRequiredColumns(dataSource: DataSource, databaseName: string): Promise<void> {
+  for (const item of REQUIRED_COLUMNS) {
+    const exists = await hasQueryResult(
+      dataSource,
+      `
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = ?
+          AND table_name = ?
+          AND column_name = ?
+        LIMIT 1
+      `,
+      [databaseName, item.table, item.column],
+    );
+
+    if (!exists) {
+      throw new Error(`关键字段缺失: ${item.table}.${item.column}`);
+    }
+  }
+
+  for (const item of FORBIDDEN_COLUMNS) {
+    const exists = await hasQueryResult(
+      dataSource,
+      `
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = ?
+          AND table_name = ?
+          AND column_name = ?
+        LIMIT 1
+      `,
+      [databaseName, item.table, item.column],
+    );
+
+    if (exists) {
+      throw new Error(`已废弃字段仍存在: ${item.table}.${item.column}`);
+    }
+  }
+}
+
+/**
+ * 校验关键 CHECK 约束存在。
+ */
+async function assertRequiredChecks(dataSource: DataSource, databaseName: string): Promise<void> {
+  for (const item of REQUIRED_CHECKS) {
+    const exists = await hasQueryResult(
+      dataSource,
+      `
+        SELECT 1
+        FROM information_schema.table_constraints
+        WHERE constraint_schema = ?
+          AND table_name = ?
+          AND constraint_name = ?
+          AND constraint_type = 'CHECK'
+        LIMIT 1
+      `,
+      [databaseName, item.table, item.constraint],
+    );
+
+    if (!exists) {
+      throw new Error(`关键 CHECK 约束缺失: ${item.table}.${item.constraint}`);
+    }
+  }
+}
+
+/**
  * 校验关键外键是否存在。
  */
 async function assertRequiredForeignKeys(
@@ -404,9 +579,11 @@ async function runEmptyDbMigrationDrill(): Promise<void> {
     writeInfo(`✅ migration 执行成功，共 ${executedMigrations.length} 条`);
 
     await assertRequiredTables(migrationDataSource, target.databaseName);
+    await assertRequiredColumns(migrationDataSource, target.databaseName);
     await assertRequiredIndexes(migrationDataSource, target.databaseName);
+    await assertRequiredChecks(migrationDataSource, target.databaseName);
     await assertRequiredForeignKeys(migrationDataSource, target.databaseName);
-    writeInfo('✅ 关键表、关键索引与关键外键校验通过');
+    writeInfo('✅ 关键表、字段、索引、CHECK 与外键校验通过');
     writeInfo('🎉 空库 migration 演练通过');
   } finally {
     if (migrationInitialized) {

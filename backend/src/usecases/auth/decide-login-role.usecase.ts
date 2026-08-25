@@ -48,8 +48,8 @@ export class DecideLoginRoleUsecase implements IDecideLoginRoleUsecase {
       finalRole = roleFromHint;
       reason = 'hint';
     } else {
-      // 策略 2: 否则 → 直接回退到 REGISTRANT（安全默认）
-      finalRole = IdentityTypeEnum.REGISTRANT;
+      // 策略 2: 否则 → 直接回退到 CUSTOMER（安全默认）
+      finalRole = IdentityTypeEnum.CUSTOMER;
       reason = 'fallback';
     }
 

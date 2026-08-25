@@ -130,13 +130,13 @@ describe('Auth Identity (e2e)', () => {
       expect(data?.login.accountId).toBeDefined();
       expect(data?.login.accessToken).toBeDefined();
       expect(data?.login.refreshToken).toBeDefined();
-      expect(data?.login.role).toBe(IdentityTypeEnum.STAFF);
+      expect(data?.login.role).toBe(IdentityTypeEnum.ENGINEER);
       expect(typeof data?.login.accessToken).toBe('string');
       expect(typeof data?.login.refreshToken).toBe('string');
 
       const payload = tokenHelper.decodeToken({ token: data!.login.accessToken });
-      expect(payload?.activeRole).toBe(IdentityTypeEnum.STAFF);
-      expect(payload?.accessGroup).toContain(IdentityTypeEnum.STAFF);
+      expect(payload?.activeRole).toBe(IdentityTypeEnum.ENGINEER);
+      expect(payload?.accessGroup).toContain(IdentityTypeEnum.ENGINEER);
     });
 
     it('应该正确返回 staff secondary 用户信息', async () => {
@@ -146,7 +146,7 @@ describe('Auth Identity (e2e)', () => {
       expect(data?.login.userInfo).toBeDefined();
       expect(data?.login.userInfo.nickname).toBeDefined();
       expect(data?.login.userInfo.email).toBe(staffSecondary.loginEmail);
-      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.STAFF);
+      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.ENGINEER);
       expect(data?.login.userInfo.userState).toBe(UserState.ACTIVE);
     });
   });
@@ -159,13 +159,13 @@ describe('Auth Identity (e2e)', () => {
       expect(data?.login.accountId).toBeDefined();
       expect(data?.login.accessToken).toBeDefined();
       expect(data?.login.refreshToken).toBeDefined();
-      expect(data?.login.role).toBe(IdentityTypeEnum.GUEST);
+      expect(data?.login.role).toBe(IdentityTypeEnum.CUSTOMER);
       expect(typeof data?.login.accessToken).toBe('string');
       expect(typeof data?.login.refreshToken).toBe('string');
 
       const payload = tokenHelper.decodeToken({ token: data!.login.accessToken });
-      expect(payload?.activeRole).toBe(IdentityTypeEnum.GUEST);
-      expect(payload?.accessGroup).toContain(IdentityTypeEnum.GUEST);
+      expect(payload?.activeRole).toBe(IdentityTypeEnum.CUSTOMER);
+      expect(payload?.accessGroup).toContain(IdentityTypeEnum.CUSTOMER);
     });
 
     it('应该正确返回 Guest primary 用户信息', async () => {
@@ -175,7 +175,7 @@ describe('Auth Identity (e2e)', () => {
       expect(data?.login.userInfo).toBeDefined();
       expect(data?.login.userInfo.nickname).toBeDefined();
       expect(data?.login.userInfo.email).toBe(guestPrimary.loginEmail);
-      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.GUEST);
+      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.CUSTOMER);
       expect(data?.login.userInfo.userState).toBe(UserState.ACTIVE);
     });
   });
@@ -188,13 +188,13 @@ describe('Auth Identity (e2e)', () => {
       expect(data?.login.accountId).toBeDefined();
       expect(data?.login.accessToken).toBeDefined();
       expect(data?.login.refreshToken).toBeDefined();
-      expect(data?.login.role).toBe(IdentityTypeEnum.STAFF);
+      expect(data?.login.role).toBe(IdentityTypeEnum.ENGINEER);
       expect(typeof data?.login.accessToken).toBe('string');
       expect(typeof data?.login.refreshToken).toBe('string');
 
       const payload = tokenHelper.decodeToken({ token: data!.login.accessToken });
-      expect(payload?.activeRole).toBe(IdentityTypeEnum.STAFF);
-      expect(payload?.accessGroup).toContain(IdentityTypeEnum.STAFF);
+      expect(payload?.activeRole).toBe(IdentityTypeEnum.ENGINEER);
+      expect(payload?.accessGroup).toContain(IdentityTypeEnum.ENGINEER);
     });
 
     it('应该正确返回 staff primary 用户信息', async () => {
@@ -204,7 +204,7 @@ describe('Auth Identity (e2e)', () => {
       expect(data?.login.userInfo).toBeDefined();
       expect(data?.login.userInfo.nickname).toBeDefined();
       expect(data?.login.userInfo.email).toBe(staffPrimary.loginEmail);
-      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.STAFF);
+      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.ENGINEER);
       expect(data?.login.userInfo.userState).toBe(UserState.ACTIVE);
     });
   });
@@ -217,13 +217,13 @@ describe('Auth Identity (e2e)', () => {
       expect(data?.login.accountId).toBeDefined();
       expect(data?.login.accessToken).toBeDefined();
       expect(data?.login.refreshToken).toBeDefined();
-      expect(data?.login.role).toBe(IdentityTypeEnum.GUEST);
+      expect(data?.login.role).toBe(IdentityTypeEnum.CUSTOMER);
       expect(typeof data?.login.accessToken).toBe('string');
       expect(typeof data?.login.refreshToken).toBe('string');
 
       const payload = tokenHelper.decodeToken({ token: data!.login.accessToken });
-      expect(payload?.activeRole).toBe(IdentityTypeEnum.GUEST);
-      expect(payload?.accessGroup).toContain(IdentityTypeEnum.GUEST);
+      expect(payload?.activeRole).toBe(IdentityTypeEnum.CUSTOMER);
+      expect(payload?.accessGroup).toContain(IdentityTypeEnum.CUSTOMER);
     });
 
     it('应该正确返回 guest secondary 用户信息', async () => {
@@ -233,7 +233,7 @@ describe('Auth Identity (e2e)', () => {
       expect(data?.login.userInfo).toBeDefined();
       expect(data?.login.userInfo.nickname).toBeDefined();
       expect(data?.login.userInfo.email).toBe(guestSecondary.loginEmail);
-      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.GUEST);
+      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.CUSTOMER);
       expect(data?.login.userInfo.userState).toBe(UserState.ACTIVE);
     });
   });
@@ -243,32 +243,32 @@ describe('Auth Identity (e2e)', () => {
       const response = await performLogin(staffSecondary.loginName, staffSecondary.loginPassword);
 
       const { data } = response.body;
-      expect(data?.login.role).toBe(IdentityTypeEnum.STAFF);
-      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.STAFF);
+      expect(data?.login.role).toBe(IdentityTypeEnum.ENGINEER);
+      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.ENGINEER);
     });
 
     it('应该正确决策 Guest primary 角色', async () => {
       const response = await performLogin(guestPrimary.loginName, guestPrimary.loginPassword);
 
       const { data } = response.body;
-      expect(data?.login.role).toBe(IdentityTypeEnum.GUEST);
-      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.GUEST);
+      expect(data?.login.role).toBe(IdentityTypeEnum.CUSTOMER);
+      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.CUSTOMER);
     });
 
     it('应该正确决策 staff primary 角色', async () => {
       const response = await performLogin(staffPrimary.loginName, staffPrimary.loginPassword);
 
       const { data } = response.body;
-      expect(data?.login.role).toBe(IdentityTypeEnum.STAFF);
-      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.STAFF);
+      expect(data?.login.role).toBe(IdentityTypeEnum.ENGINEER);
+      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.ENGINEER);
     });
 
     it('应该正确决策 guest secondary 角色', async () => {
       const response = await performLogin(guestSecondary.loginName, guestSecondary.loginPassword);
 
       const { data } = response.body;
-      expect(data?.login.role).toBe(IdentityTypeEnum.GUEST);
-      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.GUEST);
+      expect(data?.login.role).toBe(IdentityTypeEnum.CUSTOMER);
+      expect(data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.CUSTOMER);
     });
   });
 

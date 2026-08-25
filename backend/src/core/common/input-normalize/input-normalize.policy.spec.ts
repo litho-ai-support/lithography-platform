@@ -80,14 +80,14 @@ describe('input normalize policy', () => {
 
   it('enum normalize 应支持大小写不敏感匹配并返回规范枚举值', () => {
     expect(
-      normalizeEnumValue('staff', ['ADMIN', 'STAFF', 'GUEST'] as const, {
+      normalizeEnumValue('engineer', ['SUPER_ADMIN', 'ENGINEER', 'CUSTOMER'] as const, {
         fieldName: '角色',
         caseInsensitive: true,
       }),
-    ).toBe('STAFF');
+    ).toBe('ENGINEER');
 
     expect(() =>
-      normalizeEnumValue('owner', ['ADMIN', 'STAFF', 'GUEST'] as const, {
+      normalizeEnumValue('owner', ['SUPER_ADMIN', 'ENGINEER', 'CUSTOMER'] as const, {
         fieldName: '角色',
         caseInsensitive: true,
       }),

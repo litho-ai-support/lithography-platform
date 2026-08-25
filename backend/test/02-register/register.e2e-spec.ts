@@ -31,42 +31,42 @@ describe('Register (e2e)', () => {
       loginEmail: 'testregister@example.com',
       loginPassword: 'TestPass123!',
       nickname: '测试用户',
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
-    validStaff: {
-      loginName: 'teststaff',
-      loginEmail: 'teststaff@example.com',
-      loginPassword: 'StaffPass123!',
-      nickname: '测试工作人员',
-      type: RegisterTypeEnum.STAFF,
+    validCustomerSecondary: {
+      loginName: 'testcustomersecondary',
+      loginEmail: 'customer.secondary@example.com',
+      loginPassword: 'CustomerPass123!',
+      nickname: '测试客户二号',
+      type: RegisterTypeEnum.CUSTOMER,
     },
     duplicateLoginName: {
       loginName: 'testregister', // 与 validUser 重复
       loginEmail: 'duplicate1@example.com',
       loginPassword: 'DuplicatePass123!',
       nickname: '重复用户名',
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
     duplicateEmail: {
       loginName: 'duplicateemail',
       loginEmail: 'testregister@example.com', // 与 validUser 重复
       loginPassword: 'DuplicatePass123!',
       nickname: '重复邮箱',
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
     duplicateNickname: {
       loginName: 'duplicatenick',
       loginEmail: 'duplicatenick@example.com',
       loginPassword: 'DuplicatePass123!',
       nickname: '测试用户', // 与 validUser 重复
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
     onlyEmailUser: {
       loginName: null, // 只提供邮箱的注册可能没有 loginName
       loginEmail: 'onlyemail@example.com',
       loginPassword: 'OnlyEmail123!',
       nickname: null, // 可能没有昵称
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
     // 新增：验证场景数据
     weakPassword: {
@@ -74,42 +74,42 @@ describe('Register (e2e)', () => {
       loginEmail: 'weakpassword@example.com',
       loginPassword: '123456', // 弱密码
       nickname: '弱密码用户',
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
     invalidEmail: {
       loginName: 'invalidemail',
       loginEmail: 'invalid-email-format', // 无效邮箱格式
       loginPassword: 'TestPass123!', // 添加必需的密码字段
       nickname: '无效邮箱用户',
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
     invalidLoginName: {
       loginName: 'invalid@name', // 包含非法字符
       loginEmail: 'invalidname@example.com',
       loginPassword: 'TestPass123!',
       nickname: '无效登录名用户',
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
     invalidNickname: {
       loginName: 'invalidnickname',
       loginEmail: 'invalidnickname@example.com',
       loginPassword: 'TestPass123!',
       nickname: 'invalid@nickname', // 包含非法字符
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
     missingPassword: {
       loginName: 'missingpassword',
       loginEmail: 'missingpassword@example.com',
       // 故意缺少 loginPassword 来测试验证
       nickname: '缺少密码用户',
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
     emptyEmail: {
       loginName: 'testuser',
       loginEmail: '', // 空邮箱
       loginPassword: 'TestPass123!',
       nickname: '空邮箱用户',
-      type: RegisterTypeEnum.REGISTRANT,
+      type: RegisterTypeEnum.CUSTOMER,
     },
     invalidType: {
       loginName: 'invalidtype',
@@ -319,8 +319,8 @@ describe('Register (e2e)', () => {
       expect(createdAccount?.status).toBe(AccountStatus.ACTIVE);
     });
 
-    it('应该支持工作人员注册后登录', async () => {
-      const registerResponse = await performRegister(testRegisterData.validStaff);
+    it('应该支持显式指定 CUSTOMER 注册后登录', async () => {
+      const registerResponse = await performRegister(testRegisterData.validCustomerSecondary);
 
       expect(registerResponse.status).toBe(200);
       const { data } = registerResponse.body;
@@ -333,7 +333,7 @@ describe('Register (e2e)', () => {
       });
 
       expect(createdAccount).toBeDefined();
-      expect(createdAccount?.identityHint).toBe(IdentityTypeEnum.STAFF);
+      expect(createdAccount?.identityHint).toBe(IdentityTypeEnum.CUSTOMER);
       expect(createdAccount?.status).toBe(AccountStatus.ACTIVE);
 
       const userInfoRepository = dataSource.getRepository(UserInfoEntity);
@@ -341,19 +341,21 @@ describe('Register (e2e)', () => {
         where: { accountId: data?.register.accountId },
       });
 
-      expect(userInfo?.accessGroup).toContain(IdentityTypeEnum.STAFF);
-      expect(userInfo?.metaDigest).toContain(IdentityTypeEnum.STAFF);
+      expect(userInfo?.accessGroup).toContain(IdentityTypeEnum.CUSTOMER);
+      expect(userInfo?.metaDigest).toContain(IdentityTypeEnum.CUSTOMER);
 
       const loginResponse = await performLogin(
-        testRegisterData.validStaff.loginName,
-        testRegisterData.validStaff.loginPassword,
+        testRegisterData.validCustomerSecondary.loginName,
+        testRegisterData.validCustomerSecondary.loginPassword,
       );
       expect(loginResponse.status).toBe(200);
       expect(loginResponse.body.data?.login.accountId).toBe(data?.register.accountId);
       expect(loginResponse.body.data?.login.accessToken).toBeDefined();
       expect(loginResponse.body.data?.login.refreshToken).toBeDefined();
-      expect(loginResponse.body.data?.login.role).toBe(IdentityTypeEnum.STAFF);
-      expect(loginResponse.body.data?.login.userInfo.accessGroup).toContain(IdentityTypeEnum.STAFF);
+      expect(loginResponse.body.data?.login.role).toBe(IdentityTypeEnum.CUSTOMER);
+      expect(loginResponse.body.data?.login.userInfo.accessGroup).toContain(
+        IdentityTypeEnum.CUSTOMER,
+      );
     });
 
     /**
@@ -640,12 +642,12 @@ describe('Register (e2e)', () => {
       expect(typeof encryptedMetaDigest).toBe('string');
 
       // 验证存储的是加密后的数据，不是原始数据
-      expect(encryptedMetaDigest).not.toBe('REGISTRANT');
-      expect(encryptedMetaDigest).not.toContain('REGISTRANT');
+      expect(encryptedMetaDigest).not.toBe('CUSTOMER');
+      expect(encryptedMetaDigest).not.toContain('CUSTOMER');
 
       // 验证可以正确解密 - 使用新的服务
       const decryptedValue = fieldEncryptionService.decrypt(encryptedMetaDigest);
-      expect(decryptedValue).toBe('["REGISTRANT"]'); // 数组被序列化为 JSON 字符串
+      expect(decryptedValue).toBe('["CUSTOMER"]'); // 数组被序列化为 JSON 字符串
     });
 
     /**
@@ -670,11 +672,11 @@ describe('Register (e2e)', () => {
       if (typeof userInfo?.metaDigest === 'string') {
         const parsedMetaDigest = JSON.parse(userInfo.metaDigest);
         expect(Array.isArray(parsedMetaDigest)).toBe(true);
-        expect(parsedMetaDigest).toContain('REGISTRANT');
+        expect(parsedMetaDigest).toContain('CUSTOMER');
       } else {
         // 如果直接是数组类型
         expect(Array.isArray(userInfo?.metaDigest)).toBe(true);
-        expect(userInfo?.metaDigest).toContain('REGISTRANT');
+        expect(userInfo?.metaDigest).toContain('CUSTOMER');
       }
     });
 
@@ -682,7 +684,7 @@ describe('Register (e2e)', () => {
      * 测试加密解密的一致性
      */
     it('加密解密应该保持数据一致性', () => {
-      const originalData = '["REGISTRANT","TEST_DATA"]';
+      const originalData = '["CUSTOMER","TEST_DATA"]';
 
       // 加密 - 使用新的服务
       const encrypted = fieldEncryptionService.encrypt(originalData);

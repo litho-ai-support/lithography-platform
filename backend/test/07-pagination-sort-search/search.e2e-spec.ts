@@ -92,7 +92,7 @@ describe('TypeOrmSearch 功能测试 (e2e)', () => {
     const accounts = await seedAccounts({
       count: 8,
       prefix: searchPrefix,
-      role: IdentityTypeEnum.GUEST,
+      role: IdentityTypeEnum.CUSTOMER,
     });
     await seedVerificationRecords(accounts, 2);
   });
@@ -110,7 +110,7 @@ describe('TypeOrmSearch 功能测试 (e2e)', () => {
       qb: createAccountQb(searchPrefix),
       params: {
         query: searchPrefix,
-        filters: { identityHint: IdentityTypeEnum.GUEST },
+        filters: { identityHint: IdentityTypeEnum.CUSTOMER },
         pagination: { mode: 'OFFSET', page: 2, pageSize: 3, withTotal: true },
       },
       options: buildOptions(),
@@ -202,7 +202,7 @@ describe('TypeOrmSearch 功能测试 (e2e)', () => {
       qb: createAccountQb(searchPrefix),
       params: {
         query: 'S',
-        filters: { identityHint: IdentityTypeEnum.GUEST },
+        filters: { identityHint: IdentityTypeEnum.CUSTOMER },
         pagination: { mode: 'OFFSET', page: 1, pageSize: 10, withTotal: true },
       },
       options: buildOptions(),
@@ -324,7 +324,9 @@ describe('TypeOrmSearch 功能测试 (e2e)', () => {
     const firstThree = await repo
       .createQueryBuilder('account')
       .where('account.login_name LIKE :prefix', { prefix: `${searchPrefix}%` })
-      .andWhere('account.identity_hint = :identityHint', { identityHint: IdentityTypeEnum.GUEST })
+      .andWhere('account.identity_hint = :identityHint', {
+        identityHint: IdentityTypeEnum.CUSTOMER,
+      })
       .orderBy('account.id', 'ASC')
       .take(3)
       .getMany();
@@ -393,8 +395,16 @@ describe('TypeOrmSearch 功能测试 (e2e)', () => {
 
   describe('Accounts 搜索实践测试 (e2e)', () => {
     beforeAll(async () => {
-      await seedAccounts({ count: 4, prefix: `${groupedPrefix}A_`, role: IdentityTypeEnum.STAFF });
-      await seedAccounts({ count: 2, prefix: `${groupedPrefix}B_`, role: IdentityTypeEnum.GUEST });
+      await seedAccounts({
+        count: 4,
+        prefix: `${groupedPrefix}A_`,
+        role: IdentityTypeEnum.ENGINEER,
+      });
+      await seedAccounts({
+        count: 2,
+        prefix: `${groupedPrefix}B_`,
+        role: IdentityTypeEnum.CUSTOMER,
+      });
     });
 
     it('OFFSET：过滤 identityHint 应只返回该角色账号', async () => {
@@ -402,7 +412,7 @@ describe('TypeOrmSearch 功能测试 (e2e)', () => {
         qb: createAccountQb(groupedPrefix),
         params: {
           query: groupedPrefix,
-          filters: { identityHint: IdentityTypeEnum.STAFF },
+          filters: { identityHint: IdentityTypeEnum.ENGINEER },
           pagination: { mode: 'OFFSET', page: 1, pageSize: 10, withTotal: true },
         },
         options: buildOptions(),
@@ -411,7 +421,7 @@ describe('TypeOrmSearch 功能测试 (e2e)', () => {
       expect(result.total).toBe(4);
       expect(result.items[0].loginName).toBe('LS_CASE_A_00');
       expect(result.items[3].loginName).toBe('LS_CASE_A_03');
-      result.items.forEach((row) => expect(row.identityHint).toBe(IdentityTypeEnum.STAFF));
+      result.items.forEach((row) => expect(row.identityHint).toBe(IdentityTypeEnum.ENGINEER));
     });
 
     it('CURSOR：after 翻页，跨角色聚合 + 默认排序', async () => {
@@ -453,7 +463,7 @@ describe('TypeOrmSearch 功能测试 (e2e)', () => {
       const result = await searchService.search<AccountEntity>({
         qb: createAccountQb(groupedPrefix),
         params: {
-          filters: { ids: `${staff.id},${guest.id}`, identityHint: IdentityTypeEnum.STAFF },
+          filters: { ids: `${staff.id},${guest.id}`, identityHint: IdentityTypeEnum.ENGINEER },
           pagination: { mode: 'OFFSET', page: 1, pageSize: 10 },
         },
         options: {
@@ -479,7 +489,7 @@ describe('TypeOrmSearch 功能测试 (e2e)', () => {
 
       expect(result.items.length).toBe(1);
       expect(result.items[0].id).toBe(staff.id);
-      expect(result.items[0].identityHint).toBe(IdentityTypeEnum.STAFF);
+      expect(result.items[0].identityHint).toBe(IdentityTypeEnum.ENGINEER);
     });
   });
 

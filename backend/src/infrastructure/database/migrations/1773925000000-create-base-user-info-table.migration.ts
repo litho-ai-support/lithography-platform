@@ -9,6 +9,7 @@ export class CreateBaseUserInfoTable1773925000000 implements MigrationInterface 
         \`id\` int NOT NULL AUTO_INCREMENT COMMENT '主键',
         \`account_id\` int NOT NULL COMMENT 'base_user_account.id',
         \`nickname\` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL COMMENT '昵称',
+        \`company_name\` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL COMMENT '所属公司名称',
         \`gender\` enum('MALE','FEMALE','SECRET') CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT 'SECRET' COMMENT '性别',
         \`birth_date\` date DEFAULT NULL COMMENT '出生日期，仅保留年月日',
         \`avatar_url\` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL COMMENT '头像',

@@ -10,16 +10,13 @@ Global error contract: Every GraphQL interface must also follow docs/api/graphql
 
 ## 当前范围
 
-当前项目只保留框架级账号能力：
+当前项目只保留以下账号角色：
 
-- `ADMIN`
-- `STAFF`
-- `GUEST`
-- `REGISTRANT`
+- `SUPER_ADMIN`
+- `ENGINEER`
+- `CUSTOMER`
 
-`REGISTRANT` 是通用注册中间态，表示“开始注册但尚未完全完成”。它不是具体业务域身份。
-
-本项目不实现 staff 管理域。当前只要求 staff 注册、staff 登录这类最低账号链路可运行。
+`SUPER_ADMIN` 继承 `ENGINEER` 与 `CUSTOMER` 的访问能力，`ENGINEER` 与 `CUSTOMER` 互不继承。公开注册只创建 `CUSTOMER`。
 
 ## GraphQL 入口
 
@@ -75,7 +72,7 @@ Resolver、Guard、Usecase 不应各自手写不同的 session shape。
 - 登录先执行账号凭据校验。
 - 登录流程读取 account / userInfo，并校验 accessGroup 与安全摘要一致性。
 - `DecideLoginRoleUsecase` 根据 `identityHint` 与 `accessGroup` 决定最终角色。
-- 当 accessGroup 为空或 identityHint 不可用时，当前允许回退到 `REGISTRANT`。
+- 当 accessGroup 为空、identityHint 不可用或提示角色不属于 accessGroup 时，当前安全回退角色是 `CUSTOMER`。
 - 若最终角色不在非空 accessGroup 内，登录必须失败。
 
 ## Session Failure Signal

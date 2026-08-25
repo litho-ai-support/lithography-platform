@@ -38,6 +38,8 @@ fix/repair-status-validation
 
 不能用前端硬编码 Mock 结果代替已经声明完成的后端联调。
 
+所有任务的通用完成定义、GraphQL 契约要求、登录专项验收和页面验收清单见 [开发任务验收标准](./docs/development/task-acceptance.md)。首次参与项目开发前，必须先完成 [新人本地开发环境初始化](./docs/development/onboarding.md)。
+
 ## 数据库基线
 
 - 首次数据库基线由项目负责人统一合并。
@@ -54,4 +56,3 @@ fix/repair-status-validation
 - 模型权重、训练数据和向量库文件；
 - `node_modules`、`dist`、日志和测试报告；
 - 个人 IDE、AI 工具缓存和本机配置。
-

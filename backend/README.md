@@ -161,7 +161,7 @@ adapters -> usecases -> modules -> infrastructure
 - ✅ **Account**: 基础账号、UserInfo、密码与资料更新、可见性视图
 - ✅ **Auth**: 账号密码登录 / 第三方登录集成
 - ✅ **Registration**: 邮箱注册流程 / 第三方快捷注册
-- ✅ **Role Baseline**: 通用角色与访问组基线 (ADMIN / STAFF / GUEST / REGISTRANT)
+- ✅ **Role Baseline**: 项目角色与访问组基线 (`SUPER_ADMIN / ENGINEER / CUSTOMER`)
 - ✅ **Third-party Account**: 第三方身份解析、绑定、解绑与微信小程序辅助能力
 - ✅ **Verification**: 验证码生成与验证流程 (重置密码、绑定第三方身份等基础验证类型)
 - ✅ **AI Queue & Worker**: 支持 `queueAiGenerate` / `queueAiEmbed` 入队与 provider 路由消费

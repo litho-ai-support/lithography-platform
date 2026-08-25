@@ -36,21 +36,21 @@ class TestRolesResolver {
   }
 
   /**
-   * 需要 STAFF 角色的查询
+   * 需要 ENGINEER 角色的查询
    */
   @Query(() => String)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('STAFF')
+  @Roles('ENGINEER')
   staffQuery(): string {
     return 'staff access';
   }
 
   /**
-   * 需要 ADMIN 角色的查询
+   * 需要 SUPER_ADMIN 角色的查询
    */
   @Query(() => String)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN')
+  @Roles('SUPER_ADMIN')
   adminQuery(): string {
     return 'admin access';
   }
@@ -60,7 +60,7 @@ class TestRolesResolver {
    */
   @Query(() => String)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('STAFF', 'ADMIN')
+  @Roles('ENGINEER', 'SUPER_ADMIN')
   multiRoleQuery(): string {
     return 'multi role access';
   }
@@ -97,7 +97,7 @@ class TestRolesResolver {
    */
   @Query(() => String)
   @UseGuards(RolesGuard)
-  @Roles('STAFF')
+  @Roles('ENGINEER')
   roleOnlyQuery(): string {
     return 'role only access';
   }
@@ -222,7 +222,7 @@ describe('RolesGuard (e2e)', () => {
   });
 
   // 需要 staff + admin 的用例组
-  describe("@Roles('STAFF') + accessGroup 匹配场景", () => {
+  describe("@Roles('ENGINEER') + accessGroup 匹配场景", () => {
     let staffToken: string;
     let adminToken: string;
 
@@ -242,24 +242,24 @@ describe('RolesGuard (e2e)', () => {
       );
     });
 
-    it('应该允许 STAFF 角色访问 staffQuery', async () => {
+    it('应该允许 ENGINEER 角色访问 staffQuery', async () => {
       const response = await executeQuery('query { staffQuery }', staffToken).expect(200);
       expect(response.body.data.staffQuery).toBe('staff access');
     });
 
-    it('应该允许 ADMIN 角色访问需要 STAFF 或 ADMIN 的查询', async () => {
+    it('应该允许 SUPER_ADMIN 角色访问需要 ENGINEER 或 SUPER_ADMIN 的查询', async () => {
       const response = await executeQuery('query { multiRoleQuery }', adminToken).expect(200);
       expect(response.body.data.multiRoleQuery).toBe('multi role access');
     });
 
-    it('应该允许 STAFF 角色访问需要 STAFF 或 ADMIN 的查询', async () => {
+    it('应该允许 ENGINEER 角色访问需要 ENGINEER 或 SUPER_ADMIN 的查询', async () => {
       const response = await executeQuery('query { multiRoleQuery }', staffToken).expect(200);
       expect(response.body.data.multiRoleQuery).toBe('multi role access');
     });
   });
 
   // 需要 staff + guest 的不匹配场景
-  describe("@Roles('STAFF') + accessGroup 不匹配场景", () => {
+  describe("@Roles('ENGINEER') + accessGroup 不匹配场景", () => {
     let staffToken: string;
     let guestToken: string;
 
@@ -279,44 +279,47 @@ describe('RolesGuard (e2e)', () => {
       );
     });
 
-    it('应该拒绝 GUEST 角色访问 staffQuery 并返回 403', async () => {
+    it('应该拒绝 CUSTOMER 角色访问 staffQuery 并返回 403', async () => {
       const response = await executeQuery('query { staffQuery }', guestToken).expect(200);
 
       expect(response.body.errors).toBeDefined();
       expect(response.body.errors[0].message).toContain('缺少所需角色');
       expect(response.body.errors[0].extensions.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
-      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['STAFF']);
-      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['GUEST']);
+      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['ENGINEER']);
+      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['CUSTOMER']);
     });
 
-    it('应该拒绝 GUEST 角色访问 adminQuery 并返回 403', async () => {
+    it('应该拒绝 CUSTOMER 角色访问 adminQuery 并返回 403', async () => {
       const response = await executeQuery('query { adminQuery }', guestToken).expect(200);
 
       expect(response.body.errors).toBeDefined();
       expect(response.body.errors[0].message).toContain('缺少所需角色');
       expect(response.body.errors[0].extensions.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
-      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['ADMIN']);
-      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['GUEST']);
+      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['SUPER_ADMIN']);
+      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['CUSTOMER']);
     });
 
-    it('应该拒绝 STAFF 角色访问 adminQuery 并返回 403', async () => {
+    it('应该拒绝 ENGINEER 角色访问 adminQuery 并返回 403', async () => {
       const response = await executeQuery('query { adminQuery }', staffToken).expect(200);
 
       expect(response.body.errors).toBeDefined();
       expect(response.body.errors[0].message).toContain('缺少所需角色');
       expect(response.body.errors[0].extensions.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
-      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['ADMIN']);
-      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['STAFF']);
+      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['SUPER_ADMIN']);
+      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['ENGINEER']);
     });
 
-    it('应该拒绝 GUEST 角色访问需要 STAFF 或 ADMIN 的查询', async () => {
+    it('应该拒绝 CUSTOMER 角色访问需要 ENGINEER 或 SUPER_ADMIN 的查询', async () => {
       const response = await executeQuery('query { multiRoleQuery }', guestToken).expect(200);
 
       expect(response.body.errors).toBeDefined();
       expect(response.body.errors[0].message).toContain('缺少所需角色');
       expect(response.body.errors[0].extensions.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
-      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['STAFF', 'ADMIN']);
-      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['GUEST']);
+      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual([
+        'ENGINEER',
+        'SUPER_ADMIN',
+      ]);
+      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['CUSTOMER']);
     });
   });
 
@@ -328,7 +331,7 @@ describe('RolesGuard (e2e)', () => {
       expect(response.body.errors).toBeDefined();
       expect(response.body.errors[0].message).toContain('用户未登录');
       expect(response.body.errors[0].extensions.errorCode).toBe('JWT_AUTHENTICATION_FAILED');
-      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['STAFF']);
+      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['ENGINEER']);
     });
   });
 
@@ -344,7 +347,7 @@ describe('RolesGuard (e2e)', () => {
       );
     });
 
-    it('应该允许空 accessGroup 账号以 REGISTRANT 规范化结果访问空角色查询', async () => {
+    it('应该允许空 accessGroup 账号以 CUSTOMER 规范化结果访问空角色查询', async () => {
       const response = await executeQuery('query { emptyRolesQuery }', emptyRolesToken).expect(200);
 
       expect(response.body.errors).toBeUndefined();
@@ -404,8 +407,8 @@ describe('RolesGuard (e2e)', () => {
       expect(response.body.errors).toBeDefined();
       expect(response.body.errors[0].extensions.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
       expect(response.body.errors[0].message).toContain('缺少所需角色');
-      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['STAFF']);
-      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['REGISTRANT']);
+      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['ENGINEER']);
+      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['CUSTOMER']);
     });
   });
 });

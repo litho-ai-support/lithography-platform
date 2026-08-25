@@ -73,7 +73,7 @@ export class UpdateVisibleUserInfoUsecase {
   /**
    * 执行按可见性更新用户信息
    * 规则：
-   * - 权限沿用查看规则：能查看即可更新（ADMIN 全量；STAFF 可更新其他账户；GUEST / REGISTRANT 仅能更新自己）
+   * - 权限沿用查看规则：能查看即可更新（SUPER_ADMIN 全量；ENGINEER 可更新其他账户；CUSTOMER 仅能更新自己）
    * - 字段白名单：仅允许更新基础与联系字段；禁止修改 accessGroup / metaDigest
    * - 幂等：无字段变更则直接返回当前视图
    */
@@ -99,8 +99,8 @@ export class UpdateVisibleUserInfoUsecase {
         });
 
         const isSelf = session.accountId === targetAccountId;
-        const isStaffRole = hasRole(session.roles, IdentityTypeEnum.STAFF);
-        const isAdminRole = hasRole(session.roles, IdentityTypeEnum.ADMIN);
+        const isStaffRole = hasRole(session.roles, IdentityTypeEnum.ENGINEER);
+        const isAdminRole = hasRole(session.roles, IdentityTypeEnum.SUPER_ADMIN);
         const sanitized = await this.sanitizePatch(patch, current, {
           isStaff: isStaffRole,
           isSelf,
@@ -162,9 +162,9 @@ export class UpdateVisibleUserInfoUsecase {
   private isAllowedToUpdate(session: UsecaseSession, targetAccountId: number): boolean {
     const isSelf = session.accountId === targetAccountId;
     if (isSelf) return true;
-    if (hasRole(session.roles, IdentityTypeEnum.ADMIN)) return true;
+    if (hasRole(session.roles, IdentityTypeEnum.SUPER_ADMIN)) return true;
 
-    return hasRole(session.roles, IdentityTypeEnum.STAFF);
+    return hasRole(session.roles, IdentityTypeEnum.ENGINEER);
   }
 
   /**
@@ -485,8 +485,8 @@ export class UpdateAccessGroupUsecase {
     }
 
     const allowed =
-      hasRole(session.roles, IdentityTypeEnum.ADMIN) ||
-      hasRole(session.roles, IdentityTypeEnum.STAFF);
+      hasRole(session.roles, IdentityTypeEnum.SUPER_ADMIN) ||
+      hasRole(session.roles, IdentityTypeEnum.ENGINEER);
     if (!allowed) {
       throw new DomainError(PERMISSION_ERROR.ACCESS_DENIED, '仅 admin / staff 可调整访问组');
     }
@@ -550,10 +550,10 @@ export class UpdateAccessGroupUsecase {
     }
 
     const priority: IdentityTypeEnum[] = [
-      IdentityTypeEnum.ADMIN,
-      IdentityTypeEnum.STAFF,
-      IdentityTypeEnum.GUEST,
-      IdentityTypeEnum.REGISTRANT,
+      IdentityTypeEnum.SUPER_ADMIN,
+      IdentityTypeEnum.ENGINEER,
+      IdentityTypeEnum.CUSTOMER,
+      IdentityTypeEnum.CUSTOMER,
     ];
 
     return priority.find((role) => accessGroup.includes(role)) ?? accessGroup[0];

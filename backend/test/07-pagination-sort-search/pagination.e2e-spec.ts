@@ -471,7 +471,7 @@ describe('分页工具 (e2e)', () => {
           loginPassword: 'hashed',
           status: AccountStatus.ACTIVE,
           recentLoginHistory: null,
-          identityHint: IdentityTypeEnum.GUEST,
+          identityHint: IdentityTypeEnum.CUSTOMER,
         }),
       ),
     );

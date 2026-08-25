@@ -53,10 +53,10 @@ export class RegisterInput {
 
   @Field(() => RegisterTypeEnum, {
     description: '注册类型',
-    defaultValue: RegisterTypeEnum.REGISTRANT,
+    defaultValue: RegisterTypeEnum.CUSTOMER,
   })
   @IsEnum(RegisterTypeEnum, { message: '注册类型无效' })
-  type: RegisterTypeEnum = RegisterTypeEnum.REGISTRANT;
+  type: RegisterTypeEnum = RegisterTypeEnum.CUSTOMER;
 
   @Field(() => String, { description: '邀请令牌', nullable: true })
   @IsOptional()

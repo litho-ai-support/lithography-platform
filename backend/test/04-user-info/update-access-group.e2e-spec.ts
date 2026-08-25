@@ -132,10 +132,10 @@ describe('UpdateAccessGroup (e2e)', () => {
   });
 
   describe('正例', () => {
-    it('ADMIN 更新访客为 staff 并自动生成身份提示', async () => {
+    it('SUPER_ADMIN 更新访客为 staff 并自动生成身份提示', async () => {
       const input: UpdateAccessGroupInput = {
         accountId: guestSecondaryAccountId,
-        accessGroup: [IdentityTypeEnum.STAFF],
+        accessGroup: [IdentityTypeEnum.ENGINEER],
       };
       const res = await executeUpdateAccessGroup({ app, token: adminToken, input });
       const body = readUpdateAccessGroupBody({ response: res });
@@ -143,8 +143,8 @@ describe('UpdateAccessGroup (e2e)', () => {
       expect(body.errors).toBeUndefined();
       const result = body.data?.updateAccessGroup;
       if (!result) throw new Error('更新访问组失败：缺少返回数据');
-      expect(result.accessGroup).toEqual([IdentityTypeEnum.STAFF]);
-      expect(result.identityHint).toBe(IdentityTypeEnum.STAFF);
+      expect(result.accessGroup).toEqual([IdentityTypeEnum.ENGINEER]);
+      expect(result.identityHint).toBe(IdentityTypeEnum.ENGINEER);
       expect(result.isUpdated).toBe(true);
 
       const accountRepo = dataSource.getRepository(AccountEntity);
@@ -153,19 +153,19 @@ describe('UpdateAccessGroup (e2e)', () => {
         where: { accountId: guestSecondaryAccountId },
       });
       if (!updatedUserInfo) throw new Error('用户信息不存在');
-      expect(updatedUserInfo.accessGroup).toEqual([IdentityTypeEnum.STAFF]);
-      expect(updatedUserInfo.metaDigest).toEqual([IdentityTypeEnum.STAFF]);
+      expect(updatedUserInfo.accessGroup).toEqual([IdentityTypeEnum.ENGINEER]);
+      expect(updatedUserInfo.metaDigest).toEqual([IdentityTypeEnum.ENGINEER]);
 
       const updatedAccount = await accountRepo.findOne({ where: { id: guestSecondaryAccountId } });
       if (!updatedAccount) throw new Error('账户不存在');
-      expect(updatedAccount.identityHint).toBe(IdentityTypeEnum.STAFF);
+      expect(updatedAccount.identityHint).toBe(IdentityTypeEnum.ENGINEER);
     });
 
-    it('STAFF 指定身份提示更新访客访问组', async () => {
+    it('ENGINEER 指定身份提示更新访客访问组', async () => {
       const input: UpdateAccessGroupInput = {
         accountId: guestPrimaryAccountId,
-        accessGroup: [IdentityTypeEnum.GUEST, IdentityTypeEnum.STAFF],
-        identityHint: IdentityTypeEnum.STAFF,
+        accessGroup: [IdentityTypeEnum.CUSTOMER, IdentityTypeEnum.ENGINEER],
+        identityHint: IdentityTypeEnum.ENGINEER,
       };
       const res = await executeUpdateAccessGroup({ app, token: staffToken, input });
       const body = readUpdateAccessGroupBody({ response: res });
@@ -173,8 +173,8 @@ describe('UpdateAccessGroup (e2e)', () => {
       expect(body.errors).toBeUndefined();
       const result = body.data?.updateAccessGroup;
       if (!result) throw new Error('更新访问组失败：缺少返回数据');
-      expect(result.accessGroup).toEqual([IdentityTypeEnum.GUEST, IdentityTypeEnum.STAFF]);
-      expect(result.identityHint).toBe(IdentityTypeEnum.STAFF);
+      expect(result.accessGroup).toEqual([IdentityTypeEnum.CUSTOMER, IdentityTypeEnum.ENGINEER]);
+      expect(result.identityHint).toBe(IdentityTypeEnum.ENGINEER);
       expect(result.isUpdated).toBe(true);
 
       const accountRepo = dataSource.getRepository(AccountEntity);
@@ -183,12 +183,18 @@ describe('UpdateAccessGroup (e2e)', () => {
         where: { accountId: guestPrimaryAccountId },
       });
       if (!updatedUserInfo) throw new Error('用户信息不存在');
-      expect(updatedUserInfo.accessGroup).toEqual([IdentityTypeEnum.GUEST, IdentityTypeEnum.STAFF]);
-      expect(updatedUserInfo.metaDigest).toEqual([IdentityTypeEnum.GUEST, IdentityTypeEnum.STAFF]);
+      expect(updatedUserInfo.accessGroup).toEqual([
+        IdentityTypeEnum.CUSTOMER,
+        IdentityTypeEnum.ENGINEER,
+      ]);
+      expect(updatedUserInfo.metaDigest).toEqual([
+        IdentityTypeEnum.CUSTOMER,
+        IdentityTypeEnum.ENGINEER,
+      ]);
 
       const updatedAccount = await accountRepo.findOne({ where: { id: guestPrimaryAccountId } });
       if (!updatedAccount) throw new Error('账户不存在');
-      expect(updatedAccount.identityHint).toBe(IdentityTypeEnum.STAFF);
+      expect(updatedAccount.identityHint).toBe(IdentityTypeEnum.ENGINEER);
     });
 
     it('幂等：重复访问组不触发更新', async () => {
@@ -197,8 +203,8 @@ describe('UpdateAccessGroup (e2e)', () => {
         token: staffToken,
         input: {
           accountId: guestPrimaryAccountId,
-          accessGroup: [IdentityTypeEnum.GUEST],
-          identityHint: IdentityTypeEnum.GUEST,
+          accessGroup: [IdentityTypeEnum.CUSTOMER],
+          identityHint: IdentityTypeEnum.CUSTOMER,
         },
       });
       const prepareBody = readUpdateAccessGroupBody({ response: prepare });
@@ -209,7 +215,7 @@ describe('UpdateAccessGroup (e2e)', () => {
         token: staffToken,
         input: {
           accountId: guestPrimaryAccountId,
-          accessGroup: [IdentityTypeEnum.GUEST, IdentityTypeEnum.GUEST],
+          accessGroup: [IdentityTypeEnum.CUSTOMER, IdentityTypeEnum.CUSTOMER],
         },
       });
       const body = readUpdateAccessGroupBody({ response: res });
@@ -217,20 +223,20 @@ describe('UpdateAccessGroup (e2e)', () => {
       expect(body.errors).toBeUndefined();
       const result = body.data?.updateAccessGroup;
       if (!result) throw new Error('更新访问组失败：缺少返回数据');
-      expect(result.accessGroup).toEqual([IdentityTypeEnum.GUEST]);
-      expect(result.identityHint).toBe(IdentityTypeEnum.GUEST);
+      expect(result.accessGroup).toEqual([IdentityTypeEnum.CUSTOMER]);
+      expect(result.identityHint).toBe(IdentityTypeEnum.CUSTOMER);
       expect(result.isUpdated).toBe(false);
     });
   });
 
   describe('负例', () => {
-    it('GUEST 更新访问组应拒绝', async () => {
+    it('CUSTOMER 更新访问组应拒绝', async () => {
       const res = await executeUpdateAccessGroup({
         app,
         token: guestPrimaryToken,
         input: {
           accountId: guestSecondaryAccountId,
-          accessGroup: [IdentityTypeEnum.GUEST],
+          accessGroup: [IdentityTypeEnum.CUSTOMER],
         },
       });
       const body = readUpdateAccessGroupBody({ response: res });
@@ -238,13 +244,13 @@ describe('UpdateAccessGroup (e2e)', () => {
       expect(body.errors?.[0]?.extensions?.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
     });
 
-    it('GUEST 更新 staff 访问组应拒绝', async () => {
+    it('CUSTOMER 更新 staff 访问组应拒绝', async () => {
       const res = await executeUpdateAccessGroup({
         app,
         token: guestPrimaryToken,
         input: {
           accountId: staffAccountId,
-          accessGroup: [IdentityTypeEnum.STAFF],
+          accessGroup: [IdentityTypeEnum.ENGINEER],
         },
       });
       const body = readUpdateAccessGroupBody({ response: res });
@@ -272,8 +278,8 @@ describe('UpdateAccessGroup (e2e)', () => {
         token: adminToken,
         input: {
           accountId: guestSecondaryAccountId,
-          accessGroup: [IdentityTypeEnum.GUEST],
-          identityHint: IdentityTypeEnum.STAFF,
+          accessGroup: [IdentityTypeEnum.CUSTOMER],
+          identityHint: IdentityTypeEnum.ENGINEER,
         },
       });
       const body = readUpdateAccessGroupBody({ response: res });
@@ -287,7 +293,7 @@ describe('UpdateAccessGroup (e2e)', () => {
         token: adminToken,
         input: {
           accountId: 999999,
-          accessGroup: [IdentityTypeEnum.GUEST],
+          accessGroup: [IdentityTypeEnum.CUSTOMER],
         },
       });
       const body = readUpdateAccessGroupBody({ response: res });

@@ -49,9 +49,10 @@ Source of truth: This file defines aggregate write boundaries; examples elsewher
 - `AccountService` 当前只承接 `Account` 聚合内能力。
 - `identityHint`、`accessGroup`、`metaDigest` 属于 account 访问语义摘要。
 - 访问语义摘要写入必须由 usecase 显式编排，不得由登录链路或 QueryService 顺手补写。
-- 本项目账号语义只保留 `ADMIN / STAFF / GUEST / REGISTRANT`。
-- `REGISTRANT` 表达“开始注册但尚未完成”的通用状态，不代表具体业务域身份。
-- 本框架项目不实现 staff 管理域；只要求保留 staff 注册、staff 登录所需的最低账号能力。
+- 本项目账号语义只保留 `SUPER_ADMIN / ENGINEER / CUSTOMER`。
+- `SUPER_ADMIN` 在角色层级中继承 `ENGINEER` 和 `CUSTOMER` 的访问能力。
+- `ENGINEER` 与 `CUSTOMER` 互不继承。
+- 公开注册只创建 `CUSTOMER`；工程师和超级管理员账号由受控管理流程或 Seed 创建。
 
 ## VerificationRecord 规则
 

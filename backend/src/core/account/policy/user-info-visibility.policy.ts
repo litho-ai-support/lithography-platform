@@ -8,7 +8,7 @@ import { IdentityTypeEnum } from '@app-types/models/account.types';
 import { hasRole } from './role-access.policy';
 
 export function canViewUserInfo(roles: readonly string[], facts: VisibilityFacts): boolean {
-  if (hasRole(roles, IdentityTypeEnum.ADMIN)) return true;
+  if (hasRole(roles, IdentityTypeEnum.SUPER_ADMIN)) return true;
   if (facts.isSelf) return true;
-  return hasRole(roles, IdentityTypeEnum.STAFF);
+  return hasRole(roles, IdentityTypeEnum.ENGINEER);
 }

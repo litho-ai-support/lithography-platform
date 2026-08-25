@@ -12,7 +12,7 @@ export interface UsecaseSession {
    * 角色访问组（已在此处做规范化）
    * - 来源：JWT `accessGroup`
    * - 格式：全部转为大写字符串，去除空值与重复项
-   * - 语义：与 GraphQL `@Roles()` 所使用的角色编码保持一致（如 "STAFF"）
+   * - 语义：与 GraphQL `@Roles()` 所使用的角色编码保持一致（如 "ENGINEER"）
    */
   roles: string[];
 }

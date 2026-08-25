@@ -265,7 +265,7 @@ export class AccountQueryService {
 
     const finalAccessGroup: IdentityTypeEnum[] = base.accessGroup?.length
       ? base.accessGroup
-      : [IdentityTypeEnum.REGISTRANT];
+      : [IdentityTypeEnum.CUSTOMER];
 
     return this.buildUserInfoView(base, accountId, finalAccessGroup);
   }
@@ -274,7 +274,7 @@ export class AccountQueryService {
     const base = await this.findUserInfoByAccountId(params.accountId);
     const finalAccessGroup: IdentityTypeEnum[] = base?.accessGroup?.length
       ? base.accessGroup
-      : [IdentityTypeEnum.REGISTRANT];
+      : [IdentityTypeEnum.CUSTOMER];
 
     return this.buildUserInfoView(base, params.accountId, finalAccessGroup);
   }
@@ -282,7 +282,7 @@ export class AccountQueryService {
   private isAllowedToView(session: UsecaseSession, targetAccountId: number): boolean {
     const isSelf = session.accountId === targetAccountId;
     if (isSelf) return true;
-    if (hasRole(session.roles, IdentityTypeEnum.ADMIN)) return true;
+    if (hasRole(session.roles, IdentityTypeEnum.SUPER_ADMIN)) return true;
 
     return canViewUserInfo(session.roles, { isSelf });
   }
@@ -290,7 +290,7 @@ export class AccountQueryService {
   private isAllowedToViewAccountDetail(session: UsecaseSession, targetAccountId: number): boolean {
     const isSelf = session.accountId === targetAccountId;
     if (isSelf) return true;
-    if (hasRole(session.roles, IdentityTypeEnum.ADMIN)) return true;
+    if (hasRole(session.roles, IdentityTypeEnum.SUPER_ADMIN)) return true;
     return false;
   }
 
