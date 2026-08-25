@@ -181,7 +181,7 @@ const registerAccount = async (input: {
         loginName: input.loginName,
         loginEmail: input.loginEmail,
         loginPassword: input.loginPassword,
-        type: 'REGISTRANT',
+        type: 'CUSTOMER',
       },
     },
   });

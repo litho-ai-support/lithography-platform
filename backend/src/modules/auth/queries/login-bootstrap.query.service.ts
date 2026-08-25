@@ -80,6 +80,6 @@ export class LoginBootstrapQueryService {
     const normalized = (accessGroup ?? []).filter((role): role is IdentityTypeEnum =>
       validRoles.has(String(role)),
     );
-    return normalized.length > 0 ? Array.from(new Set(normalized)) : [IdentityTypeEnum.REGISTRANT];
+    return normalized.length > 0 ? Array.from(new Set(normalized)) : [IdentityTypeEnum.CUSTOMER];
   }
 }

@@ -204,15 +204,15 @@ export class WeappRegisterUsecase {
       audience,
       loginEmail: `weapp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}@local`,
       loginPassword: `Tmp#${Date.now()}Aa1`,
-      identityHint: IdentityTypeEnum.REGISTRANT,
+      identityHint: IdentityTypeEnum.CUSTOMER,
     };
 
     // 准备用户信息数据
     const userInfoData = {
       nickname,
       phone,
-      accessGroup: [IdentityTypeEnum.REGISTRANT],
-      metaDigest: [IdentityTypeEnum.REGISTRANT],
+      accessGroup: [IdentityTypeEnum.CUSTOMER],
+      metaDigest: [IdentityTypeEnum.CUSTOMER],
     };
 
     return { accountData, userInfoData };

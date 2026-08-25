@@ -17,9 +17,9 @@ export class GetVisibleUserInfoUsecase {
   /**
    * 执行按可见性读取用户信息
    * - 角色策略：
-   *   - ADMIN：可查看所有人的用户信息
-   *   - STAFF：可查看其他账户的用户信息
-   *   - GUEST / REGISTRANT：仅可查看自己
+   *   - SUPER_ADMIN：可查看所有人的用户信息
+   *   - ENGINEER：可查看其他账户的用户信息
+   *   - CUSTOMER：仅可查看自己
    * - 读取实现：统一通过 Account 域的 UserInfo 读取，保持与账户绑定
    * - 按需反馈：支持 'BASIC' 与 'FULL' 两种详情级别
    */
@@ -54,7 +54,7 @@ export class GetVisibleUserInfoUsecase {
   private isAllowedToView(session: UsecaseSession, targetAccountId: number): boolean {
     const isSelf = session.accountId === targetAccountId;
     if (isSelf) return true;
-    if (hasRole(session.roles, IdentityTypeEnum.ADMIN)) return true;
+    if (hasRole(session.roles, IdentityTypeEnum.SUPER_ADMIN)) return true;
     return canViewUserInfo(session.roles, { isSelf });
   }
 

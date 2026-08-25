@@ -9,17 +9,13 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 
 ## 当前范围
 
-本项目账号语义已经收敛为通用身份层：
+本项目账号语义已经对齐为项目身份层：
 
-- `ADMIN`
-- `STAFF`
-- `GUEST`
-- `REGISTRANT`
+- `SUPER_ADMIN`
+- `ENGINEER`
+- `CUSTOMER`
 
-`REGISTRANT` 保留为通用注册中间态。
-
-本项目不是 staff 管理系统，不提供 staff 列表、岗位、组织或业务域管理能力。当前只要求账号、注册、
-登录、资料读取和资料更新能支撑框架最小运行。
+`SUPER_ADMIN` 继承 `ENGINEER` 与 `CUSTOMER` 的访问能力，后两者互不继承。当前账号能力负责注册、登录、资料读取、资料更新和角色访问摘要，不扩展岗位或组织管理域。
 
 ## GraphQL 入口
 
@@ -50,7 +46,7 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 - `type`
 - `inviteToken`
 
-`type` 默认是 `REGISTRANT`。注册链路可以创建最低账号能力所需的 account / userInfo。
+`type` 默认是 `CUSTOMER`，且公开注册只允许创建 `CUSTOMER`。工程师和超级管理员账号由受控管理流程或 Seed 创建。
 
 `thirdPartyRegister` 当前走第三方注册 usecase，属于通用第三方账号能力，不代表具体业务域身份。
 
@@ -99,7 +95,7 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 `updateAccessGroup` 是受保护 mutation：
 
 - 使用 `JwtAuthGuard` 与 `RolesGuard`。
-- 当前允许 `STAFF` 或 `ADMIN` 调用。
+- 当前 Resolver 允许 `ENGINEER` 或 `SUPER_ADMIN` 调用；Usecase 仍需执行目标账号和变更内容的权限规则。
 - 输入包含 `accountId`、`accessGroup`、可选 `identityHint`。
 - `accessGroup` 只允许使用 `IdentityTypeEnum` 当前通用值。
 - 写入由 `UpdateAccessGroupUsecase` 编排。
@@ -117,7 +113,7 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 
 ## 禁止项
 
-- 不新增 staff 管理、组织、岗位或其他业务域 current contract。
+- 不擅自新增角色、组织、岗位或其他业务域 current contract。
 - 不把 adapter DTO 传入 usecase/modules/core。
 - 不从 resolver 直接依赖 modules(service) 或 infrastructure。
 - 不返回 ORM Entity 或 QueryBuilder。

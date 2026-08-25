@@ -138,7 +138,7 @@ describe('TypeOrmSort 独立使用 (e2e)', () => {
           loginPassword: 'hashed',
           status: AccountStatus.ACTIVE,
           recentLoginHistory: null,
-          identityHint: IdentityTypeEnum.GUEST,
+          identityHint: IdentityTypeEnum.CUSTOMER,
         }),
       ),
     );

@@ -49,7 +49,7 @@ export class RegisterWithEmailUsecase {
       loginEmail,
       loginPassword,
       nickname,
-      type = RegisterTypeEnum.REGISTRANT,
+      type = RegisterTypeEnum.CUSTOMER,
       inviteToken,
       clientIp,
     } = params;
@@ -174,12 +174,10 @@ export class RegisterWithEmailUsecase {
   }
 
   private mapRegisterTypeToRole(type: RegisterTypeEnum): IdentityTypeEnum {
-    switch (type) {
-      case RegisterTypeEnum.STAFF:
-        return IdentityTypeEnum.STAFF;
-      case RegisterTypeEnum.REGISTRANT:
-        return IdentityTypeEnum.REGISTRANT;
+    if (type !== RegisterTypeEnum.CUSTOMER) {
+      throw new DomainError(ACCOUNT_ERROR.REGISTRATION_FAILED, '仅允许注册客户账号');
     }
+    return IdentityTypeEnum.CUSTOMER;
   }
 
   /**

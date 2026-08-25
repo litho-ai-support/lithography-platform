@@ -8,12 +8,7 @@ export const IDENTITY_PRIORITY_TOKEN = Symbol('IDENTITY_PRIORITY_TOKEN');
 
 /** 通用账号角色优先级（不再承载业务身份包优先级） */
 export const DEFAULT_IDENTITY_PRIORITY = {
-  fallback: [
-    IdentityTypeEnum.ADMIN,
-    IdentityTypeEnum.STAFF,
-    IdentityTypeEnum.GUEST,
-    IdentityTypeEnum.REGISTRANT,
-  ],
+  fallback: [IdentityTypeEnum.SUPER_ADMIN, IdentityTypeEnum.ENGINEER, IdentityTypeEnum.CUSTOMER],
   hintAutoPromote: false,
   hintAutoPromoteOnReactivate: false,
 } as const;

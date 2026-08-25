@@ -46,8 +46,8 @@ describe('Auth (e2e)', () => {
     loginEmail: 'banned@example.com',
     loginPassword: 'testBanned@2024',
     status: AccountStatus.BANNED,
-    accessGroup: [IdentityTypeEnum.REGISTRANT],
-    identityType: IdentityTypeEnum.REGISTRANT,
+    accessGroup: [IdentityTypeEnum.CUSTOMER],
+    identityType: IdentityTypeEnum.CUSTOMER,
   };
 
   const pendingUser = {
@@ -55,8 +55,8 @@ describe('Auth (e2e)', () => {
     loginEmail: 'pending@example.com',
     loginPassword: 'testPending@2024',
     status: AccountStatus.PENDING,
-    accessGroup: [IdentityTypeEnum.REGISTRANT],
-    identityType: IdentityTypeEnum.REGISTRANT,
+    accessGroup: [IdentityTypeEnum.CUSTOMER],
+    identityType: IdentityTypeEnum.CUSTOMER,
   };
 
   // 覆写 WeAppProvider：根据 authCredential 返回不同的 openid（绑定 / 未绑定）

@@ -6,10 +6,8 @@ import { AccountStatus } from '../models/account.types';
  * 注册类型枚举
  */
 export enum RegisterTypeEnum {
-  /** 工作人员 */
-  STAFF = 'STAFF',
-  /** 注册用户 */
-  REGISTRANT = 'REGISTRANT',
+  /** 客户 */
+  CUSTOMER = 'CUSTOMER',
 }
 
 export interface RegisterInputModel {

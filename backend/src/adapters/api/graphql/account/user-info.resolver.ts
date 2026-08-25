@@ -174,7 +174,7 @@ export class UserInfoResolver {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(IdentityTypeEnum.STAFF, IdentityTypeEnum.ADMIN)
+  @Roles(IdentityTypeEnum.ENGINEER, IdentityTypeEnum.SUPER_ADMIN)
   @Mutation(() => UpdateAccessGroupResult, { name: 'updateAccessGroup' })
   async updateAccessGroup(
     @currentUser() user: JwtPayload,

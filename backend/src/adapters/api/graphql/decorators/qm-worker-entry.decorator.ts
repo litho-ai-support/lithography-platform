@@ -33,7 +33,7 @@ export function qmWorkerEntry(preset: QmWorkerEntryPreset): MethodDecorator & Cl
     return applyDecorators(
       SetMetadata(QM_WORKER_ENTRY_POLICY_KEY, policy),
       UseGuards(JwtAuthGuard, RolesGuard, QmWorkerEntryGuard),
-      Roles(IdentityTypeEnum.STAFF, IdentityTypeEnum.ADMIN),
+      Roles(IdentityTypeEnum.ENGINEER, IdentityTypeEnum.SUPER_ADMIN),
     );
   }
 

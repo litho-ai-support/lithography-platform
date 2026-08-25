@@ -65,7 +65,7 @@ export class VerificationRecordResolver {
         issuedByAccountId: user.sub,
       });
 
-      // 服务端权限判断：只有 ADMIN 和 STAFF 角色在服务端生成 token 时才能获取明文 token
+      // 服务端权限判断：只有 SUPER_ADMIN 和 ENGINEER 角色在服务端生成 token 时才能获取明文 token
       // 统一转换为小写进行比较，与 RolesGuard 保持一致
       const normalizedUserRoles =
         user.accessGroup?.map((role) =>
@@ -73,8 +73,8 @@ export class VerificationRecordResolver {
         ) || [];
 
       const canReturnToken =
-        (normalizedUserRoles.includes(IdentityTypeEnum.ADMIN.toLowerCase()) ||
-          normalizedUserRoles.includes(IdentityTypeEnum.STAFF.toLowerCase())) &&
+        (normalizedUserRoles.includes(IdentityTypeEnum.SUPER_ADMIN.toLowerCase()) ||
+          normalizedUserRoles.includes(IdentityTypeEnum.ENGINEER.toLowerCase())) &&
         result.generatedByServer === true;
 
       return {

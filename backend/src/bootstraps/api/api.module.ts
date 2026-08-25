@@ -12,6 +12,7 @@ import { MiddlewareModule } from '@src/infrastructure/middleware/middleware.modu
 import { AccountModule } from '@src/modules/account/account.module';
 import { AuthModule } from '@src/modules/auth/auth.module';
 import { PasswordModule } from '@src/modules/common/password/password.module';
+import { LithographyModule } from '@src/modules/lithography/lithography.module';
 import { Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { ApiController } from './api.controller';
@@ -31,6 +32,7 @@ import { ApiService } from './api.service';
     PasswordModule,
     AccountModule,
     AuthModule,
+    LithographyModule,
   ],
   controllers: [ApiController],
   providers: [

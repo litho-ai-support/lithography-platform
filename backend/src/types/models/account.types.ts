@@ -15,10 +15,9 @@ export enum AccountStatus {
 }
 
 export enum IdentityTypeEnum {
-  ADMIN = 'ADMIN',
-  STAFF = 'STAFF',
-  GUEST = 'GUEST',
-  REGISTRANT = 'REGISTRANT',
+  SUPER_ADMIN = 'SUPER_ADMIN',
+  ENGINEER = 'ENGINEER',
+  CUSTOMER = 'CUSTOMER',
 }
 
 export enum LoginTypeEnum {

@@ -32,6 +32,15 @@ export class UserInfoEntity {
   nickname!: string;
 
   @Column({
+    name: 'company_name',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    comment: '所属公司名称',
+  })
+  companyName!: string | null;
+
+  @Column({
     type: 'enum',
     enum: Gender,
     default: Gender.SECRET,

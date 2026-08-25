@@ -56,7 +56,7 @@ export class AccountEntity {
     type: 'varchar',
     length: 30,
     nullable: true,
-    comment: '身份提示字段，用于加速判断当前账号角色：如 "ADMIN","STAFF","GUEST","REGISTRANT"',
+    comment: '身份提示字段，用于加速判断当前账号角色：SUPER_ADMIN、ENGINEER、CUSTOMER',
   })
   identityHint!: string | null;
 

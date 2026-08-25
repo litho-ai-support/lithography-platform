@@ -10,6 +10,7 @@
 ├── frontend/            React + Vite + Apollo 前端
 ├── docs/
 │   ├── database/        Schema、Entity、Migration 决策
+│   ├── development/     新人环境初始化和任务验收标准
 │   └── upstream/        两个底座的来源和版本
 └── .github/             CI、PR 模板和仓库协作规则
 ```
@@ -17,8 +18,9 @@
 ## 当前状态
 
 - 已导入前端和后端底座。
-- 项目 Schema、业务 Entity、业务 Migration 和开发 Seed 尚待确认与实现。
-- 在数据库基线合并前，不开始并行页面开发。
+- 已对齐 `SUPER_ADMIN / ENGINEER / CUSTOMER` 三类项目角色。
+- 已完成 14 张表的 Entity、Migration、约束及幂等全量 Mock Seed。
+- 下一阶段先完成登录与权限底座，再按页面纵向切片并行开发。
 
 ## 本地安装
 
@@ -35,7 +37,7 @@ npm run dev:backend
 npm run dev:frontend
 ```
 
-后端启动前仍需根据 `backend/env/.env.example` 配置本地环境。数据库自动初始化命令将在 Schema、Entity 和 Migration 定稿后补充。
+后端启动前需配置个人 MySQL、Redis 和本地环境变量，再通过 Migration 和 Seed 初始化。首次 clone 的完整步骤见 [新人本地开发环境初始化](./docs/development/onboarding.md)，开发和 PR 的完成定义见 [任务验收标准](./docs/development/task-acceptance.md)。
 
 ## 协作方式
 

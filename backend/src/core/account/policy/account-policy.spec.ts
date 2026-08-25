@@ -6,39 +6,39 @@ import { canViewUserInfo } from './user-info-visibility.policy';
 
 describe('account pure policies', () => {
   describe('role access', () => {
-    it('展开 ADMIN 时应包含 STAFF 和 GUEST，但不包含 REGISTRANT', () => {
-      expect(expandRoles([IdentityTypeEnum.ADMIN])).toEqual([
-        IdentityTypeEnum.ADMIN,
-        IdentityTypeEnum.STAFF,
-        IdentityTypeEnum.GUEST,
+    it('展开 SUPER_ADMIN 时应包含 ENGINEER 和 CUSTOMER', () => {
+      expect(expandRoles([IdentityTypeEnum.SUPER_ADMIN])).toEqual([
+        IdentityTypeEnum.SUPER_ADMIN,
+        IdentityTypeEnum.ENGINEER,
+        IdentityTypeEnum.CUSTOMER,
       ]);
     });
 
     it('应忽略非法角色并保持稳定展开顺序', () => {
-      expect(expandRoles(['staff', 'unknown', IdentityTypeEnum.REGISTRANT])).toEqual([
-        IdentityTypeEnum.STAFF,
-        IdentityTypeEnum.GUEST,
-        IdentityTypeEnum.REGISTRANT,
+      expect(expandRoles(['engineer', 'unknown', IdentityTypeEnum.CUSTOMER])).toEqual([
+        IdentityTypeEnum.ENGINEER,
+        IdentityTypeEnum.CUSTOMER,
       ]);
     });
 
     it('应按角色继承判断访问能力', () => {
-      expect(hasRole([IdentityTypeEnum.STAFF], IdentityTypeEnum.GUEST)).toBe(true);
-      expect(hasRole([IdentityTypeEnum.GUEST], IdentityTypeEnum.STAFF)).toBe(false);
-      expect(hasRole([IdentityTypeEnum.REGISTRANT], IdentityTypeEnum.GUEST)).toBe(false);
+      expect(hasRole([IdentityTypeEnum.SUPER_ADMIN], IdentityTypeEnum.ENGINEER)).toBe(true);
+      expect(hasRole([IdentityTypeEnum.SUPER_ADMIN], IdentityTypeEnum.CUSTOMER)).toBe(true);
+      expect(hasRole([IdentityTypeEnum.ENGINEER], IdentityTypeEnum.CUSTOMER)).toBe(false);
+      expect(hasRole([IdentityTypeEnum.CUSTOMER], IdentityTypeEnum.ENGINEER)).toBe(false);
+      expect(hasRole([IdentityTypeEnum.CUSTOMER], IdentityTypeEnum.CUSTOMER)).toBe(true);
     });
   });
 
   describe('user info visibility', () => {
-    it('ADMIN 和 STAFF 可以查看他人资料', () => {
-      expect(canViewUserInfo([IdentityTypeEnum.ADMIN], { isSelf: false })).toBe(true);
-      expect(canViewUserInfo([IdentityTypeEnum.STAFF], { isSelf: false })).toBe(true);
+    it('SUPER_ADMIN 和 ENGINEER 可以查看他人资料', () => {
+      expect(canViewUserInfo([IdentityTypeEnum.SUPER_ADMIN], { isSelf: false })).toBe(true);
+      expect(canViewUserInfo([IdentityTypeEnum.ENGINEER], { isSelf: false })).toBe(true);
     });
 
     it('普通角色只能查看自己的资料', () => {
-      expect(canViewUserInfo([IdentityTypeEnum.GUEST], { isSelf: false })).toBe(false);
-      expect(canViewUserInfo([IdentityTypeEnum.REGISTRANT], { isSelf: false })).toBe(false);
-      expect(canViewUserInfo([IdentityTypeEnum.REGISTRANT], { isSelf: true })).toBe(true);
+      expect(canViewUserInfo([IdentityTypeEnum.CUSTOMER], { isSelf: false })).toBe(false);
+      expect(canViewUserInfo([IdentityTypeEnum.CUSTOMER], { isSelf: true })).toBe(true);
     });
   });
 
