@@ -1,0 +1,45 @@
+# Dependencies and build output
+**/node_modules/
+**/dist/
+**/build/
+**/coverage/
+**/.cache/
+**/.eslintcache
+.npm-cache/
+
+# Runtime output
+**/logs/
+**/*.log
+**/*.pid
+**/*.pid.lock
+**/uploads/
+/models/
+/backend/models/
+/frontend/models/
+**/checkpoints/
+
+# Local environment and secrets
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+
+# Test artifacts
+**/playwright-report/
+**/test-results/
+**/blob-report/
+**/.nyc_output/
+
+# IDE and operating-system files
+.idea/
+**/.DS_Store
+**/Thumbs.db
+**/*.suo
+**/*.swp
+
+# Local AI tool state
+**/.codex/
+**/.trae/
+
+# Non-public project requirements
+/docs/requirements/

@@ -1,0 +1,23 @@
+{
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "eslint.validate": ["typescript", "typescriptreact"],
+  "js/ts.preferences.importModuleSpecifier": "relative",
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  // Jest 插件配置
+  "jest.jestCommandLine": "node_modules/.bin/jest",
+  "jest.runMode": "watch",
+  "jest.rootPath": ".",
+  "jest.disabledWorkspaceFolders": [],
+  "jest.enable": true
+}

@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "esModuleInterop": true,
+    "target": "ES2023",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "paths": {
+      "@src/*": ["./src/*"],
+      "@core/*": ["./src/core/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@modules/*": ["./src/modules/*"],
+      "@interfaces/*": ["./src/interfaces/*"],
+      "@adapters/*": ["./src/adapters/*"],
+      "@usecases/*": ["./src/usecases/*"],
+      "@app-types/*": ["./src/types/*"]
+    }
+  },
+  "include": ["src/**/*", "test/**/*", "scripts/**/*.ts", "jest.config.ts"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,201 @@
+/* src/sandbox/playground/page.css */
+
+.sandbox-token-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.sandbox-token-card {
+  background: var(--ant-color-bg-container);
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: var(--ant-border-radius-lg);
+  box-shadow: var(--ant-box-shadow-tertiary);
+  min-width: 0;
+  padding: 14px;
+}
+
+.sandbox-token-swatch {
+  border: 1px solid var(--ant-color-border);
+  border-radius: var(--ant-border-radius);
+  height: 42px;
+  margin-bottom: 12px;
+}
+
+.sandbox-token-swatch-bg-layout {
+  background: var(--ant-color-bg-layout);
+}
+
+.sandbox-token-swatch-bg-container {
+  background: var(--ant-color-bg-container);
+}
+
+.sandbox-token-swatch-border {
+  background: var(--ant-color-border);
+}
+
+.sandbox-token-swatch-primary {
+  background: var(--ant-color-primary);
+}
+
+.sandbox-token-swatch-info {
+  background: var(--ant-color-info);
+}
+
+.sandbox-token-swatch-success {
+  background: var(--ant-color-success);
+}
+
+.sandbox-token-swatch-warning {
+  background: var(--ant-color-warning);
+}
+
+.sandbox-token-swatch-error {
+  background: var(--ant-color-error);
+}
+
+.sandbox-token-swatch-ai {
+  background: var(--color-ai-accent);
+}
+
+.sandbox-token-label {
+  color: var(--ant-color-text);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.sandbox-token-name {
+  color: var(--ant-color-text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.sandbox-token-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
+}
+
+.sandbox-surface-stack,
+.sandbox-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sandbox-surface {
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: var(--ant-border-radius-lg);
+  padding: 14px;
+}
+
+.sandbox-surface-container {
+  background: var(--ant-color-bg-container);
+  box-shadow: var(--ant-box-shadow-tertiary);
+}
+
+.sandbox-surface-muted {
+  background: var(--ant-color-fill-tertiary);
+}
+
+.sandbox-surface-ai {
+  background: var(--color-ai-accent-bg);
+  border-color: var(--color-ai-accent-border);
+}
+
+.sandbox-surface-title {
+  color: var(--ant-color-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.sandbox-surface-text,
+.sandbox-status-text {
+  color: var(--ant-color-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+.sandbox-status-item {
+  align-items: flex-start;
+  background: var(--ant-color-bg-container);
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: var(--ant-border-radius);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 12px;
+}
+
+.sandbox-status-dot {
+  border-radius: 50%;
+  height: 10px;
+  margin-top: 5px;
+  width: 10px;
+}
+
+.sandbox-status-info {
+  border-color: var(--ant-color-info-border);
+}
+
+.sandbox-status-info .sandbox-status-dot {
+  background: var(--ant-color-info);
+}
+
+.sandbox-status-success {
+  border-color: var(--ant-color-success-border);
+}
+
+.sandbox-status-success .sandbox-status-dot {
+  background: var(--ant-color-success);
+}
+
+.sandbox-status-warning {
+  border-color: var(--ant-color-warning-border);
+}
+
+.sandbox-status-warning .sandbox-status-dot {
+  background: var(--ant-color-warning);
+}
+
+.sandbox-status-error {
+  border-color: var(--ant-color-error-border);
+}
+
+.sandbox-status-error .sandbox-status-dot {
+  background: var(--ant-color-error);
+}
+
+.sandbox-status-label {
+  color: var(--ant-color-text);
+  font-weight: 650;
+}
+
+.sandbox-token-check {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sandbox-token-check-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.sandbox-token-check-line {
+  border-bottom: 1px solid var(--ant-color-border);
+}
+
+@media (max-width: 860px) {
+  .sandbox-token-layout {
+    grid-template-columns: 1fr;
+  }
+}

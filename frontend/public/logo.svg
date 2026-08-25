@@ -1,0 +1,66 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 202 212"
+  role="img"
+  aria-labelledby="logoTitle"
+>
+  <title id="logoTitle">AIGC Friendly Frontend logo</title>
+  <defs>
+    <linearGradient
+      id="logoGradient"
+      x1="0"
+      y1="106"
+      x2="202"
+      y2="106"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop offset="40%" stop-color="#1255CC" />
+      <stop offset="88%" stop-color="#29B8F0" />
+    </linearGradient>
+  </defs>
+
+  <!-- Main "a" letterform with dot socket -->
+  <path
+    fill="url(#logoGradient)"
+    d="
+      M 196 50
+      C 193 54 185 58 176 58
+      C 159 58 146 46 146 29
+      C 146 21 149 14 154 8
+      C 141 3 124 0 106 0
+      C 44 0 0 51 0 113
+      C 0 176 45 211 121 211
+      C 130 211 135 208 136 201
+      L 136 172
+      C 136 165 133 163 126 163
+      C 76 163 53 148 48 113
+      C 43 78 70 48 106 48
+      C 142 48 160 75 160 111
+      L 161 182
+      C 162 190 180 200 196 200
+      C 200 200 201 198 201 194
+      C 201 175 201 140 201 113
+      C 201 85 200 65 196 50
+      Z
+    "
+  />
+
+  <!-- Red notification dot -->
+  <circle cx="176" cy="28" r="21" fill="#D93025" />
+
+  <!-- Speech bubble in counter -->
+  <path
+    fill="#29B8F0"
+    d="
+      M 109 68
+      C 88 66 70 80 68 100
+      C 66 120 81 137 102 139
+      C 108 140 113 139 118 138
+      C 128 144 141 144 145 144
+      C 141 144 137 135 135 127
+      C 140 122 143 115 144 107
+      C 146 87 130 70 109 68
+      Z
+    "
+  />
+</svg>

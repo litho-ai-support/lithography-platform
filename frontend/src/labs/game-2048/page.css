@@ -1,0 +1,167 @@
+/* src/labs/game-2048/page.css */
+
+.game2048-layout {
+  align-items: start;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) 280px;
+}
+
+.game2048-board {
+  background:
+    linear-gradient(135deg, var(--ant-color-fill-tertiary), var(--ant-color-bg-container)),
+    var(--ant-color-bg-container);
+  border: 1px solid var(--ant-color-border);
+  border-radius: var(--ant-border-radius-lg);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 auto;
+  max-width: 520px;
+  padding: 10px;
+}
+
+.game2048-tile {
+  align-items: center;
+  aspect-ratio: 1;
+  border: 1px solid transparent;
+  border-radius: var(--ant-border-radius);
+  box-shadow: var(--ant-box-shadow-tertiary);
+  display: flex;
+  font-size: 30px;
+  font-weight: 800;
+  justify-content: center;
+  letter-spacing: 0;
+  line-height: 1;
+  min-width: 0;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.game2048-tile:not(.game2048-tile-tone-empty) {
+  transform: translateY(-1px);
+}
+
+.game2048-tile-large {
+  font-size: 24px;
+}
+
+.game2048-tile-tone-empty {
+  background: var(--ant-color-fill-secondary);
+  border-color: var(--ant-color-border-secondary);
+  box-shadow: none;
+}
+
+.game2048-tile-tone-1 {
+  background: var(--ant-color-info-bg);
+  border-color: var(--ant-color-info-border);
+  color: var(--ant-color-info-text);
+}
+
+.game2048-tile-tone-2 {
+  background: var(--ant-color-success-bg);
+  border-color: var(--ant-color-success-border);
+  color: var(--ant-color-success-text);
+}
+
+.game2048-tile-tone-3 {
+  background: var(--ant-color-warning-bg);
+  border-color: var(--ant-color-warning-border);
+  color: var(--ant-color-warning-text);
+}
+
+.game2048-tile-tone-4 {
+  background: var(--ant-color-error-bg);
+  border-color: var(--ant-color-error-border);
+  color: var(--ant-color-error-text);
+}
+
+.game2048-tile-tone-5 {
+  background: var(--ant-color-primary-bg);
+  border-color: var(--ant-color-primary-border);
+  color: var(--ant-color-primary-text);
+}
+
+.game2048-tile-tone-6 {
+  background: var(--color-ai-accent-bg);
+  border-color: var(--color-ai-accent-border);
+  color: var(--color-ai-text-strong);
+}
+
+.game2048-tile-tone-7 {
+  background: linear-gradient(135deg, var(--ant-color-info-bg), var(--ant-color-success-bg));
+  border-color: var(--ant-color-info-border);
+  color: var(--ant-color-success-text);
+}
+
+.game2048-tile-tone-8 {
+  background: linear-gradient(135deg, var(--ant-color-warning-bg), var(--ant-color-error-bg));
+  border-color: var(--ant-color-warning-border);
+  color: var(--ant-color-error-text);
+}
+
+.game2048-tile-tone-9 {
+  background: linear-gradient(135deg, var(--ant-color-primary-bg), var(--color-ai-accent-bg));
+  border-color: var(--ant-color-primary-border);
+  color: var(--color-ai-text-strong);
+}
+
+.game2048-tile-tone-10,
+.game2048-tile-tone-11 {
+  background: linear-gradient(135deg, var(--ant-color-primary), var(--color-ai-accent));
+  border-color: var(--ant-color-primary);
+  color: var(--ant-color-text-light-solid);
+}
+
+.game2048-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.game2048-stat-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.game2048-control-pad {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, 42px);
+  justify-content: center;
+}
+
+@media (max-width: 860px) {
+  .game2048-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .game2048-side {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .game2048-board {
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .game2048-side,
+  .game2048-stat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .game2048-tile {
+    font-size: 22px;
+  }
+
+  .game2048-tile-large {
+    font-size: 18px;
+  }
+}
