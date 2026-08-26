@@ -161,6 +161,23 @@ describe('维修申请业务流程 (e2e)', () => {
       expect(row!.contentMd).toContain(result.requestNo);
       expect(row!.contentMd).toContain('E-2001');
     });
+
+    it('边界长度（错误码恰 100 字符、故障描述恰 5000 字符）创建成功', async () => {
+      await seedModels([{ id: 21, modelCode: 'E2E-OK', modelName: '可用型号', enabled: true }]);
+      const boundaryErrorCode = 'E'.repeat(100);
+      const boundaryFaultDescription = '长'.repeat(5000);
+
+      const response = await createMutation({
+        equipmentModelId: 21,
+        errorCode: boundaryErrorCode,
+        faultDescription: boundaryFaultDescription,
+      }).expect(200);
+
+      expect(response.body.errors).toBeUndefined();
+      const result = response.body.data.createRepairRequest;
+      expect(result.errorCode).toBe(boundaryErrorCode);
+      expect(result.faultDescription).toBe(boundaryFaultDescription);
+    });
   });
 
   describe('createRepairRequest 错误路径', () => {
@@ -175,6 +192,9 @@ describe('维修申请业务流程 (e2e)', () => {
       expect(response.body.errors[0].extensions.errorCode).toBe(
         'REPAIR_REQUEST_EQUIPMENT_MODEL_NOT_FOUND',
       );
+      // 前端契约依赖点：业务消息只读 extensions.errorMessage（frontend/docs/project-convention/graphql-error-model.md）
+      expect(typeof response.body.errors[0].extensions.errorMessage).toBe('string');
+      expect(response.body.errors[0].extensions.errorMessage.length).toBeGreaterThan(0);
       expect(await requestRepository.count()).toBe(0);
     });
 
@@ -209,6 +229,22 @@ describe('维修申请业务流程 (e2e)', () => {
       expect(response.body.errors[0].extensions.errorCode).toBe(
         'INPUT_NORMALIZE_REQUIRED_TEXT_EMPTY',
       );
+    });
+
+    it('故障描述为空白时拒绝', async () => {
+      await seedModels([{ id: 21, modelCode: 'E2E-OK', modelName: '可用型号', enabled: true }]);
+
+      const response = await createMutation({
+        equipmentModelId: 21,
+        errorCode: 'E-2001',
+        faultDescription: '   ',
+      }).expect(200);
+
+      expect(response.body.errors[0].extensions.code).toBe('BAD_USER_INPUT');
+      expect(response.body.errors[0].extensions.errorCode).toBe(
+        'INPUT_NORMALIZE_REQUIRED_TEXT_EMPTY',
+      );
+      expect(await requestRepository.count()).toBe(0);
     });
 
     it('错误码超 100 字符在 DTO 层被拒', async () => {
