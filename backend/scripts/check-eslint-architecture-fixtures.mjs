@@ -128,7 +128,7 @@ const cases = [
     name: 'allow infrastructure importing usecase-owned contract',
     filePath: 'src/infrastructure/database/transaction/typeorm-transaction.runner.ts',
     code: `
-      import type { TransactionRunner } from '@src/usecases/common/ports/transaction-runner.contract';
+      import type { TransactionRunner } from '@src/usecases/common/contracts/transaction-runner.contract';
       type Probe = TransactionRunner;
       void (null as unknown as Probe);
     `,

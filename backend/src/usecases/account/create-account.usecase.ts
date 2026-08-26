@@ -9,7 +9,7 @@ import { AccountQueryService } from '@src/modules/account/queries/account.query.
 import {
   TRANSACTION_RUNNER,
   type TransactionRunner,
-} from '@src/usecases/common/ports/transaction-runner.contract';
+} from '@src/usecases/common/contracts/transaction-runner.contract';
 import { AUTH_ERROR, DomainError } from '../../core/common/errors/domain-error';
 
 /**

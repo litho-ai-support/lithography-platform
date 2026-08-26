@@ -11,7 +11,7 @@ import type { AsyncTaskRecordService } from '@src/modules/async-task-record/asyn
 import type { AsyncTaskRecordView } from '@src/modules/async-task-record/async-task-record.types';
 import type { AiWorkflowQueueService } from '@src/modules/ai-workflow-context/queue/ai-workflow-queue.service';
 import type { QueueAiWorkflowQueueHealthResult } from '@src/modules/ai-workflow-context/queue/ai-workflow-queue.types';
-import type { TransactionRunner } from '@src/usecases/common/ports/transaction-runner.contract';
+import type { TransactionRunner } from '@src/usecases/common/contracts/transaction-runner.contract';
 import type { PinoLogger } from 'nestjs-pino';
 import { CreateAndAdmitAiWorkflowUsecase } from './create-and-admit-ai-workflow.usecase';
 

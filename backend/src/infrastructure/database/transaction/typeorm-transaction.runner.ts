@@ -1,5 +1,5 @@
 import type { PersistenceTransactionContext } from '@app-types/common/transaction.types';
-import type { TransactionRunner } from '@src/usecases/common/ports/transaction-runner.contract';
+import type { TransactionRunner } from '@src/usecases/common/contracts/transaction-runner.contract';
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';

@@ -14,7 +14,7 @@ import type {
 } from '@src/modules/ai-workflow-context/ai-workflow-context.types';
 import type { AsyncTaskRecordService } from '@src/modules/async-task-record/async-task-record.service';
 import type { AsyncTaskRecordView } from '@src/modules/async-task-record/async-task-record.types';
-import type { TransactionRunner } from '@src/usecases/common/ports/transaction-runner.contract';
+import type { TransactionRunner } from '@src/usecases/common/contracts/transaction-runner.contract';
 import type { AiWorkflowHandlerRegistry } from './ai-workflow-handler.registry';
 import type { AiWorkflowHandler } from './ai-workflow-handler.types';
 import { AiWorkflowNonRetryableError } from './ai-workflow-worker-errors';

@@ -37,8 +37,8 @@ module、service、QueryService、helper、barrel 或场景局部类型。对于
 
 - 文件后缀使用 `*.contract.ts`。
 - 文件名以能力命名，避免技术实现细节。
-- usecase 共享运行时能力放在 `src/usecases/common/ports/*.contract.ts`。
-  这里的 `ports/` 是既有组织目录，不代表独立 boundary contract layer。
+- usecase 共享运行时能力放在 `src/usecases/common/contracts/*.contract.ts`。
+  这里的 `contracts/` 是组织目录，不代表独立 boundary contract layer。
 - 同域数据形态、View、snapshot、enum 等不属于 boundary contract。
   它们按 `docs/common/type.rules.md` 放入 `*.types.ts` 或 `src/types`。
 
@@ -46,7 +46,7 @@ module、service、QueryService、helper、barrel 或场景局部类型。对于
 
 - `TransactionRunner` 是 usecase-owned transaction boundary contract。
 - 当前固定真源是
-  `src/usecases/common/ports/transaction-runner.contract.ts`。
+  `src/usecases/common/contracts/transaction-runner.contract.ts`。
 - `TransactionRunner.run()` 回调只传递 `PersistenceTransactionContext`。
 - `PersistenceTransactionContext` 是纯共享类型，真源在
   `src/types/common/transaction.types.ts`，通过 `@app-types/common/transaction.types`

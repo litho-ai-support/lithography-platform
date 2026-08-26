@@ -13,7 +13,7 @@ import type { AsyncTaskRecordView } from '@src/modules/async-task-record/async-t
 import {
   TRANSACTION_RUNNER,
   type TransactionRunner,
-} from '@src/usecases/common/ports/transaction-runner.contract';
+} from '@src/usecases/common/contracts/transaction-runner.contract';
 import { PinoLogger } from 'nestjs-pino';
 import {
   AI_WORKFLOW_ADMISSION_RETRY_DELAY_MS,

@@ -1,4 +1,4 @@
-import { TRANSACTION_RUNNER } from '@src/usecases/common/ports/transaction-runner.contract';
+import { TRANSACTION_RUNNER } from '@src/usecases/common/contracts/transaction-runner.contract';
 import { Global, Module } from '@nestjs/common';
 import { TypeOrmTransactionRunner } from './typeorm-transaction.runner';
 

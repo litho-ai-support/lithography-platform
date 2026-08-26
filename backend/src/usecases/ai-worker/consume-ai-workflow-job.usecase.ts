@@ -16,7 +16,7 @@ import type {
 import {
   TRANSACTION_RUNNER,
   type TransactionRunner,
-} from '@src/usecases/common/ports/transaction-runner.contract';
+} from '@src/usecases/common/contracts/transaction-runner.contract';
 import { AiWorkflowHandlerRegistry } from './ai-workflow-handler.registry';
 import type { AiWorkflowGenerateProviderCallResult } from './ai-workflow-handler.types';
 import {

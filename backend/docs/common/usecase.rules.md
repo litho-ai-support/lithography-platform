@@ -27,7 +27,7 @@ For boundary contract naming, see docs/common/boundary-contract.rules.md.
 - usecases → modules(service) / core / `src/types`
 - usecases 可依赖 usecase-owned boundary contract。
   该类 contract 只定义 contract / token / 最小共享类型，不承载业务流程实现，也不是独立分层。
-  共享的 usecase 编排运行时能力统一放在 `src/usecases/common/ports/*.contract.ts`。
+  共享的 usecase 编排运行时能力统一放在 `src/usecases/common/contracts/*.contract.ts`。
   `*.contract.ts` 是本仓库 lint 识别的 usecase-owned boundary contract 后缀；
   不使用 `*.port.ts` 新增并行约定。
   Port 只作为架构讨论术语出现，不作为新增文件后缀。
