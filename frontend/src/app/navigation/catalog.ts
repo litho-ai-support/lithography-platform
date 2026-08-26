@@ -1,6 +1,6 @@
 // src/app/navigation/catalog.ts
 
-import { type AppEnv, getAppEnv } from '@/shared/env';
+import { getAppEnv, isDevOrTestEnv } from '@/shared/env';
 
 import type { NavigationItem } from './types';
 
@@ -48,19 +48,14 @@ const SUPPORT_NAVIGATION_ITEMS: NavigationItem[] = [
   },
 ];
 
-function canExposeLabs(env: AppEnv) {
-  return env === 'dev' || env === 'test';
-}
-
-function canExposeSandbox(env: AppEnv) {
-  return env === 'dev' || env === 'test';
-}
-
 export function getNavigationItems(env = getAppEnv()): NavigationItem[] {
+  // 环境暴露判断委托 shared/env 的唯一实现，与 labs/sandbox 各自 access.ts 保持一致。
+  const canExposeExperimentalEntries = isDevOrTestEnv(env);
+
   return [
     ...STABLE_NAVIGATION_ITEMS,
-    ...(canExposeLabs(env) ? LAB_NAVIGATION_ITEMS : []),
-    ...(canExposeSandbox(env) ? SANDBOX_NAVIGATION_ITEMS : []),
+    ...(canExposeExperimentalEntries ? LAB_NAVIGATION_ITEMS : []),
+    ...(canExposeExperimentalEntries ? SANDBOX_NAVIGATION_ITEMS : []),
     ...SUPPORT_NAVIGATION_ITEMS,
   ];
 }

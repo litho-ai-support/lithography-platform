@@ -10,11 +10,9 @@ import { getNavigationItems } from '@/app/navigation';
 import { FONT_SCALE_OPTIONS, useTheme } from '@/app/providers';
 import { APP_THEME_CSS_VAR_KEY } from '@/app/theme';
 
-import { AigcSidecar } from '@/widgets/aigc-sidecar';
+import { AigcSidecar, EntryAccentGlyph } from '@/widgets/aigc-sidecar';
 
 import type { AssistantRouteCandidate } from '@/entities/assistant-session';
-
-import { EntryAccentGlyph } from './entry-accent-glyph';
 
 function toRouteCandidate(
   item: ReturnType<typeof getNavigationItems>[number],

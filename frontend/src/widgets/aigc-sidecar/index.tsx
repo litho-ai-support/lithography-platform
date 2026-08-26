@@ -1,13 +1,16 @@
 // src/widgets/aigc-sidecar/index.tsx
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { StarFilled } from '@ant-design/icons';
 import { Bubble, Sender } from '@ant-design/x';
 import { Button, Card, Divider, Drawer, Typography } from 'antd';
 
 import { resolveLocalAssistantQuery } from '@/features/local-assistant';
 
 import type { AssistantMessage, AssistantRouteCandidate } from '@/entities/assistant-session';
+
+import { EntryAccentGlyph } from './entry-accent-glyph';
+
+export { EntryAccentGlyph } from './entry-accent-glyph';
 
 type AigcSidecarProps = {
   onClose: () => void;
@@ -22,14 +25,6 @@ type RenderedMessage = AssistantMessage & {
 
 function createMessageId() {
   return `message-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function EntryAccentGlyph() {
-  return (
-    <span aria-hidden="true" className="entry-accent-glyph">
-      <StarFilled />
-    </span>
-  );
 }
 
 export function AigcSidecar({ onClose, onNavigate, open, routeCandidates }: AigcSidecarProps) {

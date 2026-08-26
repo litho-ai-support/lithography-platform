@@ -12,6 +12,12 @@ export function getAppEnv(): AppEnv {
   return import.meta.env.DEV ? 'dev' : 'prod';
 }
 
+// labs/sandbox 非生产暴露的统一环境边界，见 docs/environment-exposure.md；
+// 模块自己的 access.ts 与导航目录都委托这里，避免重复实现环境判断。
+export function isDevOrTestEnv(env: AppEnv): boolean {
+  return env === 'dev' || env === 'test';
+}
+
 export function getGraphQLEndpoint() {
   const endpoint = import.meta.env.VITE_GRAPHQL_ENDPOINT;
 
