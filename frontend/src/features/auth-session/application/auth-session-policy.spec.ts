@@ -4,8 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createAuthSessionSnapshot,
+  isAuthSessionRoleAllowedAt,
   resolveAuthSessionHomePath,
   resolveLoginRouteRedirect,
+  resolveProtectedRouteRedirect,
+  resolveSafeReturnTo,
 } from './auth-session-policy';
 
 describe('auth session policy', () => {
@@ -25,6 +28,73 @@ describe('auth session policy', () => {
 
     expect(resolveLoginRouteRedirect(session)).toBe('/customer');
     expect(resolveLoginRouteRedirect(null)).toBeNull();
+  });
+
+  it('lets SUPER_ADMIN inherit ENGINEER and CUSTOMER route access', () => {
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/admin')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/engineer')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/customer')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('ENGINEER', '/engineer')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('ENGINEER', '/customer')).toBe(false);
+    expect(isAuthSessionRoleAllowedAt('ENGINEER', '/admin')).toBe(false);
+    expect(isAuthSessionRoleAllowedAt('CUSTOMER', '/customer')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('CUSTOMER', '/engineer')).toBe(false);
+  });
+
+  it('sends anonymous users to the login route with a safe return target', () => {
+    expect(resolveProtectedRouteRedirect(null, '/engineer?tab=open')).toBe(
+      '/login?returnTo=%2Fengineer%3Ftab%3Dopen',
+    );
+  });
+
+  it('only allows the requested protected path for the session role', () => {
+    const engineerSession = createAuthSessionSnapshot({
+      accessToken: 'access-token',
+      accountId: 900101,
+      role: 'ENGINEER',
+      userInfo: null,
+    });
+    const superAdminSession = createAuthSessionSnapshot({
+      accessToken: 'access-token',
+      accountId: 900001,
+      role: 'SUPER_ADMIN',
+      userInfo: null,
+    });
+
+    expect(resolveProtectedRouteRedirect(engineerSession, '/engineer')).toBeNull();
+    expect(resolveProtectedRouteRedirect(engineerSession, '/customer')).toBe('/engineer');
+    expect(resolveProtectedRouteRedirect(superAdminSession, '/customer?tab=open')).toBeNull();
+  });
+
+  it('honours a safe in-role returnTo after login and rejects everything else', () => {
+    const engineerSession = createAuthSessionSnapshot({
+      accessToken: 'access-token',
+      accountId: 900101,
+      role: 'ENGINEER',
+      userInfo: null,
+    });
+
+    expect(resolveLoginRouteRedirect(engineerSession, '/engineer?tab=open')).toBe(
+      '/engineer?tab=open',
+    );
+    expect(resolveLoginRouteRedirect(engineerSession, '/customer')).toBe('/engineer');
+    expect(resolveLoginRouteRedirect(engineerSession, 'https://example.com/admin')).toBe(
+      '/engineer',
+    );
+    expect(resolveLoginRouteRedirect(engineerSession, null)).toBe('/engineer');
+    expect(resolveLoginRouteRedirect(engineerSession, '')).toBe('/engineer');
+    expect(resolveLoginRouteRedirect(engineerSession, '/engineer\ttab')).toBe('/engineer');
+    expect(resolveLoginRouteRedirect(engineerSession, '/engineer\u007Ftab')).toBe('/engineer');
+  });
+
+  it('accepts only same-origin absolute return paths', () => {
+    expect(resolveSafeReturnTo('/engineer?tab=open#latest')).toBe('/engineer?tab=open#latest');
+    expect(resolveSafeReturnTo('https://example.com/admin')).toBeNull();
+    expect(resolveSafeReturnTo('//example.com/admin')).toBeNull();
+    expect(resolveSafeReturnTo('/\\example.com/admin')).toBeNull();
+    expect(resolveSafeReturnTo(' /admin')).toBeNull();
+    expect(resolveSafeReturnTo('/admin\n')).toBeNull();
+    expect(resolveSafeReturnTo('relative/admin')).toBeNull();
   });
 
   it('creates a normalized minimal session snapshot', () => {

@@ -1,16 +1,21 @@
-// src/app/router/index.tsx
+// src/app/router/app.tsx
 
 import {
   createBrowserRouter,
   isRouteErrorResponse,
+  type LoaderFunctionArgs,
   redirect,
   RouterProvider,
   useNavigate,
   useRouteError,
+  useSearchParams,
 } from 'react-router';
 
 import { AppLayout } from '@/app/layout';
 
+import { AdminPage } from '@/pages/admin';
+import { CustomerPage } from '@/pages/customer';
+import { EngineerPage } from '@/pages/engineer';
 import { ErrorPreviewPage } from '@/pages/error-preview';
 import { HomePage } from '@/pages/home';
 import { LoginPage } from '@/pages/login';
@@ -19,6 +24,7 @@ import {
   getCurrentAuthSession,
   resolveAuthSessionHomePath,
   resolveLoginRouteRedirect,
+  resolveProtectedRouteRedirect,
 } from '@/features/auth-session';
 import { Error403, Error404, Error500, ErrorRouteCrash } from '@/features/error-feedback';
 
@@ -26,6 +32,8 @@ import { getAppEnv } from '@/shared/env';
 
 import { canAccessGame2048Lab, Game2048LabPage } from '@/labs/game-2048';
 import { canAccessSandboxPlayground, SandboxPlaygroundPage } from '@/sandbox/playground';
+
+import { registerAppRouter } from './router-bridge';
 
 function RouteErrorPage() {
   const error = useRouteError();
@@ -71,8 +79,12 @@ function sandboxPlaygroundLoader() {
   return null;
 }
 
-function loginLoader() {
-  const loginRedirectPath = resolveLoginRouteRedirect(getCurrentAuthSession());
+function loginLoader({ request }: LoaderFunctionArgs) {
+  const requestUrl = new URL(request.url);
+  const loginRedirectPath = resolveLoginRouteRedirect(
+    getCurrentAuthSession(),
+    requestUrl.searchParams.get('returnTo'),
+  );
 
   if (loginRedirectPath) {
     return redirect(loginRedirectPath);
@@ -81,13 +93,31 @@ function loginLoader() {
   return null;
 }
 
+function protectedRouteLoader({ request }: LoaderFunctionArgs) {
+  const requestUrl = new URL(request.url);
+  const protectedRedirectPath = resolveProtectedRouteRedirect(
+    getCurrentAuthSession(),
+    requestUrl.pathname + requestUrl.search,
+  );
+
+  if (protectedRedirectPath) {
+    return redirect(protectedRedirectPath);
+  }
+
+  return null;
+}
+
 function LoginPageRoute() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   return (
     <LoginPage
       onAuthenticated={(session) =>
-        navigate(resolveLoginRouteRedirect(session) ?? resolveAuthSessionHomePath(session.role))
+        navigate(
+          resolveLoginRouteRedirect(session, searchParams.get('returnTo')) ??
+            resolveAuthSessionHomePath(session.role),
+        )
       }
     />
   );
@@ -104,6 +134,21 @@ const router = createBrowserRouter([
         element: <LoginPageRoute />,
         loader: loginLoader,
         path: 'login',
+      },
+      {
+        element: <AdminPage />,
+        loader: protectedRouteLoader,
+        path: 'admin',
+      },
+      {
+        element: <EngineerPage />,
+        loader: protectedRouteLoader,
+        path: 'engineer',
+      },
+      {
+        element: <CustomerPage />,
+        loader: protectedRouteLoader,
+        path: 'customer',
       },
       {
         element: <ProjectStructurePage />,
@@ -133,6 +178,8 @@ const router = createBrowserRouter([
     path: '/',
   },
 ]);
+
+registerAppRouter(router);
 
 export function App() {
   return <RouterProvider router={router} />;

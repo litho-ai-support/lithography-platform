@@ -1,5 +1,7 @@
 // src/features/auth-session/application/auth-session-policy.ts
 
+import { sanitizeRedirectTarget } from '@/shared/navigation';
+
 import {
   AUTH_SESSION_ROLES,
   type AuthSessionRole,
@@ -75,14 +77,90 @@ const AUTH_SESSION_ROLE_HOME_PATHS: Record<AuthSessionRole, string> = {
   SUPER_ADMIN: '/admin',
 };
 
+// SUPER_ADMIN 按后端角色层级继承 ENGINEER 与 CUSTOMER 的访问能力，见
+// backend/docs/api/auth-session-current.md 与 docs/development/task-acceptance.md。
+const AUTH_SESSION_ROLE_ALLOWED_PATHS: Record<AuthSessionRole, readonly string[]> = {
+  CUSTOMER: ['/customer'],
+  ENGINEER: ['/engineer'],
+  SUPER_ADMIN: ['/admin', '/customer', '/engineer'],
+};
+
 export function resolveAuthSessionHomePath(role: AuthSessionRole): string {
   return AUTH_SESSION_ROLE_HOME_PATHS[role];
 }
 
-export function resolveLoginRouteRedirect(session: AuthSessionView | null): string | null {
+export function isAuthSessionRoleAllowedAt(role: AuthSessionRole, path: string): boolean {
+  return AUTH_SESSION_ROLE_ALLOWED_PATHS[role].includes(path);
+}
+
+function extractPathname(value: string): string {
+  try {
+    return new URL(value, 'https://lithography.local').pathname;
+  } catch {
+    return value;
+  }
+}
+
+export type AuthSessionRoleCarrier = Pick<AuthSessionSnapshot, 'role'>;
+
+export function resolveLoginRouteRedirect(
+  session: AuthSessionRoleCarrier | null,
+  returnToCandidate?: unknown,
+): string | null {
   if (!session) {
     return null;
   }
 
+  const safeReturnTo = resolveSafeReturnTo(returnToCandidate);
+
+  if (safeReturnTo && isAuthSessionRoleAllowedAt(session.role, extractPathname(safeReturnTo))) {
+    return safeReturnTo;
+  }
+
   return resolveAuthSessionHomePath(session.role);
+}
+
+export function resolveProtectedRouteRedirect(
+  session: AuthSessionRoleCarrier | null,
+  requestedPath: string,
+): string | null {
+  if (!session) {
+    return `/login?returnTo=${encodeURIComponent(requestedPath)}`;
+  }
+
+  if (!isAuthSessionRoleAllowedAt(session.role, extractPathname(requestedPath))) {
+    return resolveAuthSessionHomePath(session.role);
+  }
+
+  return null;
+}
+
+export function resolveSafeReturnTo(value: unknown): string | null {
+  if (typeof value !== 'string' || !value || value !== value.trim()) {
+    return null;
+  }
+
+  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\')) {
+    return null;
+  }
+
+  const hasControlCharacter = [...value].some((character) => {
+    const codePoint = character.codePointAt(0);
+
+    return codePoint !== undefined && (codePoint <= 31 || codePoint === 127);
+  });
+
+  if (hasControlCharacter) {
+    return null;
+  }
+
+  // 同源归一化复用 shared/navigation 的既有实现；它失败时回退 '/'，
+  // 仅在输入本身就是 '/' 时才视为合法结果。
+  const sanitized = sanitizeRedirectTarget(value);
+
+  if (sanitized === '/' && value !== '/') {
+    return null;
+  }
+
+  return sanitized;
 }

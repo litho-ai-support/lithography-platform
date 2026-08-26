@@ -3,7 +3,7 @@
 import { type FetchPolicy, gql, type OperationVariables } from '@apollo/client';
 import { type DocumentNode, getOperationAST, type OperationDefinitionNode } from 'graphql';
 
-import { getGraphQLClient, getGraphQLRuntimeConfig } from './client';
+import { getAuthorizationHeader, getGraphQLClient, getGraphQLRuntimeConfig } from './client';
 import { GraphQLIngressError, toGraphQLIngressError } from './errors';
 
 export type GraphQLAuthMode = 'required' | 'none';
@@ -50,15 +50,11 @@ function buildOperationContext(options: ExecuteGraphQLOptions) {
     };
   }
 
+  const authorizationHeader = getAuthorizationHeader(options.accessToken);
+
   return {
     authMode: 'required' as const,
-    ...(options.accessToken
-      ? {
-          headers: {
-            Authorization: `Bearer ${options.accessToken}`,
-          },
-        }
-      : {}),
+    ...(authorizationHeader ? { headers: { Authorization: authorizationHeader } } : {}),
   };
 }
 
@@ -139,6 +135,9 @@ export async function executeGraphQL<TData, TVariables extends OperationVariable
     const { refreshSession, onAuthFailure } = getGraphQLRuntimeConfig();
 
     if (!refreshSession) {
+      // 没有刷新能力时（如当前 P0 登录链路），仍要宣布一次会话失效，
+      // 由 app 装配决定清理与跳转，见 docs/project-convention/graphql-ingress-auth-boundary.md。
+      onAuthFailure?.();
       throw ingressError;
     }
 
