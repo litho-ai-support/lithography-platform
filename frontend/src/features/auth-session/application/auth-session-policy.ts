@@ -103,6 +103,21 @@ function extractPathname(value: string): string {
 
 export type AuthSessionRoleCarrier = Pick<AuthSessionSnapshot, 'role'>;
 
+// 登录/守卫共用的入口路径决策唯一实现；resolveLoginRouteRedirect 与
+// app/router 的登录后跳转都委托这里，避免在组合根出现第二份决策。
+export function resolveAuthSessionEntryPath(
+  session: AuthSessionRoleCarrier,
+  returnToCandidate?: unknown,
+): string {
+  const safeReturnTo = resolveSafeReturnTo(returnToCandidate);
+
+  if (safeReturnTo && isAuthSessionRoleAllowedAt(session.role, extractPathname(safeReturnTo))) {
+    return safeReturnTo;
+  }
+
+  return resolveAuthSessionHomePath(session.role);
+}
+
 export function resolveLoginRouteRedirect(
   session: AuthSessionRoleCarrier | null,
   returnToCandidate?: unknown,
@@ -111,13 +126,7 @@ export function resolveLoginRouteRedirect(
     return null;
   }
 
-  const safeReturnTo = resolveSafeReturnTo(returnToCandidate);
-
-  if (safeReturnTo && isAuthSessionRoleAllowedAt(session.role, extractPathname(safeReturnTo))) {
-    return safeReturnTo;
-  }
-
-  return resolveAuthSessionHomePath(session.role);
+  return resolveAuthSessionEntryPath(session, returnToCandidate);
 }
 
 export function resolveProtectedRouteRedirect(

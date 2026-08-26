@@ -3,12 +3,9 @@
 import {
   createBrowserRouter,
   isRouteErrorResponse,
-  type LoaderFunctionArgs,
   redirect,
   RouterProvider,
-  useNavigate,
   useRouteError,
-  useSearchParams,
 } from 'react-router';
 
 import { AppLayout } from '@/app/layout';
@@ -18,14 +15,7 @@ import { CustomerPage } from '@/pages/customer';
 import { EngineerPage } from '@/pages/engineer';
 import { ErrorPreviewPage } from '@/pages/error-preview';
 import { HomePage } from '@/pages/home';
-import { LoginPage } from '@/pages/login';
 import { ProjectStructurePage } from '@/pages/project-structure';
-import {
-  getCurrentAuthSession,
-  resolveAuthSessionHomePath,
-  resolveLoginRouteRedirect,
-  resolveProtectedRouteRedirect,
-} from '@/features/auth-session';
 import { Error403, Error404, Error500, ErrorRouteCrash } from '@/features/error-feedback';
 
 import { getAppEnv } from '@/shared/env';
@@ -33,6 +23,8 @@ import { getAppEnv } from '@/shared/env';
 import { canAccessGame2048Lab, Game2048LabPage } from '@/labs/game-2048';
 import { canAccessSandboxPlayground, SandboxPlaygroundPage } from '@/sandbox/playground';
 
+import { LoginPageRoute } from './login-page-route';
+import { loginLoader, protectedRouteLoader } from './route-guards';
 import { registerAppRouter } from './router-bridge';
 
 function RouteErrorPage() {
@@ -77,50 +69,6 @@ function sandboxPlaygroundLoader() {
   }
 
   return null;
-}
-
-function loginLoader({ request }: LoaderFunctionArgs) {
-  const requestUrl = new URL(request.url);
-  const loginRedirectPath = resolveLoginRouteRedirect(
-    getCurrentAuthSession(),
-    requestUrl.searchParams.get('returnTo'),
-  );
-
-  if (loginRedirectPath) {
-    return redirect(loginRedirectPath);
-  }
-
-  return null;
-}
-
-function protectedRouteLoader({ request }: LoaderFunctionArgs) {
-  const requestUrl = new URL(request.url);
-  const protectedRedirectPath = resolveProtectedRouteRedirect(
-    getCurrentAuthSession(),
-    requestUrl.pathname + requestUrl.search,
-  );
-
-  if (protectedRedirectPath) {
-    return redirect(protectedRedirectPath);
-  }
-
-  return null;
-}
-
-function LoginPageRoute() {
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-
-  return (
-    <LoginPage
-      onAuthenticated={(session) =>
-        navigate(
-          resolveLoginRouteRedirect(session, searchParams.get('returnTo')) ??
-            resolveAuthSessionHomePath(session.role),
-        )
-      }
-    />
-  );
 }
 
 const router = createBrowserRouter([

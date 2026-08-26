@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createAuthSessionSnapshot,
   isAuthSessionRoleAllowedAt,
+  resolveAuthSessionEntryPath,
   resolveAuthSessionHomePath,
   resolveLoginRouteRedirect,
   resolveProtectedRouteRedirect,
@@ -28,6 +29,22 @@ describe('auth session policy', () => {
 
     expect(resolveLoginRouteRedirect(session)).toBe('/customer');
     expect(resolveLoginRouteRedirect(null)).toBeNull();
+  });
+
+  it('enters the role default entry from the backend role', () => {
+    expect(resolveAuthSessionEntryPath({ role: 'SUPER_ADMIN' }, null)).toBe('/admin');
+    expect(resolveAuthSessionEntryPath({ role: 'ENGINEER' }, null)).toBe('/engineer');
+    expect(resolveAuthSessionEntryPath({ role: 'CUSTOMER' }, null)).toBe('/customer');
+  });
+
+  it('adopts a safe in-role returnTo and falls back to the default entry otherwise', () => {
+    expect(resolveAuthSessionEntryPath({ role: 'ENGINEER' }, '/engineer?tab=open')).toBe(
+      '/engineer?tab=open',
+    );
+    expect(resolveAuthSessionEntryPath({ role: 'ENGINEER' }, '/customer')).toBe('/engineer');
+    expect(resolveAuthSessionEntryPath({ role: 'ENGINEER' }, 'https://example.com')).toBe(
+      '/engineer',
+    );
   });
 
   it('lets SUPER_ADMIN inherit ENGINEER and CUSTOMER route access', () => {

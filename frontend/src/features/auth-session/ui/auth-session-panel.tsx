@@ -15,7 +15,7 @@ export function AuthSessionPanel() {
   if (status !== 'authenticated' || !session) {
     return (
       <div className="surface-panel">
-        <Alert message="当前会话不可用，请先登录。" showIcon type="warning" />
+        <Alert showIcon title="当前会话不可用，请先登录。" type="warning" />
         <div className="page-action-row">
           <Button type="primary" onClick={() => navigate('/login')}>
             前往登录
@@ -30,8 +30,8 @@ export function AuthSessionPanel() {
       <div className="flex flex-col gap-4">
         <Alert
           description={`当前身份：${session.role}。本页面只展示后端返回的安全会话信息。`}
-          message="登录成功"
           showIcon
+          title="登录成功"
           type="success"
         />
 

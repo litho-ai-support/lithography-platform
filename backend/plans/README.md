@@ -91,9 +91,13 @@ direction -> plan -> docs / followup -> delete
 
 ## 当前计划
 
+- [登录功能编码收尾阶段计划](./login-auth-session-code-completion-plan.md)：只处理当前登录实现中
+  “失败后保留登录名并清空密码”的明确功能缺口，以及登录表单、路由接线和全局失效幂等的
+  自动化测试代码；不执行真实环境验收。
 - [登录、JWT 会话与角色落地页推进计划](./login-auth-session-plan.md)：复用现有
   `identity.authentication` capability 和 GraphQL 登录契约，推进真实登录、JWT 会话、角色守卫及
-  `SUPER_ADMIN / ENGINEER / CUSTOMER` 三类临时落地页。
+  `SUPER_ADMIN / ENGINEER / CUSTOMER` 三类临时落地页。其主链路代码已实现，剩余编码工作以上述
+  收尾阶段计划为准。
 
 capability 治理当前没有专门计划；稳定边界见 `docs/common/capability.rules.md` 与 `docs/capabilities/current.md`。
 

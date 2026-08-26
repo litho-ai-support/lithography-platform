@@ -17,12 +17,10 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
     () =>
       state.status === 'authenticated'
         ? {
-            clearSession: authSessionStore.clearSession,
             session: createAuthSessionView(state.session),
             status: state.status,
           }
         : {
-            clearSession: authSessionStore.clearSession,
             session: null,
             status: state.status,
           },

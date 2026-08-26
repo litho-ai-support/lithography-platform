@@ -10,6 +10,7 @@ export { AUTH_SESSION_ROLES } from './application/auth-session.types';
 export {
   type AuthSessionRoleCarrier,
   isAuthSessionRole,
+  resolveAuthSessionEntryPath,
   resolveAuthSessionHomePath,
   resolveLoginRouteRedirect,
   resolveProtectedRouteRedirect,

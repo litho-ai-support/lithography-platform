@@ -46,6 +46,10 @@ export function LoginForm({ onAuthenticated }: LoginFormProps) {
     try {
       authenticatedSession = await loginWithPassword(values);
     } catch (error) {
+      // 所有登录失败都保留登录名并清空密码，避免失败凭据继续留在表单中；
+      // 见项目组登录验收文档与 login-auth-session-code-completion-plan.md。
+      form.setFieldValue('loginPassword', '');
+
       setFeedback({
         message: resolveLoginErrorMessage(error),
         type: 'error',
@@ -77,7 +81,7 @@ export function LoginForm({ onAuthenticated }: LoginFormProps) {
     >
       {feedback ? (
         <Form.Item>
-          <Alert message={feedback.message} showIcon type={feedback.type} />
+          <Alert showIcon title={feedback.message} type={feedback.type} />
         </Form.Item>
       ) : null}
 
