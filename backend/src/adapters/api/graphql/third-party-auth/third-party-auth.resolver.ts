@@ -5,13 +5,11 @@ import {
   ThirdPartyLoginProviderEnum,
   ThirdPartyProviderEnum,
 } from '@app-types/models/account.types';
-import { LoginResultModel, UserInfoView } from '@app-types/models/auth.types';
-import { GeographicInfo } from '@app-types/models/user-info.types';
 import { DomainError, PERMISSION_ERROR } from '@core/common/errors/domain-error';
 import { UseGuards } from '@nestjs/common';
 import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { LoginResult } from '@src/adapters/api/graphql/account/dto/login-result.dto';
-import { UserInfoDTO } from '@src/adapters/api/graphql/account/dto/user-info.dto';
+import { mapUserInfoViewToDTO } from '@src/adapters/api/graphql/account/user-info-view.mapper';
 import { currentUser } from '@src/adapters/api/graphql/decorators/current-user.decorator';
 import { JwtAuthGuard } from '@src/adapters/api/graphql/guards/jwt-auth.guard';
 import { BindThirdPartyInput } from '@src/adapters/api/graphql/third-party-auth/dto/bind-third-party.input';
@@ -22,8 +20,6 @@ import { ThirdPartyAuthDTO } from '@src/adapters/api/graphql/third-party-auth/dt
 import { ThirdPartyLoginInput } from '@src/adapters/api/graphql/third-party-auth/dto/third-party-login.input';
 import { UnbindThirdPartyInput } from '@src/adapters/api/graphql/third-party-auth/dto/unbind-third-party.input';
 import { WeappPhoneResultDTO } from '@src/adapters/api/graphql/third-party-auth/dto/weapp-phone-result.dto';
-import { FetchUserInfoUsecase } from '@usecases/account/fetch-user-info.usecase';
-import type { CompleteUserData } from '@usecases/account/fetch-user-info.types';
 import { LoginWithThirdPartyUsecase } from '@usecases/auth/login-with-third-party.usecase';
 import type { ThirdPartyLoginParams } from '@usecases/auth/login-with-third-party.types';
 import { BindThirdPartyAccountUsecase } from '@usecases/third-party-accounts/bind-third-party-account.usecase';
@@ -44,7 +40,6 @@ export class ThirdPartyAuthResolver {
     private readonly loginWithThirdPartyUsecase: LoginWithThirdPartyUsecase,
     private readonly getWeappPhoneUsecase: GetWeappPhoneUsecase, // 注入新的 usecase
     private readonly generateWeappQrcodeUsecase: GenerateWeappQrcodeUsecase,
-    private readonly fetchUserInfoUsecase: FetchUserInfoUsecase,
     private readonly bindThirdPartyAccountUsecase: BindThirdPartyAccountUsecase,
     private readonly unbindThirdPartyAccountUsecase: UnbindThirdPartyAccountUsecase,
     private readonly getThirdPartyAuthsUsecase: GetThirdPartyAuthsUsecase,
@@ -53,6 +48,7 @@ export class ThirdPartyAuthResolver {
   /**
    * 第三方平台登录
    * - DTO -> 用例输入的薄映射
+   * - 单一登录流程入口：用例内部完成凭证解析、安全校验、发券与用户资料读取（包含安全验证）
    * - 用例只抛 DomainError；全局 GQL Filter 统一映射为 GraphQL 错误
    */
   @Mutation(() => LoginResult, { description: '第三方登录' })
@@ -64,18 +60,16 @@ export class ThirdPartyAuthResolver {
       ip: input.ip,
     };
 
-    const result: LoginResultModel = await this.loginWithThirdPartyUsecase.execute(params);
+    // 登录流程结果类型由用例返回值推导（third-party-auth 域不跨域引用 auth 域类型）
+    const result = await this.loginWithThirdPartyUsecase.execute(params);
 
-    // 获取用户信息（与密码登录保持一致，包含安全验证）
-    const userInfo = await this.getUserInfoForGraphQL(result.accountId);
-
-    // 用例结果 -> GraphQL DTO 的薄映射（补齐 userInfo）
+    // 用例结果 -> GraphQL DTO 的薄映射（userInfo 由登录流程一并装配）
     return {
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
       accountId: result.accountId,
       role: result.role,
-      userInfo,
+      userInfo: result.userInfoView ? mapUserInfoViewToDTO(result.userInfoView) : null,
     };
   }
 
@@ -213,63 +207,5 @@ export class ThirdPartyAuthResolver {
       imageBase64: result.imageBase64,
       imageBufferBase64: result.imageBuffer ? result.imageBuffer.toString('base64') : undefined,
     };
-  }
-
-  /**
-   * 获取用于 GraphQL 响应的用户信息
-   * 使用现有的安全验证流程，确保 accessGroup 和 metaDigest 已完成比对
-   */
-  private async getUserInfoForGraphQL(accountId: number): Promise<UserInfoDTO> {
-    const completeUserData: CompleteUserData = await this.fetchUserInfoUsecase.executeForLoginFlow({
-      accountId,
-    });
-    return this.mapUserInfoViewToSecureDTO(completeUserData.userInfoView);
-  }
-
-  /**
-   * 将 UserInfoView 映射为安全的 UserInfoDTO
-   * 移除敏感字段（如 metaDigest），确保不会泄露给前端
-   */
-  private mapUserInfoViewToSecureDTO(userInfoView: UserInfoView): UserInfoDTO {
-    return {
-      // 基础字段映射
-      id: userInfoView.accountId,
-      accountId: userInfoView.accountId,
-      nickname: userInfoView.nickname,
-      gender: userInfoView.gender,
-      birthDate: userInfoView.birthDate,
-      avatarUrl: userInfoView.avatarUrl,
-      email: userInfoView.email,
-      signature: userInfoView.signature,
-
-      // 联系方式字段
-      address: userInfoView.address,
-      phone: userInfoView.phone,
-
-      // 标签和地理位置
-      tags: userInfoView.tags,
-      geographic: this.serializeGeographic(userInfoView.geographic),
-
-      // 访问组和通知
-      accessGroup: userInfoView.accessGroup,
-      notifyCount: userInfoView.notifyCount,
-      unreadCount: userInfoView.unreadCount,
-
-      // 状态和时间戳
-      userState: userInfoView.userState,
-      createdAt: userInfoView.createdAt,
-      updatedAt: userInfoView.updatedAt,
-    };
-  }
-
-  /**
-   * 将 GeographicInfo 对象序列化为字符串
-   */
-  private serializeGeographic(geographic: GeographicInfo | null): string | null {
-    if (!geographic) return null;
-    const parts: string[] = [];
-    if (geographic.province) parts.push(geographic.province);
-    if (geographic.city) parts.push(geographic.city);
-    return parts.length > 0 ? parts.join(', ') : null;
   }
 }

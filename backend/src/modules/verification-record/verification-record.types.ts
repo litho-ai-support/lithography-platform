@@ -22,6 +22,20 @@ export interface VerificationRecordDetailView {
   updatedAt: Date;
 }
 
+/** 消费操作的目标账号约束 */
+export type VerificationRecordConsumeTargetConstraint =
+  { mode: 'IGNORE' } | { mode: 'NULL_ONLY' } | { mode: 'MATCH_OR_NULL'; accountId: number };
+
+/** 消费失败时用于诊断的记录快照（不含敏感字段） */
+export type VerificationRecordValidationSnapshot = {
+  id: number;
+  type: VerificationRecordType;
+  status: VerificationRecordStatus;
+  expiresAt: Date;
+  notBefore: Date | null;
+  targetAccountId: number | null;
+};
+
 /**
  * 验证记录公开载荷数据
  * 只包含对上层有用且非敏感的字段

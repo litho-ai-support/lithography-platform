@@ -136,6 +136,21 @@ export class VerificationRecordReadRepository {
   }
 
   /**
+   * 按 ID 读取任意状态的验证记录（供写后读路径使用）
+   *
+   * @param recordId 记录 ID
+   * @param transactionContext 可选的事务上下文
+   * @returns 验证记录或 null
+   */
+  async findById(
+    recordId: number,
+    transactionContext?: PersistenceTransactionContext,
+  ): Promise<VerificationRecordEntity | null> {
+    const repository = this.getRepository(transactionContext);
+    return await repository.findOne({ where: { id: recordId } });
+  }
+
+  /**
    * 确保验证记录与上下文匹配
    *
    * 校验规则（严格匹配）：

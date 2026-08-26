@@ -1,19 +1,17 @@
 // src/usecases/auth/execute-login-flow.usecase.ts
 
-import { BasicLoginResult } from '@app-types/auth/login-flow.types';
+import { BasicLoginResult, LoginUserDataCollection } from '@modules/auth/auth.types';
 import {
   AccountStatus,
   AudienceTypeEnum,
+  IdentityTypeEnum,
   ThirdPartyProviderEnum,
 } from '@app-types/models/account.types';
 import { ACCOUNT_ERROR, AUTH_ERROR, DomainError } from '@core/common/errors/domain-error';
 import { AccountSecurityService } from '@modules/account/base/services/account-security.service';
 import { AccountQueryService } from '@modules/account/queries/account.query.service';
 import { AuthService } from '@modules/auth/auth.service';
-import {
-  LoginBootstrapQueryService,
-  LoginUserDataCollection,
-} from '@modules/auth/queries/login-bootstrap.query.service';
+import { LoginBootstrapQueryService } from '@modules/auth/queries/login-bootstrap.query.service';
 import { LoginResultQueryService } from '@modules/auth/queries/login-result.query.service';
 import { TokenHelper } from '@modules/auth/token.helper';
 import { Injectable } from '@nestjs/common';
@@ -61,6 +59,9 @@ export class ExecuteLoginFlowUsecase {
     // 获取用户相关数据
     const userData = await this.fetchUserData(accountId);
 
+    // 安全校验通过后，在登录流程内读取完整用户资料（供适配器映射 DTO，不再由 Resolver 二次编排）
+    const userInfoView = await this.accountQueryService.getUserInfoViewStrict({ accountId });
+
     // 生成 JWT tokens，传入 audience 参数
     const tokens = this.generateTokens(userData, audience);
 
@@ -71,6 +72,7 @@ export class ExecuteLoginFlowUsecase {
     return this.loginResultQueryService.toBasicLoginResult({
       userData,
       tokens,
+      userInfoView,
     });
   }
 
@@ -95,12 +97,16 @@ export class ExecuteLoginFlowUsecase {
   private async fetchUserData(accountId: number): Promise<LoginUserDataCollection> {
     const loginSnapshot = await this.accountQueryService.getLoginBootstrapSnapshot({ accountId });
 
-    const securityResult = this.accountSecurityService.checkAndHandleAccountSecurity({
+    // 安全校验（纯判断）：由本用例编排后续的暂停写入与阻断决策
+    const validationResult = this.accountSecurityService.validateAccessGroupConsistency({
       id: loginSnapshot.account.id,
       userInfo: loginSnapshot.userInfo,
     });
-    if (securityResult.wasSuspended) {
-      throw new DomainError(ACCOUNT_ERROR.ACCOUNT_SUSPENDED, '账户因安全问题已被暂停');
+    if (!validationResult.isValid && validationResult.shouldSuspend) {
+      await this.handleSecurityBreach({
+        accountId: loginSnapshot.account.id,
+        realAccessGroup: validationResult.realAccessGroup,
+      });
     }
 
     // 检查账户状态
@@ -109,6 +115,49 @@ export class ExecuteLoginFlowUsecase {
     }
 
     return this.loginBootstrapQueryService.toLoginUserDataCollection(loginSnapshot);
+  }
+
+  /**
+   * 处理安全违规：记录安全事件、等待暂停写入完成并阻断本次登录
+   * 暂停持久化失败不阻断拒绝决策（访问仍被拒绝），失败详情记录到日志
+   */
+  private async handleSecurityBreach(params: {
+    accountId: number;
+    realAccessGroup?: IdentityTypeEnum[];
+  }): Promise<never> {
+    const reason = '检测到访问组不一致 - 潜在安全威胁';
+    const { accountId, realAccessGroup } = params;
+
+    this.accountSecurityService.logSecurityEvent({
+      accountId,
+      eventType: 'SECURITY_BREACH_DETECTED',
+      details: {
+        reason,
+        realAccessGroup,
+        detectedAt: new Date().toISOString(),
+        immediateBlock: true,
+      },
+    });
+
+    try {
+      await this.accountSecurityService.suspendAccount(accountId);
+      this.accountSecurityService.logSecurityEvent({
+        accountId,
+        eventType: 'ACCOUNT_SUSPENDED',
+        details: {
+          reason,
+          suspendedAt: new Date().toISOString(),
+        },
+      });
+      this.logger.warn({ accountId, reason }, `账号 ${accountId} 已被暂停`);
+    } catch (error) {
+      this.logger.error(
+        { err: error, accountId },
+        `在数据库中暂停账号 ${accountId} 失败，但访问仍被阻止`,
+      );
+    }
+
+    throw new DomainError(ACCOUNT_ERROR.ACCOUNT_SUSPENDED, '账户因安全问题已被暂停');
   }
 
   /**

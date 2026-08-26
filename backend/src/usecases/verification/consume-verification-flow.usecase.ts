@@ -12,11 +12,11 @@ import {
 } from '@core/common/errors/domain-error';
 import { Inject, Injectable } from '@nestjs/common';
 import { ConsumableQueryService } from '@src/modules/verification-record/queries/consumable.query.service';
-import {
+import { VerificationRecordService } from '@src/modules/verification-record/verification-record.service';
+import type {
   VerificationRecordConsumeTargetConstraint,
-  VerificationRecordService,
   VerificationRecordValidationSnapshot,
-} from '@src/modules/verification-record/verification-record.service';
+} from '@src/modules/verification-record/verification-record.types';
 import {
   TRANSACTION_RUNNER,
   type TransactionRunner,
@@ -186,9 +186,7 @@ export class ConsumeVerificationFlowUsecase {
     token: string;
     consumedByAccountId?: number;
     expectedType?: VerificationRecordType;
-    transactionContext?: Parameters<
-      VerificationRecordService['consumeRecord']
-    >[0]['transactionContext'];
+    transactionContext?: PersistenceTransactionContext;
   }): Promise<void> {
     const { token, consumedByAccountId, expectedType, transactionContext } = params;
     const now = new Date();

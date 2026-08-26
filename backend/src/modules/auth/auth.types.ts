@@ -1,6 +1,7 @@
-// src/types/auth/login-flow.types.ts
+// src/modules/auth/auth.types.ts
 
 import { AccountStatus, AudienceTypeEnum, IdentityTypeEnum } from '@app-types/models/account.types';
+import type { UserInfoView } from '@app-types/models/auth.types';
 
 /**
  * ExecuteLoginFlowUsecase 输出类型
@@ -15,6 +16,8 @@ export interface BasicLoginResult {
   accessGroup: IdentityTypeEnum[];
   account: MinimalAccountInfo;
   userInfo: MinimalUserInfo;
+  /** 登录流程内读取的完整用户资料视图（安全校验已完成），供适配器映射 DTO */
+  userInfoView: UserInfoView;
 }
 
 /**
@@ -48,6 +51,8 @@ export interface EnrichLoginWithIdentityInput {
   accessGroup: IdentityTypeEnum[]; // 修复：从 string[] 改为 IdentityTypeEnum[]
   account: MinimalAccountInfo;
   userInfo: MinimalUserInfo;
+  /** 登录流程内读取的完整用户资料视图，随结果透传给适配器 */
+  userInfoView: UserInfoView;
   // 可选开关（默认全部为 true）
   options?: {
     includeIdentity?: boolean;
@@ -73,6 +78,7 @@ export interface EnrichedLoginResult {
   // 账号和用户信息（改为可选字段）
   account?: MinimalAccountInfo;
   userInfo?: MinimalUserInfo;
+  userInfoView?: UserInfoView;
 
   // 警告信息（仅在非理想路径返回）
   warnings?: string[];
@@ -101,6 +107,34 @@ export interface MinimalUserInfo {
   avatarUrl: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * 登录数据集合（登录引导快照的稳定 data shape）
+ */
+export interface LoginUserDataCollection {
+  userWithAccessGroup: {
+    id: number;
+    loginEmail: string | null;
+    accessGroup: IdentityTypeEnum[];
+  };
+  account: {
+    id: number;
+    loginName: string | null;
+    loginEmail: string | null;
+    status: AccountStatus;
+    identityHint: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  };
+  userInfo: {
+    id: number;
+    accountId: number;
+    nickname: string;
+    avatarUrl: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  };
 }
 
 /**

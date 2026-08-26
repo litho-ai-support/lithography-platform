@@ -1,16 +1,17 @@
 // src/modules/auth/queries/login-result.query.service.ts
-import { BasicLoginResult, EnrichedLoginResult } from '@app-types/auth/login-flow.types';
 import { AccountStatus, IdentityTypeEnum } from '@app-types/models/account.types';
+import type { UserInfoView } from '@app-types/models/auth.types';
 import { Injectable } from '@nestjs/common';
-import { LoginUserDataCollection } from './login-bootstrap.query.service';
+import type { BasicLoginResult, EnrichedLoginResult, LoginUserDataCollection } from '../auth.types';
 
 @Injectable()
 export class LoginResultQueryService {
   toBasicLoginResult(params: {
     userData: LoginUserDataCollection;
     tokens: { accessToken: string; refreshToken: string };
+    userInfoView: UserInfoView;
   }): BasicLoginResult {
-    const { userData, tokens } = params;
+    const { userData, tokens, userInfoView } = params;
     const parsedIdentityHint = this.parseIdentityHint(userData.account.identityHint);
     return {
       tokens,
@@ -34,6 +35,7 @@ export class LoginResultQueryService {
         createdAt: userData.userInfo.createdAt,
         updatedAt: userData.userInfo.updatedAt,
       },
+      userInfoView,
     };
   }
 
@@ -59,6 +61,7 @@ export class LoginResultQueryService {
       createdAt: Date;
       updatedAt: Date;
     };
+    userInfoView: UserInfoView;
     identity: unknown;
     warnings: string[];
     includeAccount: boolean;
@@ -71,6 +74,7 @@ export class LoginResultQueryService {
       accessGroup,
       account,
       userInfo,
+      userInfoView,
       identity,
       warnings,
       includeAccount,
@@ -85,6 +89,7 @@ export class LoginResultQueryService {
       accessGroup,
       ...(includeAccount && { account }),
       ...(includeUserInfo && { userInfo }),
+      ...(includeUserInfo && { userInfoView }),
       ...(warnings.length > 0 && { warnings }),
     };
   }

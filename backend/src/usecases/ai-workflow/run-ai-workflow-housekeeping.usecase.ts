@@ -1,3 +1,16 @@
+/**
+ * 批量编排例外声明（对应 usecase.rules.md 的批量编排要求）
+ *
+ * 本用例的三个修复阶段均在候选循环内逐条执行数据库 / 队列 / QueryService 调用，
+ * 属于刻意的逐条隔离设计，而非遗漏批量化：
+ * 1. 故障隔离：单条候选失败仅计入该条 failed，不阻断同批其他候选的修复；
+ * 2. 乐观并发：每次写入均携带 expectedStatuses，冲突时按 CONFLICT/skipped 计，
+ *    批量更新无法保留逐条状态机语义；
+ * 3. 分支依赖时点状态：每条候选的处理路径依赖其当前时刻的队列/记录状态，
+ *    无法在不改变语义的前提下合并为批量查询或批量写入；
+ * 4. 有界风险：批次上限固定为 500（见 resolveBatchLimit），逐条 I/O 总量有界，
+ *    且本用例仅由定时维护链路低频触发。
+ */
 import { Inject, Injectable } from '@nestjs/common';
 import { resolveAsyncTaskBizKey } from '@src/core/common/async-task/async-task-identifier.policy';
 import { normalizeOptionalText } from '@src/core/common/input-normalize/input-normalize.policy';
@@ -82,6 +95,7 @@ export class RunAiWorkflowHousekeepingUsecase {
       limit: input.limit,
     });
     const result = createPhaseResult(candidates.length);
+    // 逐条处理（见文件头部批量编排例外声明：故障隔离 + expectedStatuses 乐观并发）
     for (const candidate of candidates) {
       try {
         if (isExpired({ expiresAt: candidate.admissionExpiresAt, now: input.now })) {
@@ -140,6 +154,7 @@ export class RunAiWorkflowHousekeepingUsecase {
       limit: input.limit,
     });
     const result = createPhaseResult(candidates.length);
+    // 逐条处理（见文件头部批量编排例外声明：每条路径依赖当前队列/记录状态）
     for (const candidate of candidates) {
       try {
         if (!candidate.jobId) {
@@ -238,6 +253,7 @@ export class RunAiWorkflowHousekeepingUsecase {
       limit: input.limit,
     });
     const result = createPhaseResult(candidates.length);
+    // 逐条处理（见文件头部批量编排例外声明：逐条对账 + 失败隔离）
     for (const candidate of candidates) {
       try {
         const queueName = candidate.queueName;

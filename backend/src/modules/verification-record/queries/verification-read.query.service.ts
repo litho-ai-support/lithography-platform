@@ -86,6 +86,38 @@ export class VerificationReadQueryService {
   }
 
   /**
+   * 按 ID 读取清洁视图（写后读路径，支持事务上下文）
+   */
+  async getCleanViewById(params: {
+    recordId: number;
+    transactionContext?: PersistenceTransactionContext;
+  }): Promise<VerificationRecordView> {
+    const record = await this.readRepository.findById(params.recordId, params.transactionContext);
+    if (!record) {
+      throw new DomainError(VERIFICATION_RECORD_ERROR.RECORD_NOT_FOUND, '验证记录不存在', {
+        recordId: params.recordId,
+      });
+    }
+    return this.toCleanView(record);
+  }
+
+  /**
+   * 按 ID 读取详情视图（写后读路径，支持事务上下文）
+   */
+  async getDetailViewById(params: {
+    recordId: number;
+    transactionContext?: PersistenceTransactionContext;
+  }): Promise<VerificationRecordDetailView> {
+    const record = await this.readRepository.findById(params.recordId, params.transactionContext);
+    if (!record) {
+      throw new DomainError(VERIFICATION_RECORD_ERROR.RECORD_NOT_FOUND, '验证记录不存在', {
+        recordId: params.recordId,
+      });
+    }
+    return this.toDetailView(record);
+  }
+
+  /**
    * 根据 token 查找可消费的验证记录
    *
    * 包含完整的业务校验：
@@ -321,13 +353,13 @@ export class VerificationReadQueryService {
   }
 
   /**
-   * 转换为清洁的记录视图
+   * 转换为清洁的记录视图（模块内部映射，不对外暴露 Entity）
    * 隐藏敏感信息，只返回必要的字段
    *
    * @param record 验证记录实体
    * @returns 清洁的记录视图
    */
-  toCleanView(record: VerificationRecordEntity): VerificationRecordView {
+  private toCleanView(record: VerificationRecordEntity): VerificationRecordView {
     return {
       id: record.id,
       type: record.type,
@@ -345,7 +377,7 @@ export class VerificationReadQueryService {
     };
   }
 
-  toDetailView(record: VerificationRecordEntity): VerificationRecordDetailView {
+  private toDetailView(record: VerificationRecordEntity): VerificationRecordDetailView {
     return {
       id: record.id,
       type: record.type,

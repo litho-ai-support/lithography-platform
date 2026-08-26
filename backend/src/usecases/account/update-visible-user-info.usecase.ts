@@ -7,10 +7,8 @@ import { Gender, UserState, type GeographicInfo } from '@app-types/models/user-i
 import { hasRole } from '@core/account/policy/role-access.policy';
 import { ACCOUNT_ERROR, DomainError, PERMISSION_ERROR } from '@core/common/errors/domain-error';
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  AccountService,
-  type UserInfoUpdateData,
-} from '@src/modules/account/base/services/account.service';
+import { AccountService } from '@src/modules/account/base/services/account.service';
+import type { UserInfoUpdateData } from '@src/modules/account/account.types';
 import { AccountQueryService } from '@src/modules/account/queries/account.query.service';
 import {
   TRANSACTION_RUNNER,

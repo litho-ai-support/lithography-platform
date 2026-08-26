@@ -7,6 +7,15 @@ import { PinoLogger } from 'nestjs-pino';
 import { Repository } from 'typeorm';
 import { AccountEntity } from '../entities/account.entity';
 
+/**
+ * 访问组一致性校验结果（纯判断输出，不含任何写入副作用）
+ */
+export interface AccountSecurityValidationResult {
+  isValid: boolean;
+  realAccessGroup?: IdentityTypeEnum[];
+  shouldSuspend: boolean;
+}
+
 @Injectable()
 export class AccountSecurityService {
   constructor(
@@ -19,15 +28,13 @@ export class AccountSecurityService {
   }
 
   /**
-   * 验证 metaDigest 与 accessGroup 的一致性
-   * @param account 账号实体（包含关联的用户信息）
+   * 验证 metaDigest 与 accessGroup 的一致性（纯判断，不产生写入副作用）
+   * @param account 账号安全主体快照（包含关联的用户信息）
    * @returns 验证结果和真实的 accessGroup
    */
-  validateAccessGroupConsistency(account: AccountSecuritySubjectSnapshot): {
-    isValid: boolean;
-    realAccessGroup?: IdentityTypeEnum[];
-    shouldSuspend: boolean;
-  } {
+  validateAccessGroupConsistency(
+    account: AccountSecuritySubjectSnapshot,
+  ): AccountSecurityValidationResult {
     try {
       const metaDigestValue = account.userInfo.metaDigest;
 
@@ -95,21 +102,6 @@ export class AccountSecurityService {
   }
 
   /**
-   * 创建账号暂停数据
-   * @param accountId 账号 ID
-   * @param reason 暂停原因
-   * @returns 暂停数据对象
-   */
-  createSuspensionData(accountId: number, reason: string) {
-    return {
-      accountId,
-      reason,
-      suspendedAt: new Date(),
-      status: AccountStatus.SUSPENDED,
-    };
-  }
-
-  /**
    * 记录安全事件
    * @param event 安全事件信息
    */
@@ -129,78 +121,14 @@ export class AccountSecurityService {
   }
 
   /**
-   * 暂停账号
+   * 暂停账号（细粒度写操作，仅负责落库）
+   * 是否暂停、是否等待结果、失败如何处理由调用方 Usecase 编排决定
    * @param accountId 账号 ID
-   * @param reason 暂停原因
-   * @returns 是否成功暂停
+   * @throws 持久化失败时向调用方抛出错误
    */
-  async suspendAccount(accountId: number, reason: string): Promise<boolean> {
-    try {
-      await this.accountRepository.update(accountId, {
-        status: AccountStatus.SUSPENDED,
-      });
-
-      this.logSecurityEvent({
-        accountId,
-        eventType: 'ACCOUNT_SUSPENDED',
-        details: {
-          reason,
-          suspendedAt: new Date().toISOString(),
-        },
-      });
-
-      this.logger.warn({ accountId, reason }, `账号 ${accountId} 已被暂停`);
-      return true;
-    } catch (error) {
-      this.logger.error({ err: error, accountId }, `暂停账号 ${accountId} 失败`);
-      return false;
-    }
-  }
-
-  /**
-   * 检查并处理账号安全性
-   * @param account 账号实体（包含 userInfo）
-   * @returns 处理结果
-   */
-  checkAndHandleAccountSecurity(account: AccountSecuritySubjectSnapshot): {
-    isValid: boolean;
-    wasSuspended: boolean;
-    realAccessGroup?: IdentityTypeEnum[];
-  } {
-    const validationResult = this.validateAccessGroupConsistency(account);
-
-    if (!validationResult.isValid && validationResult.shouldSuspend) {
-      // 立即记录安全事件，不等待数据库操作
-      this.logSecurityEvent({
-        accountId: account.id,
-        eventType: 'SECURITY_BREACH_DETECTED',
-        details: {
-          reason: '检测到访问组不一致 - 潜在安全威胁',
-          detectedAt: new Date().toISOString(),
-          immediateBlock: true,
-        },
-      });
-
-      // 异步尝试暂停账号，但不等待结果
-      this.suspendAccount(account.id, '检测到访问组不一致 - 潜在安全威胁').catch((error: Error) => {
-        this.logger.error(
-          { err: error, accountId: account.id },
-          `在数据库中暂停账号 ${account.id} 失败，但访问仍被阻止`,
-        );
-      });
-
-      // 无论数据库操作是否成功，都立即阻断访问
-      return {
-        isValid: false,
-        wasSuspended: true, // 强制返回 true，确保流程被阻断
-        realAccessGroup: validationResult.realAccessGroup,
-      };
-    }
-
-    return {
-      isValid: validationResult.isValid,
-      wasSuspended: false,
-      realAccessGroup: validationResult.realAccessGroup,
-    };
+  async suspendAccount(accountId: number): Promise<void> {
+    await this.accountRepository.update(accountId, {
+      status: AccountStatus.SUSPENDED,
+    });
   }
 }

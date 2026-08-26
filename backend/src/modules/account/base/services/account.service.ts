@@ -1,71 +1,24 @@
 // src/modules/account/base/services/account.service.ts
 
 import type { PersistenceTransactionContext } from '@app-types/common/transaction.types';
-import {
-  AccountStatus,
-  AudienceTypeEnum,
-  IdentityTypeEnum,
-  LoginHistoryItemModel,
-} from '@app-types/models/account.types';
-import { Gender, type GeographicInfo, UserState } from '@app-types/models/user-info.types';
+import { IdentityTypeEnum, LoginHistoryItemModel } from '@app-types/models/account.types';
 import { ACCOUNT_ERROR, AUTH_ERROR, DomainError } from '@core/common/errors/domain-error';
 import { LegacyPasswordCryptoHelper } from '@modules/common/password/legacy-password-crypto.helper';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { getTypeOrmEntityManager } from '@src/infrastructure/database/transaction/typeorm-persistence-transaction-context';
 import { Repository } from 'typeorm';
+import type {
+  AccountCreateData,
+  AccountSnapshot,
+  AccountUpdateData,
+  UserInfoCreateData,
+  UserInfoUpdateData,
+} from '../../account.types';
 
 // ✅ base 层实体（始终存在）
 import { AccountEntity } from '../entities/account.entity';
 import { UserInfoEntity } from '../entities/user-info.entity';
-export interface AccountCreateData {
-  loginName?: string | null;
-  loginEmail?: string | null;
-  loginPassword?: string;
-  status?: AccountStatus;
-  audience?: AudienceTypeEnum;
-  identityHint?: string | null;
-  recentLoginHistory?: LoginHistoryItemModel[] | null;
-  createdAt?: Date;
-  updatedAt?: Date;
-}
-
-export interface UserInfoCreateData {
-  accountId?: number;
-  nickname?: string;
-  gender?: Gender;
-  birthDate?: string | null;
-  avatarUrl?: string | null;
-  email?: string | null;
-  signature?: string | null;
-  accessGroup?: IdentityTypeEnum[];
-  address?: string | null;
-  phone?: string | null;
-  tags?: string[] | null;
-  geographic?: GeographicInfo | null;
-  metaDigest?: IdentityTypeEnum[] | null;
-  notifyCount?: number;
-  unreadCount?: number;
-  userState?: UserState;
-  createdAt?: Date;
-  updatedAt?: Date;
-}
-
-export interface UserInfoUpdateData {
-  nickname?: string;
-  gender?: Gender;
-  birthDate?: string | null;
-  avatarUrl?: string | null;
-  email?: string | null;
-  signature?: string | null;
-  address?: string | null;
-  phone?: string | null;
-  tags?: string[] | null;
-  geographic?: GeographicInfo | null;
-  notifyCount?: number;
-  unreadCount?: number;
-  userState?: UserState;
-}
 
 @Injectable()
 export class AccountService {
@@ -106,34 +59,25 @@ export class AccountService {
     });
   }
 
-  /** 创建账户实体（不落库） */
-  createAccountEntity(params: {
+  /** 创建账户并落库，对上游返回稳定 snapshot（不外泄 Entity） */
+  async createAccount(params: {
     accountData: AccountCreateData;
     transactionContext?: PersistenceTransactionContext;
-  }): AccountEntity {
+  }): Promise<AccountSnapshot> {
     const { accountData, transactionContext } = params;
     const repository = this.getAccountRepository(transactionContext);
-    return repository.create(accountData);
+    const saved = await repository.save(repository.create(accountData));
+    return this.toAccountSnapshot(saved);
   }
 
-  /** 落库账户实体 */
-  async saveAccount(params: {
-    account: AccountEntity;
-    transactionContext?: PersistenceTransactionContext;
-  }): Promise<AccountEntity> {
-    const { account, transactionContext } = params;
-    const repository = this.getAccountRepository(transactionContext);
-    return await repository.save(account);
-  }
-
-  /** 更新账户 */
+  /** 更新账户（写入数据限定为 AccountUpdateData，不接收 Entity 形状） */
   async updateAccount(
     id: number,
-    updateData: Partial<AccountEntity>,
+    updateData: AccountUpdateData,
     transactionContext?: PersistenceTransactionContext,
   ): Promise<void> {
     const repository = this.getAccountRepository(transactionContext);
-    await repository.update(id, updateData);
+    await repository.update(id, { ...updateData, updatedAt: new Date() });
   }
 
   async updateAccountPasswordHash(params: {
@@ -152,12 +96,12 @@ export class AccountService {
    * 显式锁定账户以避免并发覆盖
    * @param accountId 账户 ID
    * @param transactionContext 事务上下文
-   * @returns 锁定的账户实体
+   * @returns 锁定账户的稳定 snapshot（不外泄 Entity）
    */
   async lockByIdForUpdate(
     accountId: number,
     transactionContext: PersistenceTransactionContext,
-  ): Promise<AccountEntity> {
+  ): Promise<AccountSnapshot> {
     const repository = this.getAccountRepository(transactionContext);
     const account = await repository
       .createQueryBuilder('account')
@@ -169,27 +113,17 @@ export class AccountService {
       throw new DomainError(ACCOUNT_ERROR.ACCOUNT_NOT_FOUND, '账户不存在');
     }
 
-    return account;
+    return this.toAccountSnapshot(account);
   }
 
-  /** 创建用户信息实体（不落库） */
-  createUserInfoEntity(params: {
+  /** 创建用户信息并落库（不外泄 Entity） */
+  async createUserInfo(params: {
     userInfoData: UserInfoCreateData;
     transactionContext?: PersistenceTransactionContext;
-  }): UserInfoEntity {
+  }): Promise<void> {
     const { userInfoData, transactionContext } = params;
     const repository = this.getUserInfoRepository(transactionContext);
-    return repository.create(userInfoData);
-  }
-
-  /** 落库用户信息实体 */
-  async saveUserInfo(params: {
-    userInfo: UserInfoEntity;
-    transactionContext?: PersistenceTransactionContext;
-  }): Promise<UserInfoEntity> {
-    const { userInfo, transactionContext } = params;
-    const repository = this.getUserInfoRepository(transactionContext);
-    return await repository.save(userInfo);
+    await repository.save(repository.create(userInfoData));
   }
 
   async updateUserInfoFields(params: {
@@ -280,6 +214,19 @@ export class AccountService {
     }
 
     return normalizedPassword;
+  }
+
+  private toAccountSnapshot(entity: AccountEntity): AccountSnapshot {
+    return {
+      id: entity.id,
+      loginName: entity.loginName ?? null,
+      loginEmail: entity.loginEmail ?? null,
+      status: entity.status,
+      identityHint: entity.identityHint ?? null,
+      recentLoginHistory: entity.recentLoginHistory ?? null,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+    };
   }
 
   private getAccountRepository(

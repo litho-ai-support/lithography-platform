@@ -6,7 +6,6 @@ import type {
   VerificationRecordDetailView,
   VerificationRecordView,
 } from '../verification-record.types';
-import { VerificationRecordEntity } from '../verification-record.entity';
 import { VerificationReadQueryService } from './verification-read.query.service';
 
 export type {
@@ -54,11 +53,17 @@ export class VerificationRecordQueryService {
     return await this.verificationReadQueryService.getTargetAccountIdByRecordId(params);
   }
 
-  toCleanView(record: VerificationRecordEntity): VerificationRecordView {
-    return this.verificationReadQueryService.toCleanView(record);
+  async getCleanViewById(params: {
+    recordId: number;
+    transactionContext?: PersistenceTransactionContext;
+  }): Promise<VerificationRecordView> {
+    return await this.verificationReadQueryService.getCleanViewById(params);
   }
 
-  toDetailView(record: VerificationRecordEntity): VerificationRecordDetailView {
-    return this.verificationReadQueryService.toDetailView(record);
+  async getDetailViewById(params: {
+    recordId: number;
+    transactionContext?: PersistenceTransactionContext;
+  }): Promise<VerificationRecordDetailView> {
+    return await this.verificationReadQueryService.getDetailViewById(params);
   }
 }

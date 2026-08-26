@@ -7,11 +7,9 @@ import {
 import { DomainError, VERIFICATION_RECORD_ERROR } from '@core/common/errors/domain-error';
 import { VerificationCodeHelper } from '@modules/verification-record/verification-code.helper';
 import { Injectable } from '@nestjs/common';
-import {
-  VerificationRecordDetailView,
-  VerificationRecordQueryService,
-} from '@src/modules/verification-record/queries/verification-record.query.service';
+import { VerificationRecordQueryService } from '@src/modules/verification-record/queries/verification-record.query.service';
 import { VerificationRecordService } from '@src/modules/verification-record/verification-record.service';
+import type { VerificationRecordDetailView } from '@src/modules/verification-record/verification-record.types';
 
 /**
  * 创建验证记录用例参数
@@ -117,14 +115,14 @@ export class CreateVerificationRecordUsecase {
       token = newToken;
     }
 
-    // 创建记录
-    const record = await this.verificationRecordService.createRecord({
+    // 创建记录（写后读：通过 QueryService 读取详情视图）
+    const recordId = await this.verificationRecordService.createRecord({
       ...params,
       token,
     });
 
     return {
-      record: this.verificationRecordQueryService.toDetailView(record),
+      record: await this.verificationRecordQueryService.getDetailViewById({ recordId }),
       token,
       generatedByServer,
     };

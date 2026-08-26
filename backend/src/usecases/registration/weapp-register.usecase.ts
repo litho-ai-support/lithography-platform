@@ -272,7 +272,7 @@ export class WeappRegisterUsecase {
   }): Promise<UserAccountView> {
     const { accountData, userInfoData } = params;
     return await this.transactionRunner.run(async (transactionContext) => {
-      const account = this.accountService.createAccountEntity({
+      const createdAccount = await this.accountService.createAccount({
         transactionContext,
         accountData: {
           ...accountData,
@@ -281,30 +281,28 @@ export class WeappRegisterUsecase {
           updatedAt: new Date(),
         },
       });
-      const savedAccount = await this.accountService.saveAccount({ account, transactionContext });
 
       await this.accountService.updateAccountPasswordHash({
-        accountId: savedAccount.id,
+        accountId: createdAccount.id,
         passwordHash: AccountService.hashPasswordWithTimestamp(
           accountData.loginPassword,
-          savedAccount.createdAt,
+          createdAccount.createdAt,
         ),
         transactionContext,
       });
 
-      const userInfo = this.accountService.createUserInfoEntity({
+      await this.accountService.createUserInfo({
         transactionContext,
         userInfoData: {
-          accountId: savedAccount.id,
+          accountId: createdAccount.id,
           ...userInfoData,
           createdAt: new Date(),
           updatedAt: new Date(),
         },
       });
-      await this.accountService.saveUserInfo({ userInfo, transactionContext });
 
       return await this.accountQueryService.getUserAccountViewById({
-        accountId: savedAccount.id,
+        accountId: createdAccount.id,
         transactionContext,
       });
     });

@@ -2,8 +2,8 @@
 
 import { Injectable } from '@nestjs/common';
 
+import type { EnrichedLoginResult } from '@modules/auth/auth.types';
 import { AudienceTypeEnum, ThirdPartyProviderEnum } from '@app-types/models/account.types';
-import { LoginResultModel } from '@app-types/models/auth.types';
 import { DomainError, THIRDPARTY_ERROR } from '@core/common/errors';
 import { normalizeRequiredText } from '@core/common/input-normalize/input-normalize.policy';
 
@@ -30,7 +30,7 @@ export class LoginWithThirdPartyUsecase {
     private readonly loginByAccountId: LoginByAccountIdUsecase,
   ) {}
 
-  async execute(params: ThirdPartyLoginParams): Promise<LoginResultModel> {
+  async execute(params: ThirdPartyLoginParams): Promise<EnrichedLoginResult> {
     const provider = params.provider;
     const audience = params.audience ?? AudienceTypeEnum.DESKTOP; // 修复：直接使用枚举值
     const ip = params.ip;

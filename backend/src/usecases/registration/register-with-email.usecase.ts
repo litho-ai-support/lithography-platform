@@ -183,7 +183,7 @@ export class RegisterWithEmailUsecase {
   /**
    * 创建账户
    * @param preparedData 准备好的注册数据
-   * @returns 创建的账户实体
+   * @returns 创建的账户视图
    */
   private async createAccount(preparedData: {
     loginName?: string | null;
@@ -217,7 +217,7 @@ export class RegisterWithEmailUsecase {
         );
       }
 
-      const account = this.accountService.createAccountEntity({
+      const createdAccount = await this.accountService.createAccount({
         transactionContext,
         accountData: {
           loginName,
@@ -229,21 +229,20 @@ export class RegisterWithEmailUsecase {
           updatedAt: new Date(),
         },
       });
-      const savedAccount = await this.accountService.saveAccount({ account, transactionContext });
 
       await this.accountService.updateAccountPasswordHash({
-        accountId: savedAccount.id,
+        accountId: createdAccount.id,
         passwordHash: AccountService.hashPasswordWithTimestamp(
           loginPassword,
-          savedAccount.createdAt,
+          createdAccount.createdAt,
         ),
         transactionContext,
       });
 
-      const userInfo = this.accountService.createUserInfoEntity({
+      await this.accountService.createUserInfo({
         transactionContext,
         userInfoData: {
-          accountId: savedAccount.id,
+          accountId: createdAccount.id,
           nickname,
           email,
           accessGroup,
@@ -252,10 +251,9 @@ export class RegisterWithEmailUsecase {
           updatedAt: new Date(),
         },
       });
-      await this.accountService.saveUserInfo({ userInfo, transactionContext });
 
       return await this.accountQueryService.getUserAccountViewById({
-        accountId: savedAccount.id,
+        accountId: createdAccount.id,
         transactionContext,
       });
     });

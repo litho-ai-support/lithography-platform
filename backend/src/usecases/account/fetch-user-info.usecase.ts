@@ -67,10 +67,11 @@ export class FetchUserInfoUsecase {
   }
 
   /**
-   * 登录流程专用：获取完整用户数据并执行安全验证
+   * 登录流程专用：获取完整用户数据并执行安全校验
    * - 包含 metaDigest 与 accessGroup 的一致性检查
-   * - 返回验证后的真实 accessGroup
-   * - 用于三步登录流程的统一数据获取
+   * - 安全违规时由本用例编排：记录事件、等待暂停写入并阻断访问（登录链路已改由
+   *   ExecuteLoginFlowUsecase 内联完成同等编排，本方法保留供既有调用方复用）
+   * - 返回校验结果与验证后的用户信息视图
    */
   async executeForLoginFlow(params: { accountId: number }): Promise<CompleteUserData> {
     const { accountId } = params;
@@ -78,14 +79,28 @@ export class FetchUserInfoUsecase {
     // 1. 获取登录安全快照
     const loginSnapshot = await this.accountQueryService.getLoginBootstrapSnapshot({ accountId });
 
-    // 2. 执行安全验证（metaDigest 与 accessGroup 比对）
-    const securityResult = this.accountSecurityService.checkAndHandleAccountSecurity({
+    // 2. 执行安全校验（纯判断：metaDigest 与 accessGroup 比对）
+    const securityResult = this.accountSecurityService.validateAccessGroupConsistency({
       id: loginSnapshot.account.id,
       userInfo: loginSnapshot.userInfo,
     });
 
-    // 3. 如果账号被暂停，抛出错误
-    if (securityResult.wasSuspended) {
+    // 3. 安全违规时记录事件、等待暂停写入完成并阻断访问；暂停持久化失败不影响拒绝决策
+    if (!securityResult.isValid && securityResult.shouldSuspend) {
+      this.accountSecurityService.logSecurityEvent({
+        accountId,
+        eventType: 'SECURITY_BREACH_DETECTED',
+        details: {
+          reason: '检测到访问组不一致 - 潜在安全威胁',
+          detectedAt: new Date().toISOString(),
+          immediateBlock: true,
+        },
+      });
+      try {
+        await this.accountSecurityService.suspendAccount(accountId);
+      } catch {
+        // 暂停落库失败不阻断拒绝决策，访问仍被阻止
+      }
       throw new DomainError(ACCOUNT_ERROR.ACCOUNT_SUSPENDED, '账户因安全问题已被暂停');
     }
 

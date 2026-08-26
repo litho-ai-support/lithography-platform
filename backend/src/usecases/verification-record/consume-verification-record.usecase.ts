@@ -12,16 +12,14 @@ import {
   VERIFICATION_RECORD_ERROR,
 } from '@core/common/errors/domain-error';
 import { Inject, Injectable } from '@nestjs/common';
-import {
+import { VerificationRecordQueryService } from '@src/modules/verification-record/queries/verification-record.query.service';
+import { VerificationRecordService } from '@src/modules/verification-record/verification-record.service';
+import type {
+  VerificationRecordConsumeTargetConstraint,
   VerificationRecordDetailView,
-  VerificationRecordQueryService,
+  VerificationRecordValidationSnapshot,
   VerificationRecordView,
-} from '@src/modules/verification-record/queries/verification-record.query.service';
-import {
-  VerificationRecordService,
-  type VerificationRecordConsumeTargetConstraint,
-  type VerificationRecordValidationSnapshot,
-} from '@src/modules/verification-record/verification-record.service';
+} from '@src/modules/verification-record/verification-record.types';
 import {
   TRANSACTION_RUNNER,
   type TransactionRunner,
@@ -270,28 +268,31 @@ export class ConsumeVerificationRecordUsecase {
       activeTransactionContext: PersistenceTransactionContext,
     ): Promise<VerificationRecordDetailView> => {
       try {
-        const { affected, updatedRecord, currentRecord } =
+        const { affected, updatedRecordId, currentStatus } =
           await this.verificationRecordService.revokeRecord({
             recordId,
             transactionContext: activeTransactionContext,
           });
 
         if (affected === 0) {
-          if (!currentRecord) {
+          if (currentStatus === null) {
             throw new DomainError(VERIFICATION_RECORD_ERROR.RECORD_NOT_FOUND, '验证记录不存在');
           }
           throw new DomainError(
             VERIFICATION_RECORD_ERROR.STATUS_NOT_ALLOWED,
             '验证记录状态不允许撤销操作',
-            { recordId, currentStatus: currentRecord.status },
+            { recordId, currentStatus },
           );
         }
 
-        if (!updatedRecord) {
+        if (!updatedRecordId) {
           throw new DomainError(VERIFICATION_RECORD_ERROR.RECORD_NOT_FOUND, '验证记录不存在');
         }
 
-        return this.verificationRecordQueryService.toDetailView(updatedRecord);
+        return await this.verificationRecordQueryService.getDetailViewById({
+          recordId: updatedRecordId,
+          transactionContext: activeTransactionContext,
+        });
       } catch (error) {
         if (error instanceof DomainError) {
           throw error;
@@ -336,7 +337,7 @@ export class ConsumeVerificationRecordUsecase {
 
     try {
       const targetConstraint = this.resolveTargetConstraint(context);
-      const { affected, updatedRecord, validationRecord } =
+      const { affected, updatedRecordId, validationRecord } =
         await this.verificationRecordService.consumeRecord({
           where,
           context: { ...context, targetConstraint },
@@ -347,11 +348,14 @@ export class ConsumeVerificationRecordUsecase {
         this.handleUpdateFailure(validationRecord, context, notFoundError, notFoundMessage);
       }
 
-      if (!updatedRecord) {
+      if (!updatedRecordId) {
         throw new DomainError(VERIFICATION_RECORD_ERROR.RECORD_NOT_FOUND, '验证记录不存在');
       }
 
-      return this.verificationRecordQueryService.toCleanView(updatedRecord);
+      return await this.verificationRecordQueryService.getCleanViewById({
+        recordId: updatedRecordId,
+        transactionContext,
+      });
     } catch (error) {
       if (error instanceof DomainError) {
         throw error;

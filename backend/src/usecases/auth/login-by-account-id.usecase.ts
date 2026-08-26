@@ -1,6 +1,6 @@
 // src/usecases/auth/login-by-account-id.usecase.ts
 
-import { EnrichedLoginResult, LoginWarningType } from '@app-types/auth/login-flow.types';
+import { EnrichedLoginResult, LoginWarningType } from '@modules/auth/auth.types';
 import { JwtPayload } from '@app-types/jwt.types';
 import { AudienceTypeEnum, ThirdPartyProviderEnum } from '@app-types/models/account.types';
 import { AUTH_ERROR, DomainError } from '@core/common/errors';
@@ -94,6 +94,7 @@ export class LoginByAccountIdUsecase {
       accessGroup: basicResult.accessGroup,
       account: basicResult.account,
       userInfo: basicResult.userInfo,
+      userInfoView: basicResult.userInfoView,
       options: { includeIdentity: true },
     });
 

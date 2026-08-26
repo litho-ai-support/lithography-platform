@@ -1,8 +1,68 @@
 import type {
   AccountStatus,
+  AudienceTypeEnum,
   IdentityTypeEnum,
   LoginHistoryItemModel,
 } from '@app-types/models/account.types';
+import type { Gender, GeographicInfo, UserState } from '@app-types/models/user-info.types';
+
+/** 账户创建写入数据（普通 data shape，不含 ORM Entity） */
+export interface AccountCreateData {
+  loginName?: string | null;
+  loginEmail?: string | null;
+  loginPassword?: string;
+  status?: AccountStatus;
+  audience?: AudienceTypeEnum;
+  identityHint?: string | null;
+  recentLoginHistory?: LoginHistoryItemModel[] | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+/** 账户更新写入数据：仅开放当前业务需要的字段，避免 Entity 形状外泄 */
+export interface AccountUpdateData {
+  status?: AccountStatus;
+  identityHint?: string | null;
+}
+
+/** 用户信息创建写入数据（普通 data shape，不含 ORM Entity） */
+export interface UserInfoCreateData {
+  accountId?: number;
+  nickname?: string;
+  gender?: Gender;
+  birthDate?: string | null;
+  avatarUrl?: string | null;
+  email?: string | null;
+  signature?: string | null;
+  accessGroup?: IdentityTypeEnum[];
+  address?: string | null;
+  phone?: string | null;
+  tags?: string[] | null;
+  geographic?: GeographicInfo | null;
+  metaDigest?: IdentityTypeEnum[] | null;
+  notifyCount?: number;
+  unreadCount?: number;
+  userState?: UserState;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+/** 用户信息更新写入数据（普通 data shape，不含 ORM Entity） */
+export interface UserInfoUpdateData {
+  nickname?: string;
+  gender?: Gender;
+  birthDate?: string | null;
+  avatarUrl?: string | null;
+  email?: string | null;
+  signature?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  tags?: string[] | null;
+  geographic?: GeographicInfo | null;
+  notifyCount?: number;
+  unreadCount?: number;
+  userState?: UserState;
+}
 
 export interface AccountSnapshot {
   readonly id: number;

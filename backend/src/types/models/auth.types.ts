@@ -1,6 +1,5 @@
 // src/types/models/auth.types.ts
 
-import { MinimalUserInfo } from '../auth/login-flow.types';
 import { AudienceTypeEnum, IdentityTypeEnum, LoginTypeEnum } from './account.types';
 import { Gender, GeographicInfo, UserState } from './user-info.types';
 
@@ -46,16 +45,4 @@ export interface AuthLoginModel {
  */
 export interface IdentityModel {
   role: IdentityTypeEnum;
-}
-
-/**
- * 登录结果领域模型
- */
-export interface LoginResultModel {
-  accessToken: string;
-  refreshToken: string;
-  accountId: number;
-  role: IdentityTypeEnum;
-  identity?: unknown; // 简化为 unknown，由适配器层处理
-  userInfo?: MinimalUserInfo | null; // 使用 MinimalUserInfo
 }

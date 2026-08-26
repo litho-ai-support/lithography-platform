@@ -23,6 +23,7 @@ import {
   UpdateUserInfoInput,
   UpdateUserInfoResult,
 } from './dto/user-info.update.input';
+import { mapUserInfoViewToDTO } from './user-info-view.mapper';
 
 /**
  * 用户信息 GraphQL 解析器
@@ -53,7 +54,7 @@ export class UserInfoResolver {
       targetAccountId: accountId,
       detail: 'FULL',
     });
-    return this.mapViewToDTO(view);
+    return mapUserInfoViewToDTO(view);
   }
 
   /**
@@ -77,32 +78,6 @@ export class UserInfoResolver {
   }
 
   /**
-   * 将领域视图映射为 GraphQL 完整 DTO
-   */
-  private mapViewToDTO(view: UserInfoView): UserInfoDTO {
-    return {
-      id: view.accountId,
-      accountId: view.accountId,
-      nickname: view.nickname,
-      gender: view.gender,
-      birthDate: view.birthDate,
-      avatarUrl: view.avatarUrl,
-      email: view.email,
-      signature: view.signature,
-      accessGroup: view.accessGroup,
-      address: view.address,
-      phone: view.phone,
-      tags: view.tags,
-      geographic: this.serializeGeographic(view.geographic),
-      notifyCount: view.notifyCount,
-      unreadCount: view.unreadCount,
-      userState: view.userState,
-      createdAt: view.createdAt,
-      updatedAt: view.updatedAt,
-    };
-  }
-
-  /**
    * 将领域视图映射为 GraphQL 基础 DTO
    */
   private mapViewToBasicDTO(view: UserInfoView): BasicUserInfoDTO {
@@ -114,16 +89,6 @@ export class UserInfoResolver {
       avatarUrl: view.avatarUrl,
       phone: view.phone,
     };
-  }
-
-  private serializeGeographic(
-    geo: { province?: string | null; city?: string | null } | null,
-  ): string | null {
-    if (!geo) return null;
-    const parts: string[] = [];
-    if (geo.province) parts.push(geo.province);
-    if (geo.city) parts.push(geo.city);
-    return parts.length > 0 ? parts.join(', ') : null;
   }
 
   /**
@@ -169,7 +134,7 @@ export class UserInfoResolver {
     });
     return {
       isUpdated,
-      userInfo: this.mapViewToDTO(view),
+      userInfo: mapUserInfoViewToDTO(view),
     };
   }
 

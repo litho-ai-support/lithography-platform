@@ -1,6 +1,6 @@
 // src/usecases/auth/login-with-password.usecase.ts
 
-import { EnrichedLoginResult, LoginWarningType } from '@app-types/auth/login-flow.types';
+import { EnrichedLoginResult, LoginWarningType } from '@modules/auth/auth.types';
 import { JwtPayload } from '@app-types/jwt.types';
 import { AccountStatus } from '@app-types/models/account.types';
 import { AuthLoginModel } from '@app-types/models/auth.types';
@@ -100,6 +100,7 @@ export class LoginWithPasswordUsecase {
         accessGroup: basicResult.accessGroup,
         account: basicResult.account,
         userInfo: basicResult.userInfo,
+        userInfoView: basicResult.userInfoView,
         options: { includeIdentity: true },
       });
 
