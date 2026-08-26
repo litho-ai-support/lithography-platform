@@ -91,7 +91,11 @@ direction -> plan -> docs / followup -> delete
 
 ## 当前计划
 
-当前没有 capability 治理计划；稳定边界见 `docs/common/capability.rules.md` 与 `docs/capabilities/current.md`。
+- [登录、JWT 会话与角色落地页推进计划](./login-auth-session-plan.md)：复用现有
+  `identity.authentication` capability 和 GraphQL 登录契约，推进真实登录、JWT 会话、角色守卫及
+  `SUPER_ADMIN / ENGINEER / CUSTOMER` 三类临时落地页。
+
+capability 治理当前没有专门计划；稳定边界见 `docs/common/capability.rules.md` 与 `docs/capabilities/current.md`。
 
 ## 已收口背景
 

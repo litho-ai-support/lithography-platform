@@ -5,6 +5,7 @@ import {
   isRouteErrorResponse,
   redirect,
   RouterProvider,
+  useNavigate,
   useRouteError,
 } from 'react-router';
 
@@ -12,7 +13,13 @@ import { AppLayout } from '@/app/layout';
 
 import { ErrorPreviewPage } from '@/pages/error-preview';
 import { HomePage } from '@/pages/home';
+import { LoginPage } from '@/pages/login';
 import { ProjectStructurePage } from '@/pages/project-structure';
+import {
+  getCurrentAuthSession,
+  resolveAuthSessionHomePath,
+  resolveLoginRouteRedirect,
+} from '@/features/auth-session';
 import { Error403, Error404, Error500, ErrorRouteCrash } from '@/features/error-feedback';
 
 import { getAppEnv } from '@/shared/env';
@@ -64,12 +71,39 @@ function sandboxPlaygroundLoader() {
   return null;
 }
 
+function loginLoader() {
+  const loginRedirectPath = resolveLoginRouteRedirect(getCurrentAuthSession());
+
+  if (loginRedirectPath) {
+    return redirect(loginRedirectPath);
+  }
+
+  return null;
+}
+
+function LoginPageRoute() {
+  const navigate = useNavigate();
+
+  return (
+    <LoginPage
+      onAuthenticated={(session) =>
+        navigate(resolveLoginRouteRedirect(session) ?? resolveAuthSessionHomePath(session.role))
+      }
+    />
+  );
+}
+
 const router = createBrowserRouter([
   {
     children: [
       {
         element: <HomePage />,
         index: true,
+      },
+      {
+        element: <LoginPageRoute />,
+        loader: loginLoader,
+        path: 'login',
       },
       {
         element: <ProjectStructurePage />,
