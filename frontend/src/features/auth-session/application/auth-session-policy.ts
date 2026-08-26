@@ -2,6 +2,8 @@
 
 import { sanitizeRedirectTarget } from '@/shared/navigation';
 
+import { composeLoginRedirectPath, extractUrlPathname } from '../infrastructure/auth-return-to-url';
+
 import {
   AUTH_SESSION_ROLES,
   type AuthSessionRole,
@@ -93,14 +95,6 @@ export function isAuthSessionRoleAllowedAt(role: AuthSessionRole, path: string):
   return AUTH_SESSION_ROLE_ALLOWED_PATHS[role].includes(path);
 }
 
-function extractPathname(value: string): string {
-  try {
-    return new URL(value, 'https://lithography.local').pathname;
-  } catch {
-    return value;
-  }
-}
-
 export type AuthSessionRoleCarrier = Pick<AuthSessionSnapshot, 'role'>;
 
 // 登录/守卫共用的入口路径决策唯一实现；resolveLoginRouteRedirect 与
@@ -111,7 +105,7 @@ export function resolveAuthSessionEntryPath(
 ): string {
   const safeReturnTo = resolveSafeReturnTo(returnToCandidate);
 
-  if (safeReturnTo && isAuthSessionRoleAllowedAt(session.role, extractPathname(safeReturnTo))) {
+  if (safeReturnTo && isAuthSessionRoleAllowedAt(session.role, extractUrlPathname(safeReturnTo))) {
     return safeReturnTo;
   }
 
@@ -134,10 +128,10 @@ export function resolveProtectedRouteRedirect(
   requestedPath: string,
 ): string | null {
   if (!session) {
-    return `/login?returnTo=${encodeURIComponent(requestedPath)}`;
+    return composeLoginRedirectPath(requestedPath);
   }
 
-  if (!isAuthSessionRoleAllowedAt(session.role, extractPathname(requestedPath))) {
+  if (!isAuthSessionRoleAllowedAt(session.role, extractUrlPathname(requestedPath))) {
     return resolveAuthSessionHomePath(session.role);
   }
 

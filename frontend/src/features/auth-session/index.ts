@@ -21,6 +21,14 @@ export {
   getCurrentAuthSession,
   logoutAuthSession,
 } from './auth-session-entry';
+export {
+  AUTH_RETURN_TO_PARAM_KEY,
+  composeLoginRedirectPath,
+  composeProtectedRequestTarget,
+  extractUrlPathname,
+  readAuthReturnToFromRequest,
+  readAuthReturnToParam,
+} from './infrastructure/auth-return-to-url';
 export { useAuthSession } from './ui/auth-session-context';
 export { AuthSessionPanel } from './ui/auth-session-panel';
 export { AuthSessionProvider } from './ui/auth-session-provider';

@@ -1,6 +1,6 @@
 // src/entities/upstream-access/application/upstream-access-rolling.ts
 
-import type { StoredUpstreamAccess } from '../infrastructure/upstream-access-storage';
+import type { UpstreamAccess } from '../domain/upstream-access';
 
 export type RollingUpstreamAccessResult = {
   expiresAt?: string | null;
@@ -9,9 +9,9 @@ export type RollingUpstreamAccessResult = {
 };
 
 export type PersistUpstreamAccessFromResult = (
-  currentAccess: StoredUpstreamAccess,
+  currentAccess: UpstreamAccess,
   result: RollingUpstreamAccessResult,
-) => StoredUpstreamAccess;
+) => UpstreamAccess;
 
 export function hasRollingUpstreamAccessResult(
   value: RollingUpstreamAccessResult | null | undefined,

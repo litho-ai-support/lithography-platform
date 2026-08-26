@@ -2,6 +2,8 @@
 
 import { isGraphQLIngressError } from '@/shared/graphql';
 
+import type { UpstreamAccessKeepAliveFailure } from './upstream-access.types';
+
 type UpstreamAccessGraphQLErrorDetail = {
   code: string | null;
   errorCode: string | null;
@@ -110,4 +112,18 @@ export function resolveUpstreamAccessErrorMessage(error: unknown, fallback: stri
   }
 
   return error instanceof Error ? error.message : fallback;
+}
+
+// keepAlive 刷新失败时的用户反馈解析：文案决策留在 application，
+// UI 只消费结果，见 docs/stable-clean/architecture.md。
+export function resolveUpstreamAccessKeepAliveFailure(
+  error: unknown,
+  upstreamLoginId: string | null,
+): UpstreamAccessKeepAliveFailure {
+  return {
+    message: isExpiredUpstreamAccessError(error)
+      ? 'upstream access 已失效，请重新授权后继续。'
+      : resolveUpstreamAccessErrorMessage(error, 'upstream access 刷新失败，请重新授权后继续。'),
+    upstreamLoginId,
+  };
 }

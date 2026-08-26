@@ -3,7 +3,7 @@
 import { useNavigate, useSearchParams } from 'react-router';
 
 import { LoginPage } from '@/pages/login';
-import { resolveAuthSessionEntryPath } from '@/features/auth-session';
+import { readAuthReturnToParam, resolveAuthSessionEntryPath } from '@/features/auth-session';
 
 export function LoginPageRoute() {
   const navigate = useNavigate();
@@ -12,7 +12,7 @@ export function LoginPageRoute() {
   return (
     <LoginPage
       onAuthenticated={(session) =>
-        navigate(resolveAuthSessionEntryPath(session, searchParams.get('returnTo')))
+        navigate(resolveAuthSessionEntryPath(session, readAuthReturnToParam(searchParams)))
       }
     />
   );
