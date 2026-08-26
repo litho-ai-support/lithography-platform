@@ -1,8 +1,31 @@
 // e2e/login-flow.spec.ts
 
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 
 const AUTH_SESSION_STORAGE_KEY = 'lithography-platform.auth-session.v1';
+
+// 预置会话快照的唯一收口：字段布局与版本跟随 auth-session-storage 的持久化格式，
+// 格式升版时只需要改这里。
+async function seedAuthSession(page: Page, role: 'CUSTOMER' | 'ENGINEER' | 'SUPER_ADMIN') {
+  await page.evaluate(
+    ({ key, role: seededRole }) => {
+      sessionStorage.setItem(
+        key,
+        JSON.stringify({
+          accessToken: 'test-only-access-token',
+          accountId: 900201,
+          role: seededRole,
+          userInfo: {
+            accessGroup: [seededRole],
+            nickname: '测试会话',
+          },
+          version: 1,
+        }),
+      );
+    },
+    { key: AUTH_SESSION_STORAGE_KEY, role },
+  );
+}
 
 test('anonymous engineer visit completes the public login flow and returns to the target', async ({
   page,
@@ -100,4 +123,14 @@ test('credential rejection keeps the login name, clears the password and creates
     AUTH_SESSION_STORAGE_KEY,
   );
   expect(storedSession).toBeNull();
+});
+
+test('entry route dispatches by login state', async ({ page }) => {
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/login$/);
+
+  await seedAuthSession(page, 'CUSTOMER');
+
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/customer$/);
 });

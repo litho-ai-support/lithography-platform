@@ -10,6 +10,7 @@ import {
   composeProtectedRequestTarget,
   getCurrentAuthSession,
   readAuthReturnToFromRequest,
+  resolveEntryRouteRedirect,
   resolveLoginRouteRedirect,
   resolveProtectedRouteRedirect,
 } from '@/features/auth-session';
@@ -17,6 +18,12 @@ import {
 type RouteLoaderArgs = {
   request: Request;
 };
+
+// 入口路由恒跳转，去向决策委托策略层唯一的 resolveEntryRouteRedirect：
+// 未登录去 /login，已登录按角色去默认入口。
+export function indexRouteLoader() {
+  return redirect(resolveEntryRouteRedirect(getCurrentAuthSession()));
+}
 
 export function loginLoader({ request }: RouteLoaderArgs) {
   const loginRedirectPath = resolveLoginRouteRedirect(

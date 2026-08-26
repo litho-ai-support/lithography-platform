@@ -97,8 +97,9 @@ export function isAuthSessionRoleAllowedAt(role: AuthSessionRole, path: string):
 
 export type AuthSessionRoleCarrier = Pick<AuthSessionSnapshot, 'role'>;
 
-// 登录/守卫共用的入口路径决策唯一实现；resolveLoginRouteRedirect 与
-// app/router 的登录后跳转都委托这里，避免在组合根出现第二份决策。
+// 登录/守卫共用的入口路径决策唯一实现；resolveLoginRouteRedirect、
+// resolveEntryRouteRedirect 与 app/router 的登录后跳转都委托这里，
+// 避免在组合根出现第二份决策。
 export function resolveAuthSessionEntryPath(
   session: AuthSessionRoleCarrier,
   returnToCandidate?: unknown,
@@ -136,6 +137,16 @@ export function resolveProtectedRouteRedirect(
   }
 
   return null;
+}
+
+// 入口路由恒跳转，因此没有请求目标与 returnTo：匿名去 /login，
+// 已登录去角色默认入口；不带 returnTo 避免登录后多一次中转。
+export function resolveEntryRouteRedirect(session: AuthSessionRoleCarrier | null): string {
+  if (!session) {
+    return '/login';
+  }
+
+  return resolveAuthSessionEntryPath(session);
 }
 
 export function resolveSafeReturnTo(value: unknown): string | null {

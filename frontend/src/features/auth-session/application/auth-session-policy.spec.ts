@@ -7,6 +7,7 @@ import {
   isAuthSessionRoleAllowedAt,
   resolveAuthSessionEntryPath,
   resolveAuthSessionHomePath,
+  resolveEntryRouteRedirect,
   resolveLoginRouteRedirect,
   resolveProtectedRouteRedirect,
   resolveSafeReturnTo,
@@ -62,6 +63,20 @@ describe('auth session policy', () => {
     expect(resolveProtectedRouteRedirect(null, '/engineer?tab=open')).toBe(
       '/login?returnTo=%2Fengineer%3Ftab%3Dopen',
     );
+  });
+
+  it('dispatches the entry route by login state without a return target', () => {
+    const customerSession = createAuthSessionSnapshot({
+      accessToken: 'access-token',
+      accountId: 900201,
+      role: 'CUSTOMER',
+      userInfo: null,
+    });
+
+    expect(resolveEntryRouteRedirect(null)).toBe('/login');
+    expect(resolveEntryRouteRedirect({ role: 'SUPER_ADMIN' })).toBe('/admin');
+    expect(resolveEntryRouteRedirect({ role: 'ENGINEER' })).toBe('/engineer');
+    expect(resolveEntryRouteRedirect(customerSession)).toBe('/customer');
   });
 
   it('only allows the requested protected path for the session role', () => {

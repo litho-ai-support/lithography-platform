@@ -12,6 +12,7 @@ export {
   isAuthSessionRole,
   resolveAuthSessionEntryPath,
   resolveAuthSessionHomePath,
+  resolveEntryRouteRedirect,
   resolveLoginRouteRedirect,
   resolveProtectedRouteRedirect,
   resolveSafeReturnTo,

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthSessionRole } from '@/features/auth-session';
 import * as authSessionFeature from '@/features/auth-session';
 
-import { loginLoader, protectedRouteLoader } from './route-guards';
+import { indexRouteLoader, loginLoader, protectedRouteLoader } from './route-guards';
 
 vi.mock('@/features/auth-session', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/auth-session')>();
@@ -36,6 +36,29 @@ function createLoaderRequest(url: string) {
 function redirectLocation(result: unknown): string | null {
   return result instanceof Response ? result.headers.get('Location') : null;
 }
+
+describe('entry route guard wiring', () => {
+  beforeEach(() => {
+    mockedGetCurrentAuthSession.mockReset();
+  });
+
+  it('sends anonymous visitors from the entry route to /login', () => {
+    mockedGetCurrentAuthSession.mockReturnValue(null);
+
+    expect(redirectLocation(indexRouteLoader())).toBe('/login');
+  });
+
+  it('dispatches authenticated visitors to the role default entry', () => {
+    mockedGetCurrentAuthSession.mockReturnValue(createSnapshot('SUPER_ADMIN'));
+    expect(redirectLocation(indexRouteLoader())).toBe('/admin');
+
+    mockedGetCurrentAuthSession.mockReturnValue(createSnapshot('ENGINEER'));
+    expect(redirectLocation(indexRouteLoader())).toBe('/engineer');
+
+    mockedGetCurrentAuthSession.mockReturnValue(createSnapshot('CUSTOMER'));
+    expect(redirectLocation(indexRouteLoader())).toBe('/customer');
+  });
+});
 
 describe('login route guard wiring', () => {
   beforeEach(() => {

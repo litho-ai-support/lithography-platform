@@ -14,7 +14,6 @@ import { AdminPage } from '@/pages/admin';
 import { CustomerPage } from '@/pages/customer';
 import { EngineerPage } from '@/pages/engineer';
 import { ErrorPreviewPage } from '@/pages/error-preview';
-import { HomePage } from '@/pages/home';
 import { ProjectStructurePage } from '@/pages/project-structure';
 import { Error403, Error404, Error500, ErrorRouteCrash } from '@/features/error-feedback';
 
@@ -24,7 +23,7 @@ import { canAccessGame2048Lab, Game2048LabPage } from '@/labs/game-2048';
 import { canAccessSandboxPlayground, SandboxPlaygroundPage } from '@/sandbox/playground';
 
 import { LoginPageRoute } from './login-page-route';
-import { loginLoader, protectedRouteLoader } from './route-guards';
+import { indexRouteLoader, loginLoader, protectedRouteLoader } from './route-guards';
 import { registerAppRouter } from './router-bridge';
 
 function RouteErrorPage() {
@@ -75,8 +74,8 @@ const router = createBrowserRouter([
   {
     children: [
       {
-        element: <HomePage />,
         index: true,
+        loader: indexRouteLoader,
       },
       {
         element: <LoginPageRoute />,
