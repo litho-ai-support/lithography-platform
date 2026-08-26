@@ -6,7 +6,7 @@ import type { NavigationItem } from './types';
 
 const STABLE_NAVIGATION_ITEMS: NavigationItem[] = [
   {
-    description: '面向 AI 辅助开发的主工作台。',
+    description: '按登录态自动分发到对应角色的工作台。',
     id: 'home',
     kind: 'stable',
     label: 'Workspace',
@@ -17,7 +17,8 @@ const STABLE_NAVIGATION_ITEMS: NavigationItem[] = [
 
 const LAB_NAVIGATION_ITEMS: NavigationItem[] = [
   {
-    description: '受控开放的 2048 交互实验。',
+    // 与 labs/game-2048/meta.ts 的 description 保持一致（app/navigation 不在 labs 导入例外内，需手工同步）
+    description: '只在 Lab 暴露的本地 2048 交互实验。',
     id: 'game-2048-lab',
     kind: 'labs',
     label: 'Lab',

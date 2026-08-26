@@ -94,7 +94,8 @@ Mapper 落点规则：
 
 - `stable` 中的 `infrastructure` 跟随拥有它的 `feature`
 - 默认放在 `src/features/<feature>/infrastructure/`
-- `entities` 保持 `domain` 纯净，不承接 mock、API、storage、URL adapter
+- `entities` 默认保持 `domain` 纯净，不承接 mock、API、storage、URL adapter
+- 例外：经人工确认引入第二维的试点 `entity`（见 [stable-clean/architecture.md](./stable-clean/architecture.md) 与 [stable-clean/decisions.md](./stable-clean/decisions.md)，当前为 `entities/upstream-access`）允许自带 `infrastructure/`，仅承接该 entity 自身访问形态的外部边界（如滚动 token 持久化）；其 `domain` 仍保持纯净，且不得回填具体业务接口（见 decisions 001 后续动作）
 - `shared` 只保留跨域通用技术能力，不承接具体业务切片自己的数据源
 - 不设仓库级默认 `src/infrastructure/` 目录作为统一落点
 - 具体业务 adapter、DTO、mapper、repository 必须留在拥有它的 `feature/infrastructure/`
@@ -122,6 +123,20 @@ src/features/<feature>/
     mapper.ts
     <adapter>.ts
     <mock-repository>.ts
+  ui/
+  index.ts
+```
+
+第二维试点 `entity` 的推荐结构（仅限经人工确认的试点，当前为 `entities/upstream-access`）：
+
+```txt
+src/entities/<entity>/
+  domain/
+    <entity>.ts
+  application/
+    <controller>.ts
+  infrastructure/
+    <adapter>.ts
   ui/
   index.ts
 ```
@@ -193,8 +208,9 @@ src/sandbox/<prototype-name>/
 1. 先找拥有者，再放 `infrastructure`
 2. mock 一律按 `infrastructure` 处理
 3. `stable` 的 `infrastructure` 默认跟 `feature`
-4. `labs` 收束边界，但不强补完整第二维
-5. `sandbox` 保持自包含，命名可以轻，边界不能乱跑
+4. 例外：经人工确认的第二维试点 `entity` 可自带 `infrastructure/`（当前仅 `entities/upstream-access`）
+5. `labs` 收束边界，但不强补完整第二维
+6. `sandbox` 保持自包含，命名可以轻，边界不能乱跑
 
 ## 找拥有者的兜底规则
 
