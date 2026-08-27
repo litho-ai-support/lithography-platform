@@ -1,0 +1,99 @@
+// src/features/auth-session/infrastructure/auth-session-storage.ts
+
+import type {
+  AuthSessionPersistence,
+  AuthSessionSnapshot,
+} from '../application/auth-session.types';
+
+import { decodeAuthSessionPayload, isRecord } from './auth-session-mapper';
+
+const AUTH_SESSION_STORAGE_KEY = 'lithography-platform.auth-session.v1';
+const AUTH_SESSION_STORAGE_VERSION = 1;
+
+export type AuthSessionStorageBackend = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
+
+function getBrowserSessionStorage(): AuthSessionStorageBackend | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function serializeAuthSession(session: AuthSessionSnapshot): string {
+  return JSON.stringify({
+    accessToken: session.accessToken,
+    accountId: session.accountId,
+    role: session.role,
+    userInfo: session.userInfo
+      ? {
+          accessGroup: [...session.userInfo.accessGroup],
+          nickname: session.userInfo.nickname,
+        }
+      : null,
+    version: AUTH_SESSION_STORAGE_VERSION,
+  });
+}
+
+function decodeStoredAuthSession(value: unknown): AuthSessionSnapshot | null {
+  if (!isRecord(value) || value.version !== AUTH_SESSION_STORAGE_VERSION) {
+    return null;
+  }
+
+  return decodeAuthSessionPayload(value);
+}
+
+export function createAuthSessionPersistence(
+  getStorage: () => AuthSessionStorageBackend | null = getBrowserSessionStorage,
+): AuthSessionPersistence {
+  function clear() {
+    try {
+      getStorage()?.removeItem(AUTH_SESSION_STORAGE_KEY);
+    } catch {
+      // Session storage can be unavailable in restricted browser contexts.
+    }
+  }
+
+  return {
+    clear,
+    read() {
+      let rawValue: string | null;
+
+      try {
+        rawValue = getStorage()?.getItem(AUTH_SESSION_STORAGE_KEY) ?? null;
+      } catch {
+        return null;
+      }
+
+      if (rawValue === null) {
+        return null;
+      }
+
+      try {
+        const session = decodeStoredAuthSession(JSON.parse(rawValue) as unknown);
+
+        if (!session) {
+          clear();
+        }
+
+        return session;
+      } catch {
+        clear();
+        return null;
+      }
+    },
+    write(session) {
+      try {
+        getStorage()?.setItem(AUTH_SESSION_STORAGE_KEY, serializeAuthSession(session));
+      } catch {
+        // Keep the in-memory session usable even when persistence is unavailable.
+      }
+    },
+  };
+}
+
+export const browserAuthSessionPersistence = createAuthSessionPersistence();

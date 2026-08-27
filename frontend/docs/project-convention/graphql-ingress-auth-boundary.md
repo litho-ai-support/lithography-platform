@@ -53,7 +53,7 @@ configureGraphQLRuntime({
 约束：
 
 - `getAccessToken` 只读取当前真源，不维护另一份 token 状态
-- `refreshSession` 由未来 auth feature 或 app bootstrap 注入
+- `refreshSession` 可选，由未来 auth feature 或 app bootstrap 注入；未注入时 auth 错误会直接宣布失效
 - `onAuthFailure` 只宣布 auth failure，具体跳转由 app/router/layout 决定
 - auth 主流程请求必须使用 `authMode: 'none'` 或 `allowAuthRetry: false`，避免 refresh 套娃
 
@@ -62,7 +62,7 @@ configureGraphQLRuntime({
 普通 protected request 遇到 `GraphQLIngressError.type === 'auth'` 时：
 
 1. 若 `authMode === 'none'` 或 `allowAuthRetry === false`，直接抛错
-2. 若 runtime 没有注入 `refreshSession`，直接抛错
+2. 若 runtime 没有注入 `refreshSession`，调用一次 `onAuthFailure` 后直接抛错（无刷新能力的链路也必须宣布会话失效）
 3. 调用一次 `refreshSession`
 4. 成功后重放原请求一次
 5. 失败后调用 `onAuthFailure`，再抛出原始 ingress error

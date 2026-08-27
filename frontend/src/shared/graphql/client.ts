@@ -7,6 +7,7 @@ import { getGraphQLEndpoint } from '@/shared/env';
 
 type GraphQLRuntimeConfig = {
   getAccessToken?: () => string | null | undefined;
+  // 可选：未注入时受保护请求遇到 auth 错误会直接宣布失效（见 request.ts 与 ingress 契约）。
   refreshSession?: () => Promise<void>;
   onAuthFailure?: () => void;
 };
@@ -42,7 +43,8 @@ function getRequestAuthorizationHeader(headers: unknown): string | null {
   return null;
 }
 
-function getAuthorizationHeader(accessToken?: string | null) {
+// Bearer 头格式化的唯一实现；authLink 与 request.ts 的显式 token 注入都复用它。
+export function getAuthorizationHeader(accessToken?: string | null) {
   return accessToken ? `Bearer ${accessToken}` : null;
 }
 
@@ -102,4 +104,12 @@ export function getGraphQLClient() {
   }
 
   return graphQLClient;
+}
+
+export async function clearGraphQLClientCache(): Promise<void> {
+  if (!graphQLClient) {
+    return;
+  }
+
+  await graphQLClient.clearStore();
 }

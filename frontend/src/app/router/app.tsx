@@ -1,4 +1,4 @@
-// src/app/router/index.tsx
+// src/app/router/app.tsx
 
 import {
   createBrowserRouter,
@@ -10,8 +10,10 @@ import {
 
 import { AppLayout } from '@/app/layout';
 
+import { AdminPage } from '@/pages/admin';
+import { CustomerPage } from '@/pages/customer';
+import { EngineerPage } from '@/pages/engineer';
 import { ErrorPreviewPage } from '@/pages/error-preview';
-import { HomePage } from '@/pages/home';
 import { ProjectStructurePage } from '@/pages/project-structure';
 import { Error403, Error404, Error500, ErrorRouteCrash } from '@/features/error-feedback';
 
@@ -19,6 +21,10 @@ import { getAppEnv } from '@/shared/env';
 
 import { canAccessGame2048Lab, Game2048LabPage } from '@/labs/game-2048';
 import { canAccessSandboxPlayground, SandboxPlaygroundPage } from '@/sandbox/playground';
+
+import { LoginPageRoute } from './login-page-route';
+import { indexRouteLoader, loginLoader, protectedRouteLoader } from './route-guards';
+import { registerAppRouter } from './router-bridge';
 
 function RouteErrorPage() {
   const error = useRouteError();
@@ -68,8 +74,28 @@ const router = createBrowserRouter([
   {
     children: [
       {
-        element: <HomePage />,
         index: true,
+        loader: indexRouteLoader,
+      },
+      {
+        element: <LoginPageRoute />,
+        loader: loginLoader,
+        path: 'login',
+      },
+      {
+        element: <AdminPage />,
+        loader: protectedRouteLoader,
+        path: 'admin',
+      },
+      {
+        element: <EngineerPage />,
+        loader: protectedRouteLoader,
+        path: 'engineer',
+      },
+      {
+        element: <CustomerPage />,
+        loader: protectedRouteLoader,
+        path: 'customer',
       },
       {
         element: <ProjectStructurePage />,
@@ -99,6 +125,8 @@ const router = createBrowserRouter([
     path: '/',
   },
 ]);
+
+registerAppRouter(router);
 
 export function App() {
   return <RouterProvider router={router} />;

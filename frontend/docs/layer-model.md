@@ -103,7 +103,7 @@ entity`。当前功能足够简单时，优先保持窄 owner 和浅结构。
   - `app/lib` 放纯逻辑、纯数据结构、纯计算；去掉 React context / state / effect 后仍能成立的实现，优先归入 `app/lib`
   - `app/providers` 放状态宿主、Context、跨树共享状态与应用级挂载
   - `providers` 应尽量薄，复杂计算和纯逻辑应优先下沉到 `app/lib`
-- 像 `HomePage` 这种正式页面内容应放在 `pages/`，不应继续堆在 `app/`
+- 像 `LoginPage` 这种正式页面内容应放在 `pages/`，不应继续堆在 `app/`
 - `app/` 只负责“把页面挂起来”，不负责承载页面本身的业务展示
 
 快速判断：
