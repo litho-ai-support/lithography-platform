@@ -7,8 +7,8 @@ import { PageHeader } from '@/shared/ui/page-header';
 /**
  * 创建维修申请页面。
  *
- * 阶段四暂不挂受保护路由；阶段五由蔡的登录/Session 合并后
- * 接入正式客户路由 /customer/repair-requests/new。
+ * 挂受保护路由 /customer/repair-requests/new（见 app/router），
+ * 角色入口治理由蔡的 protectedRouteLoader / auth-session 策略承担。
  */
 export function RepairRequestCreatePage() {
   return (
