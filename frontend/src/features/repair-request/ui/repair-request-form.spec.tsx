@@ -194,7 +194,7 @@ describe('提交校验与反馈', () => {
     ).toBe('');
   });
 
-  it('成功后查看申请列表跳转到受保护的列表路由', async () => {
+  it('成功后返回客户首页（申请列表能力尚不存在，不跳列表）', async () => {
     createRepairRequestMock.mockResolvedValue({ ok: true, repairRequest: CREATED_RECORD });
 
     renderForm();
@@ -203,9 +203,9 @@ describe('提交校验与反馈', () => {
     fireEvent.click(screen.getByRole('button', { name: '提交申请' }));
 
     expect(await screen.findByText('维修申请创建成功')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: '查看申请列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '返回客户首页' }));
 
-    expect(navigateMock).toHaveBeenCalledWith('/customer/repair-requests');
+    expect(navigateMock).toHaveBeenCalledWith('/customer');
   });
 
   it('提交时对错误码与故障描述去首尾空格', async () => {

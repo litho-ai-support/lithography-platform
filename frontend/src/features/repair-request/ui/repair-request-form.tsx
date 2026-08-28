@@ -15,9 +15,9 @@ import {
   fetchEquipmentModels,
 } from '../infrastructure/repair-request-adapter';
 
-// 创建成功后的列表跳转目标：占位列表页（/customer/repair-requests）已挂受保护路由，
-// 列表能力实现后原地替换内容，此处路径无需再改。
-const REPAIR_REQUEST_LIST_PATH = '/customer/repair-requests';
+// 创建成功后的返回目标：申请列表能力尚不存在（负责人裁定：成功页不跳尚不存在的列表），
+// 先返回客户首页；列表页落地后如需直达，再替换此处路径。
+const CUSTOMER_HOME_PATH = '/customer';
 
 // 长度上限与后端契约对齐（backend/src/adapters/api/graphql/repair-request/dto/create-repair-request.input.ts），
 // 修改需同步后端，避免单边漂移导致前端误拦或漏校验。
@@ -129,8 +129,8 @@ export function RepairRequestForm() {
           <Button key="continue" onClick={() => setCreatedRequest(null)}>
             继续创建
           </Button>,
-          <Button key="list" type="primary" onClick={() => navigate(REPAIR_REQUEST_LIST_PATH)}>
-            查看申请列表
+          <Button key="home" type="primary" onClick={() => navigate(CUSTOMER_HOME_PATH)}>
+            返回客户首页
           </Button>,
         ]}
         status="success"

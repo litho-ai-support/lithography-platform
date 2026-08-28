@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { readStoredAuthSession, seedAuthSession } from './helpers/auth-session-seed';
 
 const CREATE_PAGE_PATH = '/customer/repair-requests/new';
-const LIST_PAGE_PATH = '/customer/repair-requests';
+const CUSTOMER_HOME_PATH = '/customer';
 
 type GraphQLOperationPayload = {
   query?: string;
@@ -130,6 +130,21 @@ test('super admin submission is rejected without clearing the session', async ({
   await expect(page.getByLabel('设备错误码')).toHaveValue('E-2001');
   expect(getCreateCount()).toBe(1);
   expect(await readStoredAuthSession(page)).not.toBeNull();
+});
+
+test('customer reaches the create page by clicking the entry on the customer home', async ({
+  page,
+}) => {
+  // 可发现性（负责人裁定）：不允许只能手输 URL 到达的页面，首页入口点击即达创建页。
+  await seedAuthSession(page, 'CUSTOMER');
+  await page.route('**/graphql', (route) => fulfillModelsSuccess(route));
+
+  await page.goto(CUSTOMER_HOME_PATH);
+  await page.getByRole('button', { name: '发起维修申请' }).click();
+
+  await expect(page).toHaveURL(new RegExp(CREATE_PAGE_PATH));
+  await expect(page.getByText('创建维修申请').first()).toBeVisible();
+  await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
 });
 
 test('expired token on page load clears the session and returns to login once', async ({
@@ -263,31 +278,10 @@ test('double click sends exactly one mutation and shows the result', async ({ pa
   await expect(page.getByText('申请编号：RR-2026-0001')).toBeVisible();
   expect(getCreateCount()).toBe(1);
 
-  // 成功态跳转占位列表页（M-07 ③ 批复的真实落点）
-  await page.getByRole('button', { name: '查看申请列表' }).click();
-  await expect(page).toHaveURL(/\/customer\/repair-requests$/);
-  await expect(page.getByText('列表功能正在建设中')).toBeVisible();
-});
-
-// ---------- 列表路由访问控制与占位内容 ----------
-
-test('anonymous list visit is redirected to login with returnTo', async ({ page }) => {
-  await page.goto(LIST_PAGE_PATH);
-  await expect(page).toHaveURL(/\/login\?returnTo=%2Fcustomer%2Frepair-requests$/);
-});
-
-test('engineer list visit is redirected to the role home, not 403', async ({ page }) => {
-  await seedAuthSession(page, 'ENGINEER');
-  await page.goto(LIST_PAGE_PATH);
-  await expect(page).toHaveURL(/\/engineer$/);
-});
-
-test('customer sees the placeholder list on direct visit', async ({ page }) => {
-  await seedAuthSession(page, 'CUSTOMER');
-  await page.goto(LIST_PAGE_PATH);
-  await expect(page).toHaveURL(new RegExp(LIST_PAGE_PATH));
-  await expect(page.getByText('维修申请列表').first()).toBeVisible();
-  await expect(page.getByText('列表功能正在建设中').first()).toBeVisible();
+  // 成功态返回客户首页（申请列表能力尚不存在，负责人裁定不跳尚不存在的列表）
+  await page.getByRole('button', { name: '返回客户首页' }).click();
+  await expect(page).toHaveURL(/\/customer$/);
+  await expect(page.getByRole('button', { name: '发起维修申请' })).toBeVisible();
 });
 
 // ---------- 提交期 transport 失败（区别于业务拒绝与 UNAUTHENTICATED 的第三条错误路径） ----------

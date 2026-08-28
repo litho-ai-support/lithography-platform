@@ -16,7 +16,6 @@ import { EngineerPage } from '@/pages/engineer';
 import { ErrorPreviewPage } from '@/pages/error-preview';
 import { ProjectStructurePage } from '@/pages/project-structure';
 import { RepairRequestCreatePage } from '@/pages/repair-request-create';
-import { RepairRequestListPage } from '@/pages/repair-request-list';
 import { Error403, Error404, Error500, ErrorRouteCrash } from '@/features/error-feedback';
 
 import { getAppEnv } from '@/shared/env';
@@ -98,11 +97,6 @@ const router = createBrowserRouter([
         element: <CustomerPage />,
         loader: protectedRouteLoader,
         path: 'customer',
-      },
-      {
-        element: <RepairRequestListPage />,
-        loader: protectedRouteLoader,
-        path: 'customer/repair-requests',
       },
       {
         element: <RepairRequestCreatePage />,
