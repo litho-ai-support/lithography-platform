@@ -1,31 +1,8 @@
 // e2e/login-flow.spec.ts
 
-import { expect, type Page, test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
-const AUTH_SESSION_STORAGE_KEY = 'lithography-platform.auth-session.v1';
-
-// 预置会话快照的唯一收口：字段布局与版本跟随 auth-session-storage 的持久化格式，
-// 格式升版时只需要改这里。
-async function seedAuthSession(page: Page, role: 'CUSTOMER' | 'ENGINEER' | 'SUPER_ADMIN') {
-  await page.evaluate(
-    ({ key, role: seededRole }) => {
-      sessionStorage.setItem(
-        key,
-        JSON.stringify({
-          accessToken: 'test-only-access-token',
-          accountId: 900201,
-          role: seededRole,
-          userInfo: {
-            accessGroup: [seededRole],
-            nickname: '测试会话',
-          },
-          version: 1,
-        }),
-      );
-    },
-    { key: AUTH_SESSION_STORAGE_KEY, role },
-  );
-}
+import { readStoredAuthSession, seedAuthSession } from './helpers/auth-session-seed';
 
 test('anonymous engineer visit completes the public login flow and returns to the target', async ({
   page,
@@ -81,10 +58,7 @@ test('anonymous engineer visit completes the public login flow and returns to th
   await expect(page.getByText('ENGINEER').first()).toBeVisible();
   expect(loginAuthorization).toBeUndefined();
 
-  const storedSession = await page.evaluate(
-    (key) => sessionStorage.getItem(key),
-    AUTH_SESSION_STORAGE_KEY,
-  );
+  const storedSession = await readStoredAuthSession(page);
   expect(storedSession).toContain('"accessToken":"test-only-access-token"');
   expect(storedSession).not.toContain('refreshToken');
 });
@@ -118,10 +92,7 @@ test('credential rejection keeps the login name, clears the password and creates
   await expect(page.getByLabel('密码')).toHaveValue('');
   await expect(page.getByText('internal credential detail')).toHaveCount(0);
 
-  const storedSession = await page.evaluate(
-    (key) => sessionStorage.getItem(key),
-    AUTH_SESSION_STORAGE_KEY,
-  );
+  const storedSession = await readStoredAuthSession(page);
   expect(storedSession).toBeNull();
 });
 

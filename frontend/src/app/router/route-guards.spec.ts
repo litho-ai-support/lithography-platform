@@ -171,4 +171,33 @@ describe('protected route guard wiring', () => {
       ),
     ).toBe('/engineer');
   });
+
+  it('guards the repair request list route by role', () => {
+    // 匿名：保留列表路径作为 returnTo，登录后回到原目标
+    mockedGetCurrentAuthSession.mockReturnValue(null);
+    expect(
+      redirectLocation(
+        protectedRouteLoader(createLoaderRequest('http://localhost/customer/repair-requests')),
+      ),
+    ).toBe('/login?returnTo=%2Fcustomer%2Frepair-requests');
+
+    // 属主角色与继承的 SUPER_ADMIN 放行
+    mockedGetCurrentAuthSession.mockReturnValue(createSnapshot('CUSTOMER'));
+    expect(
+      protectedRouteLoader(createLoaderRequest('http://localhost/customer/repair-requests')),
+    ).toBeNull();
+
+    mockedGetCurrentAuthSession.mockReturnValue(createSnapshot('SUPER_ADMIN'));
+    expect(
+      protectedRouteLoader(createLoaderRequest('http://localhost/customer/repair-requests')),
+    ).toBeNull();
+
+    // 跨角色：不渲染客户内容，回工程师首页而非 403
+    mockedGetCurrentAuthSession.mockReturnValue(createSnapshot('ENGINEER'));
+    expect(
+      redirectLocation(
+        protectedRouteLoader(createLoaderRequest('http://localhost/customer/repair-requests')),
+      ),
+    ).toBe('/engineer');
+  });
 });

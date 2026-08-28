@@ -227,6 +227,17 @@ describe('createRepairRequest', () => {
     await expect(createRepairRequest(input)).rejects.toBe(unknownError);
   });
 
+  it('FORBIDDEN 权限拒绝（SUPER_ADMIN 代创建被拒）上抛原始错误，不吞为业务拒绝', async () => {
+    const forbiddenError = buildDomainIngressError({
+      code: 'FORBIDDEN',
+      errorCode: 'INSUFFICIENT_PERMISSIONS',
+      errorMessage: '权限不足',
+    });
+    executeGraphQLMock.mockRejectedValue(forbiddenError);
+
+    await expect(createRepairRequest(input)).rejects.toBe(forbiddenError);
+  });
+
   it('auth 失败上抛原始错误，不吞为业务拒绝', async () => {
     const authError = new GraphQLIngressError({ type: 'auth', message: 'token invalid' });
     executeGraphQLMock.mockRejectedValue(authError);

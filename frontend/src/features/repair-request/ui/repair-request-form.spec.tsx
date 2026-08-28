@@ -194,7 +194,7 @@ describe('提交校验与反馈', () => {
     ).toBe('');
   });
 
-  it('成功后查看申请列表跳转到占位列表路径（阶段五替换为正式路由）', async () => {
+  it('成功后查看申请列表跳转到受保护的列表路由', async () => {
     createRepairRequestMock.mockResolvedValue({ ok: true, repairRequest: CREATED_RECORD });
 
     renderForm();
