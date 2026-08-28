@@ -218,12 +218,11 @@ src/features/<feature>/
 ### pages / app
 
 ```txt
-src/pages/home/
+src/pages/login/
   index.tsx
 
 src/app/layout/
   app-layout.tsx
-  entry-sidecar.tsx
 ```
 
 - `pages` 与 `app` 主要保持组合和挂载职责

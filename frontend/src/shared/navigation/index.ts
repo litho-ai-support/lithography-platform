@@ -24,7 +24,3 @@ export function sanitizeRedirectTarget(
     return '/';
   }
 }
-
-export function sanitizeInternalPath(path: string) {
-  return sanitizeRedirectTarget(path);
-}
