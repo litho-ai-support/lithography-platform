@@ -81,12 +81,22 @@ const AUTH_SESSION_ROLE_HOME_PATHS: Record<AuthSessionRole, string> = {
 
 // SUPER_ADMIN 按后端角色层级继承 ENGINEER 与 CUSTOMER 的访问能力，见
 // backend/docs/api/auth-session-current.md 与 docs/development/task-acceptance.md。
-// 这里登记的是各角色允许访问的路由根路径；根路径下的子页面（如 /customer/repair-requests/new）
+// 这里登记的是各角色允许访问的路由根路径；根路径下的子页面（如 /customer/）
 // 由 isRolePathAllowed 的带边界前缀匹配统一放行，不在别处维护第二份角色路径表。
 const AUTH_SESSION_ROLE_ALLOWED_ROOT_PATHS: Record<AuthSessionRole, readonly string[]> = {
   CUSTOMER: ['/customer'],
   ENGINEER: ['/engineer'],
   SUPER_ADMIN: ['/admin', '/customer', '/engineer'],
+};
+
+// 角色路由拒绝清单：优先于根路径表生效，匹配语义与根路径表一致（精确或带边界子路径）。
+// 2026-08-29 负责人裁定：SUPER_ADMIN 第一版不代客户创建维修申请（后端精确仅接受
+// CUSTOMER）。继承放行会让超管进入「型号加载即被拒」的残缺页面，前后端口径不一致，
+// 故在此显式拒绝创建页，与 ENGINEER 一致跳回各自个人主页；后端约束保持不变。
+const AUTH_SESSION_ROLE_DENIED_PATHS: Record<AuthSessionRole, readonly string[]> = {
+  CUSTOMER: [],
+  ENGINEER: [],
+  SUPER_ADMIN: ['/customer/repair-requests/new'],
 };
 
 export function resolveAuthSessionHomePath(role: AuthSessionRole): string {
@@ -101,6 +111,14 @@ export function isAuthSessionRolePathAllowed(path: string, rootPath: string): bo
 }
 
 export function isAuthSessionRoleAllowedAt(role: AuthSessionRole, path: string): boolean {
+  const denied = AUTH_SESSION_ROLE_DENIED_PATHS[role].some((deniedPath) =>
+    isAuthSessionRolePathAllowed(path, deniedPath),
+  );
+
+  if (denied) {
+    return false;
+  }
+
   return AUTH_SESSION_ROLE_ALLOWED_ROOT_PATHS[role].some((rootPath) =>
     isAuthSessionRolePathAllowed(path, rootPath),
   );

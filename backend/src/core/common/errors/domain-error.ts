@@ -155,6 +155,17 @@ export const TIME_ERROR = {
 } as const;
 Object.freeze(TIME_ERROR);
 
+// 维修申请相关错误码（客户创建维修申请、设备型号校验等）
+export const REPAIR_REQUEST_ERROR = {
+  CREATION_FAILED: 'REPAIR_REQUEST_CREATION_FAILED',
+  INVALID_PARAMS: 'REPAIR_REQUEST_INVALID_PARAMS',
+  EQUIPMENT_MODEL_NOT_FOUND: 'REPAIR_REQUEST_EQUIPMENT_MODEL_NOT_FOUND',
+  EQUIPMENT_MODEL_DISABLED: 'REPAIR_REQUEST_EQUIPMENT_MODEL_DISABLED',
+  // 唯一索引冲突（并发写入同一申请编号），由 usecase 内部重试消化，外泄时属系统异常
+  REQUEST_NO_CONFLICT: 'REPAIR_REQUEST_REQUEST_NO_CONFLICT',
+} as const;
+Object.freeze(REPAIR_REQUEST_ERROR);
+
 export const INPUT_NORMALIZE_ERROR = {
   INVALID_TEXT: 'INPUT_NORMALIZE_INVALID_TEXT',
   REQUIRED_TEXT_EMPTY: 'INPUT_NORMALIZE_REQUIRED_TEXT_EMPTY',
@@ -182,6 +193,8 @@ export type CapabilityErrorCode = (typeof CAPABILITY_ERROR)[keyof typeof CAPABIL
 export type AiWorkflowContextErrorCode =
   (typeof AI_WORKFLOW_CONTEXT_ERROR)[keyof typeof AI_WORKFLOW_CONTEXT_ERROR];
 export type TimeErrorCode = (typeof TIME_ERROR)[keyof typeof TIME_ERROR];
+export type RepairRequestErrorCode =
+  (typeof REPAIR_REQUEST_ERROR)[keyof typeof REPAIR_REQUEST_ERROR];
 export type InputNormalizeErrorCode =
   (typeof INPUT_NORMALIZE_ERROR)[keyof typeof INPUT_NORMALIZE_ERROR];
 
@@ -206,6 +219,7 @@ export type DomainErrorCode =
   | CapabilityErrorCode
   | AiWorkflowContextErrorCode
   | TimeErrorCode
+  | RepairRequestErrorCode
   | InputNormalizeErrorCode
   | PaginationErrorCode;
 

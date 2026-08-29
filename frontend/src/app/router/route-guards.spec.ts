@@ -151,9 +151,17 @@ describe('protected route guard wiring', () => {
     mockedGetCurrentAuthSession.mockReturnValue(createSnapshot('SUPER_ADMIN'));
     expect(protectedRouteLoader(createLoaderRequest('http://localhost/engineer'))).toBeNull();
     expect(protectedRouteLoader(createLoaderRequest('http://localhost/customer'))).toBeNull();
+  });
+
+  it('sends SUPER_ADMIN away from the customer create page despite inheritance', () => {
+    // 2026-08-29 负责人裁定：超管第一版不代客户创建，与 ENGINEER 一致跳回各自主页。
+    mockedGetCurrentAuthSession.mockReturnValue(createSnapshot('SUPER_ADMIN'));
+
     expect(
-      protectedRouteLoader(createLoaderRequest('http://localhost/customer/repair-requests/new')),
-    ).toBeNull();
+      redirectLocation(
+        protectedRouteLoader(createLoaderRequest('http://localhost/customer/repair-requests/new')),
+      ),
+    ).toBe('/admin');
   });
 
   it('never renders another role content and sends cross-role visitors back home', () => {

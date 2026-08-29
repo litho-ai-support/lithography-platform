@@ -43,3 +43,7 @@
 
 # Non-public project requirements
 /docs/requirements/
+/docs/plan/
+
+# Local integration artifacts (may contain credentials or local paths)
+/docs/tmp/
