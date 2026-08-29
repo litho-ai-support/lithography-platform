@@ -91,6 +91,12 @@ test('super admin visit is redirected to the admin home, like engineer', async (
   // 2026-08-29 负责人裁定：SUPER_ADMIN 第一版不代客户创建（后端精确仅接受 CUSTOMER），
   // 路由层与 ENGINEER 一致拒绝进入创建页，不保留「可进页面、后端全拒」的残缺中间态。
   await seedAuthSession(page, 'SUPER_ADMIN');
+
+  // 客户首页可继承访问，但入口按钮置灰并附说明，避免「点了被弹回」的无提示体验。
+  await page.goto(CUSTOMER_HOME_PATH);
+  await expect(page.getByRole('button', { name: '发起维修申请' })).toBeDisabled();
+  await expect(page.getByText('超管不能代客户发起维修申请')).toBeVisible();
+
   await page.goto(CREATE_PAGE_PATH);
   await expect(page).toHaveURL(/\/admin$/);
   expect(await readStoredAuthSession(page)).not.toBeNull();
@@ -494,6 +500,11 @@ test.describe('real backend mutation', () => {
     await page.getByLabel('密码').fill(env.MOCK_SEED_PASSWORD);
     await page.getByRole('button', { name: /登\s*录/ }).click();
     await expect(page).toHaveURL(/\/admin$/);
+
+    // 客户首页可继承访问，但创建入口置灰并附说明（与路由层拒绝同口径）
+    await page.goto(CUSTOMER_HOME_PATH);
+    await expect(page.getByRole('button', { name: '发起维修申请' })).toBeDisabled();
+    await expect(page.getByText('超管不能代客户发起维修申请')).toBeVisible();
 
     // 直输创建页路径：路由层拒绝，跳回管理主页；会话保留（非 auth 失效）
     await page.goto(CREATE_PAGE_PATH);
