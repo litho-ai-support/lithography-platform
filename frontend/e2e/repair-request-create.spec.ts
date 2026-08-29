@@ -117,6 +117,9 @@ test('customer reaches the create page by clicking the entry on the customer hom
   await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
 });
 
+// ---------- 前端浏览器流程测试（GraphQL Mock）：用 page.route 模拟 Token 失效与重新登录响应，
+// 不是真实 Token 自然过期联调 ----------
+
 test('expired token on page load clears the session and returns to login once', async ({
   page,
 }) => {
@@ -129,7 +132,13 @@ test('expired token on page load clears the session and returns to login once', 
   });
 
   await page.goto(CREATE_PAGE_PATH);
-  await expect(page).toHaveURL(/\/login$/);
+  // 失效跳转恒定携带固定原因与安全 returnTo，记录失效前的站内业务页
+  await expect(page).toHaveURL(
+    /\/login\?reason=session-expired&returnTo=%2Fcustomer%2Frepair-requests%2Fnew$/,
+  );
+  await expect(page.getByText('登录状态已失效，请重新登录')).toBeVisible();
+  // 不展示后端原始错误内容（mock 故意携带 internal auth detail）
+  await expect(page.getByText('internal auth detail')).toHaveCount(0);
   // 一次失效周期只允许一次清理与一次跳转：请求不循环
   expect(modelsRequests).toBe(1);
   expect(await readStoredAuthSession(page)).toBeNull();
@@ -144,9 +153,72 @@ test('expired token on submit clears the session and returns to login without re
   await page.goto(CREATE_PAGE_PATH);
   await fillAndSubmitForm(page);
 
-  await expect(page).toHaveURL(/\/login$/);
+  // 提交期失效与页面加载期失效行为一致：同样携带固定原因与安全 returnTo
+  await expect(page).toHaveURL(
+    /\/login\?reason=session-expired&returnTo=%2Fcustomer%2Frepair-requests%2Fnew$/,
+  );
+  await expect(page.getByText('登录状态已失效，请重新登录')).toBeVisible();
   expect(getCreateCount()).toBe(1);
   expect(await readStoredAuthSession(page)).toBeNull();
+});
+
+test('same-role re-login after expiry returns to the original business page', async ({ page }) => {
+  await seedAuthSession(page, 'CUSTOMER');
+
+  let modelsRequests = 0;
+  let loginRequests = 0;
+  await page.route('**/graphql', async (route) => {
+    const payload = route.request().postDataJSON() as GraphQLOperationPayload;
+
+    if (payload.query?.includes('mutation LoginWithPassword')) {
+      loginRequests += 1;
+      return route.fulfill({
+        body: JSON.stringify({
+          data: {
+            login: {
+              accessToken: 'renewed-access-token',
+              accountId: 900201,
+              role: 'CUSTOMER',
+              userInfo: {
+                accessGroup: ['CUSTOMER'],
+                nickname: '测试会话',
+              },
+            },
+          },
+        }),
+        contentType: 'application/json',
+        status: 200,
+      });
+    }
+
+    if (payload.query?.includes('query EquipmentModels')) {
+      modelsRequests += 1;
+      // 首次型号查询命中失效；同角色重新登录后放行，验证返回原业务页。
+      if (modelsRequests === 1) {
+        return fulfillUnauthenticated(route);
+      }
+
+      return fulfillModelsSuccess(route);
+    }
+
+    return route.fulfill({ status: 500 });
+  });
+
+  await page.goto(CREATE_PAGE_PATH);
+  await expect(page).toHaveURL(
+    /\/login\?reason=session-expired&returnTo=%2Fcustomer%2Frepair-requests%2Fnew$/,
+  );
+  await expect(page.getByText('登录状态已失效，请重新登录')).toBeVisible();
+
+  await page.getByLabel('账号或邮箱').fill('mock_customer_alpha');
+  await page.getByLabel('密码').fill('test-only-password');
+  await page.getByRole('button', { name: /登\s*录/ }).click();
+
+  // 同角色重新登录后安全返回失效前记录的原业务页，不出现重复跳转或请求循环。
+  await expect(page).toHaveURL(new RegExp(CREATE_PAGE_PATH));
+  await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
+  expect(loginRequests).toBe(1);
+  expect(modelsRequests).toBe(2);
 });
 
 test('business rejection keeps the form and shows the backend message', async ({ page }) => {

@@ -21,6 +21,10 @@ export function getCurrentAuthSession() {
   return authSessionStore.getSnapshot().session;
 }
 
+export function hasCurrentAuthSession(): boolean {
+  return getCurrentAuthSession() !== null;
+}
+
 export function getAuthSessionAccessToken(): string | null {
   return getCurrentAuthSession()?.accessToken ?? null;
 }

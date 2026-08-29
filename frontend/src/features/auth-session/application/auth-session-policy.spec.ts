@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createAuthSessionSnapshot,
+  isAuthSessionExpiredReason,
   isAuthSessionRoleAllowedAt,
   resolveAuthSessionEntryPath,
   resolveAuthSessionHomePath,
@@ -11,6 +12,7 @@ import {
   resolveLoginRouteRedirect,
   resolveProtectedRouteRedirect,
   resolveSafeReturnTo,
+  resolveSessionExpiredLoginPath,
 } from './auth-session-policy';
 
 describe('auth session policy', () => {
@@ -126,6 +128,67 @@ describe('auth session policy', () => {
     expect(resolveLoginRouteRedirect({ role: 'CUSTOMER' }, '/customer/repair-requests/new')).toBe(
       '/customer/repair-requests/new',
     );
+  });
+
+  it('falls back to the role default entry for denied or cross-role returnTo after re-login', () => {
+    // 不同角色重新登录时不得进入无权限页面：含 2026-08-29 裁定的超管拒绝清单。
+    expect(
+      resolveAuthSessionEntryPath({ role: 'SUPER_ADMIN' }, '/customer/repair-requests/new'),
+    ).toBe('/admin');
+    expect(resolveAuthSessionEntryPath({ role: 'ENGINEER' }, '/admin')).toBe('/engineer');
+    expect(resolveAuthSessionEntryPath({ role: 'CUSTOMER' }, '/engineer')).toBe('/customer');
+  });
+
+  it('accepts only the predefined session-expired reason as an expiry signal', () => {
+    // 后端原始 message、errorCode、Token 或任意字符串都不被视为失效原因。
+    expect(isAuthSessionExpiredReason('session-expired')).toBe(true);
+    expect(isAuthSessionExpiredReason('UNAUTHENTICATED')).toBe(false);
+    expect(isAuthSessionExpiredReason('internal auth detail')).toBe(false);
+    expect(isAuthSessionExpiredReason('INVALID_TOKEN')).toBe(false);
+    expect(isAuthSessionExpiredReason(null)).toBe(false);
+    expect(isAuthSessionExpiredReason(undefined)).toBe(false);
+    expect(isAuthSessionExpiredReason(401)).toBe(false);
+  });
+
+  it('carries the fixed reason and the safe pre-expiry path as returnTo', () => {
+    expect(resolveSessionExpiredLoginPath('/customer/repair-requests/new')).toBe(
+      '/login?reason=session-expired&returnTo=%2Fcustomer%2Frepair-requests%2Fnew',
+    );
+    expect(resolveSessionExpiredLoginPath('/engineer?tab=open')).toBe(
+      '/login?reason=session-expired&returnTo=%2Fengineer%3Ftab%3Dopen',
+    );
+  });
+
+  it('never attaches a returnTo loop when already on the login route', () => {
+    expect(resolveSessionExpiredLoginPath('/login')).toBe('/login?reason=session-expired');
+    expect(resolveSessionExpiredLoginPath('/login?returnTo=%2Fcustomer')).toBe(
+      '/login?reason=session-expired',
+    );
+  });
+
+  it('excludes the whole /login prefix, including trailing-slash forms', () => {
+    // /login 是叶子路由，其子路径都不是有效的返回目标；
+    // 但相似前缀 /login-admin 不能被误排除（带边界匹配）。
+    expect(resolveSessionExpiredLoginPath('/login/')).toBe('/login?reason=session-expired');
+    expect(resolveSessionExpiredLoginPath('/login/extra')).toBe('/login?reason=session-expired');
+    expect(resolveSessionExpiredLoginPath('/login-admin')).toBe(
+      '/login?reason=session-expired&returnTo=%2Flogin-admin',
+    );
+  });
+
+  it('drops external, protocol-relative, backslashed and control-character paths', () => {
+    expect(resolveSessionExpiredLoginPath('https://example.com/admin')).toBe(
+      '/login?reason=session-expired',
+    );
+    expect(resolveSessionExpiredLoginPath('//example.com/admin')).toBe(
+      '/login?reason=session-expired',
+    );
+    expect(resolveSessionExpiredLoginPath('/\\example.com')).toBe('/login?reason=session-expired');
+    expect(resolveSessionExpiredLoginPath('/engineer\u007Ftab')).toBe(
+      '/login?reason=session-expired',
+    );
+    expect(resolveSessionExpiredLoginPath(null)).toBe('/login?reason=session-expired');
+    expect(resolveSessionExpiredLoginPath(undefined)).toBe('/login?reason=session-expired');
   });
 
   it('sends anonymous users to the login route with a safe return target', () => {
