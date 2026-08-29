@@ -79,7 +79,7 @@ QueryService / 同域写 Service
 - 未登录直接打开受保护 URL 会进入登录页。
 - 登录后进入正确的角色默认入口。
 - `ENGINEER` 与 `CUSTOMER` 互访专属路由得到 403 页面或安全重定向。
-- `SUPER_ADMIN` 的继承访问符合后端 `roleHierarchy`。
+- `SUPER_ADMIN` 的继承访问符合后端 `roleHierarchy`；例外：「客户创建维修申请」页 `/customer/repair-requests/new` 拒绝 `SUPER_ADMIN`（与 `ENGINEER` 一致重定向回 `/admin`，2026-08-29 负责人裁定：第一版不代客户创建，后端仅接受精确 `CUSTOMER`，不保留「可进页面、后端全拒」的残缺中间态）。
 - 刷新页面后会话仍在；退出后刷新不能恢复会话。
 - Token 无效或过期时清除 Session 并返回登录页。
 - GraphQL 网络失败时保留用户输入，并提供重试反馈。

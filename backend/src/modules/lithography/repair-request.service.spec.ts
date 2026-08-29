@@ -75,23 +75,47 @@ describe('RepairRequestService', () => {
     });
   });
 
-  it('非唯一约束冲突的落库失败包装为创建失败', async () => {
-    const driverError = new Error('fk') as Error & { code: string };
+  it('非唯一约束冲突的落库失败包装为创建失败，且不向客户端泄漏原始数据库错误', async () => {
+    // 构造含敏感信息的驱动错误：真实 MySQL 错误可能携带表名、约束名与输入内容
+    const sensitiveMessage =
+      "Cannot add or update a child row: foreign key constraint fails on 'repair_request'";
+    const driverError = new Error(sensitiveMessage) as Error & { code: string };
     driverError.code = 'ER_NO_REFERENCED_ROW_2';
-    repository.save.mockRejectedValue(new QueryFailedError('INSERT', [], driverError));
+    const queryFailedError = new QueryFailedError('INSERT', [], driverError);
+    repository.save.mockRejectedValue(queryFailedError);
 
-    await expect(service.insertRequest(insertData)).rejects.toMatchObject({
-      code: REPAIR_REQUEST_ERROR.CREATION_FAILED,
-    });
+    let caught: unknown;
+    try {
+      await service.insertRequest(insertData);
+    } catch (error) {
+      caught = error;
+    }
+
+    const domainError = caught as DomainError;
+    expect(domainError).toBeInstanceOf(DomainError);
+    expect(domainError.code).toBe(REPAIR_REQUEST_ERROR.CREATION_FAILED);
+    // details 会被全局 GraphQL Filter 原样写入响应：不得包含驱动错误文本，
+    // 仅保留业务上可公开的编号；底层异常保留为 cause 供服务端日志使用。
+    expect(JSON.stringify(domainError.details ?? null)).not.toContain('ER_NO_REFERENCED_ROW_2');
+    expect(JSON.stringify(domainError.details ?? null)).not.toContain('repair_request');
+    expect(domainError.details).toEqual({ requestNo: insertData.requestNo });
+    expect(domainError.cause).toBe(queryFailedError);
   });
 
-  it('非 QueryFailedError 的异常同样包装为创建失败', async () => {
+  it('非 QueryFailedError 的异常同样包装为创建失败，且不向客户端泄漏异常消息', async () => {
     repository.save.mockRejectedValue(new Error('connection lost'));
 
-    await expect(service.insertRequest(insertData)).rejects.toBeInstanceOf(DomainError);
-    await expect(service.insertRequest(insertData)).rejects.toMatchObject({
-      code: REPAIR_REQUEST_ERROR.CREATION_FAILED,
-    });
+    let caught: unknown;
+    try {
+      await service.insertRequest(insertData);
+    } catch (error) {
+      caught = error;
+    }
+
+    const domainError = caught as DomainError;
+    expect(domainError).toBeInstanceOf(DomainError);
+    expect(domainError.code).toBe(REPAIR_REQUEST_ERROR.CREATION_FAILED);
+    expect(JSON.stringify(domainError.details ?? null)).not.toContain('connection lost');
   });
 
   it('携带事务上下文时改用事务内的 EntityManager 落库', async () => {

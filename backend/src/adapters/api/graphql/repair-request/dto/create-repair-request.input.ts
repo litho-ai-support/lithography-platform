@@ -3,7 +3,7 @@
 import { Field, InputType, Int } from '@nestjs/graphql';
 import { IsInt, IsString, MaxLength, Min } from 'class-validator';
 
-/** 故障描述长度上限（防御异常长输入直达 ORM；text 列约 65535 字节，5000 字符 × 4 字节仍安全） */
+/** 故障描述长度上限（单一口径在 CreateRepairRequestUsecase；本层为装配层防御，拦截异常长输入直达业务层） */
 const FAULT_DESCRIPTION_MAX_LENGTH = 5000;
 
 /**

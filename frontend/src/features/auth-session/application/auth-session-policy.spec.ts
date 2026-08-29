@@ -68,8 +68,16 @@ describe('auth session policy', () => {
     expect(isAuthSessionRoleAllowedAt('ENGINEER', '/customer/repair-requests/1')).toBe(false);
     expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/admin/settings')).toBe(true);
     expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/engineer/repair-requests/1')).toBe(true);
-    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/customer/repair-requests/new')).toBe(true);
     expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/admin-console')).toBe(false);
+  });
+
+  it('denies SUPER_ADMIN the customer create page despite inheritance (2026-08-29 裁定)', () => {
+    // 后端精确仅接受 CUSTOMER 创建；继承放行会造成残缺页面，故路由层显式拒绝。
+    // 拒绝语义与根路径表一致：精确命中与带边界子路径均拒绝。
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/customer/repair-requests/new')).toBe(false);
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/customer/repair-requests/new/')).toBe(false);
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/customer')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('CUSTOMER', '/customer/repair-requests/new')).toBe(true);
   });
 
   it('guards role sub-pages through the shared role path policy', () => {
@@ -101,9 +109,10 @@ describe('auth session policy', () => {
     expect(resolveProtectedRouteRedirect(customerSession, '/customer/')).toBeNull();
     expect(resolveProtectedRouteRedirect(customerSession, '/customer-admin')).toBe('/customer');
     expect(resolveProtectedRouteRedirect(superAdminSession, '/admin/settings')).toBeNull();
-    expect(
-      resolveProtectedRouteRedirect(superAdminSession, '/customer/repair-requests/new'),
-    ).toBeNull();
+    // SUPER_ADMIN 访问创建页与 ENGINEER 一致：跳回各自个人主页，不是 403。
+    expect(resolveProtectedRouteRedirect(superAdminSession, '/customer/repair-requests/new')).toBe(
+      '/admin',
+    );
   });
 
   it('adopts a same-role sub-page returnTo and rejects cross-role or lookalike targets', () => {

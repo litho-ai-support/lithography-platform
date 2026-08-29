@@ -67,13 +67,13 @@ export class RepairRequestService {
           error,
         );
       }
+      // 客户端可见的 details 不得携带原始数据库错误（可能含表名/约束/输入内容）；
+      // 底层异常仅以 cause 保留，供服务端日志与排查使用（全局 GraphQL Filter 会将
+      // details 原样写入响应）
       throw new DomainError(
         REPAIR_REQUEST_ERROR.CREATION_FAILED,
-        '维修申请落库失败',
-        {
-          requestNo: data.requestNo,
-          error: error instanceof Error ? error.message : '未知错误',
-        },
+        '维修申请创建失败，请稍后重试',
+        { requestNo: data.requestNo },
         error,
       );
     }

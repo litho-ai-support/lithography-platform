@@ -26,6 +26,9 @@ import {
 /** 错误码长度上限（与 equipment_model / repair_request 表列长一致） */
 const ERROR_CODE_MAX_LENGTH = 100;
 
+/** 故障描述长度上限（与 GraphQL DTO 一致；长度语义由 Usecase 判定，避免其他 adapter 绕过 DTO 后丢失约束） */
+const FAULT_DESCRIPTION_MAX_LENGTH = 5000;
+
 /** 申请编号重试上限（预检查与落库撞号重试共用） */
 const REQUEST_NO_RETRY_LIMIT = 3;
 
@@ -34,7 +37,7 @@ const REQUEST_NO_RETRY_LIMIT = 3;
  *
  * 业务流程：
  * 1. 角色决策：仅 CUSTOMER 可提交（ENGINEER / SUPER_ADMIN 拒绝，兜底守卫误放）
- * 2. 输入决策：错误码、故障描述空白即拒绝；错误码超长拒绝
+ * 2. 输入决策：错误码、故障描述空白即拒绝；错误码、故障描述超长拒绝
  * 3. 事务内校验设备型号存在且启用（排他锁读，防并发停用）
  * 4. 事务内生成唯一申请编号，组装 contentMd 并落库；
  *    唯一索引撞号（预检查无法感知的并发写入）时重新生成编号重试整段流程
@@ -77,6 +80,13 @@ export class CreateRepairRequestUsecase {
     const faultDescription = normalizeRequiredText(command.faultDescription, {
       fieldName: '故障描述',
     });
+    if (faultDescription.length > FAULT_DESCRIPTION_MAX_LENGTH) {
+      throw new DomainError(
+        REPAIR_REQUEST_ERROR.INVALID_PARAMS,
+        `故障描述不能超过 ${FAULT_DESCRIPTION_MAX_LENGTH} 个字符`,
+        { faultDescriptionLength: faultDescription.length },
+      );
+    }
 
     return this.transactionRunner.run((transactionContext) =>
       this.doCreate(command, errorCode, faultDescription, transactionContext),

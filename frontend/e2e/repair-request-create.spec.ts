@@ -87,48 +87,12 @@ test('engineer visit is redirected to the role home, not 403', async ({ page }) 
   await expect(page).toHaveURL(/\/engineer$/);
 });
 
-test('super admin inherits customer route access and sees the form', async ({ page }) => {
+test('super admin visit is redirected to the admin home, like engineer', async ({ page }) => {
+  // 2026-08-29 负责人裁定：SUPER_ADMIN 第一版不代客户创建（后端精确仅接受 CUSTOMER），
+  // 路由层与 ENGINEER 一致拒绝进入创建页，不保留「可进页面、后端全拒」的残缺中间态。
   await seedAuthSession(page, 'SUPER_ADMIN');
-  await page.route('**/graphql', (route) => fulfillModelsSuccess(route));
-
   await page.goto(CREATE_PAGE_PATH);
-  await expect(page).toHaveURL(new RegExp(CREATE_PAGE_PATH));
-  await expect(page.getByText('创建维修申请').first()).toBeVisible();
-  await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
-});
-
-test('super admin submission is rejected without clearing the session', async ({ page }) => {
-  await seedAuthSession(page, 'SUPER_ADMIN');
-  const getCreateCount = await routeGraphQL(page, (route) =>
-    route.fulfill({
-      body: JSON.stringify({
-        errors: [
-          {
-            // 与后端权限拒绝契约对齐：PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS → FORBIDDEN
-            extensions: {
-              code: 'FORBIDDEN',
-              errorCode: 'INSUFFICIENT_PERMISSIONS',
-              errorMessage: 'internal permission detail',
-            },
-            message: 'internal detail',
-          },
-        ],
-      }),
-      contentType: 'application/json',
-      status: 200,
-    }),
-  );
-
-  await page.goto(CREATE_PAGE_PATH);
-  await fillAndSubmitForm(page);
-
-  // 权限拒绝不归入业务拒绝：展示共享错误模型的兜底文案而非后端 errorMessage，
-  // 不泄漏内部细节；会话不清除（FORBIDDEN 不触发 auth 失效链路）
-  await expect(page).toHaveURL(new RegExp(CREATE_PAGE_PATH));
-  await expect(page.getByText('请求处理失败，请稍后重试。')).toBeVisible();
-  await expect(page.getByText('internal permission detail')).toHaveCount(0);
-  await expect(page.getByLabel('设备错误码')).toHaveValue('E-2001');
-  expect(getCreateCount()).toBe(1);
+  await expect(page).toHaveURL(/\/admin$/);
   expect(await readStoredAuthSession(page)).not.toBeNull();
 });
 
@@ -503,11 +467,10 @@ test.describe('real backend mutation', () => {
     ).toBe('0');
   });
 
-  // 真实后端口径（2026-08-28 实测确认）：equipmentModels 查询 @Roles(CUSTOMER)（后端注释明确不提前放宽），
-  // SUPER_ADMIN 真实登录后型号加载被拒（FORBIDDEN，不触发会话失效），表单不可用、无法发起 Mutation。
-  // 基线口径「可进页面、提交被拒」中的提交环节已由 mock 用例覆盖；此处锁定真实链路下的防护行为：
-  // 不产生 Mutation、不落库、会话保留。若后续后端放宽型号查询给继承角色，本用例需随之更新。
-  test('super admin can open the page but models load is rejected so no mutation reaches the backend', async ({
+  // 2026-08-29 负责人裁定：SUPER_ADMIN 第一版不代客户创建，路由层与 ENGINEER 一致拒绝。
+  // 后端精确 CUSTOMER 约束保持不变（06 组 auth spec 已覆盖 FORBIDDEN）；此处锁定真实链路：
+  // 超管真实登录后直输创建页路径被重定向回 /admin，会话保留，全程无创建 Mutation 到达后端。
+  test('super admin is redirected to the admin home before any mutation reaches the backend', async ({
     page,
   }) => {
     test.setTimeout(45_000);
@@ -525,23 +488,19 @@ test.describe('real backend mutation', () => {
       return route.continue();
     });
 
-    // SUPER_ADMIN 真实登录：路由层角色继承允许进入创建页（第一版口径：可进页面）
+    // SUPER_ADMIN 真实登录：登录与默认入口不受本次策略调整影响
     await page.goto('/login');
     await page.getByLabel('账号或邮箱').fill('mock_super_admin');
     await page.getByLabel('密码').fill(env.MOCK_SEED_PASSWORD);
     await page.getByRole('button', { name: /登\s*录/ }).click();
     await expect(page).toHaveURL(/\/admin$/);
 
+    // 直输创建页路径：路由层拒绝，跳回管理主页；会话保留（非 auth 失效）
     await page.goto(CREATE_PAGE_PATH);
-    await expect(page).toHaveURL(new RegExp(CREATE_PAGE_PATH));
-    // 型号加载被后端拒绝：型号查询与提交均不可用，前端展示共享错误模型兜底文案而非内部细节；
-    // FORBIDDEN 不触发 auth 失效链路，会话保留。
-    await expect(page.getByRole('combobox')).toBeDisabled();
-    await expect(page.getByRole('button', { name: '提交申请' })).toBeDisabled();
-    await expect(page.getByText('请求处理失败，请稍后重试。')).toBeVisible();
+    await expect(page).toHaveURL(/\/admin$/);
     expect(await readStoredAuthSession(page)).not.toBeNull();
 
-    // 反向链路证据：真实后端未收到任何创建 Mutation（防护发生在提交之前）
+    // 反向链路证据：真实后端全程未收到任何创建 Mutation（防护发生在进入页面之前）
     expect(mutationAuthorizations).toHaveLength(0);
   });
 });

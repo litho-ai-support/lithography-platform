@@ -169,6 +169,21 @@ describe('CreateRepairRequestUsecase', () => {
       expect(repairRequestService.insertRequest).toHaveBeenCalledTimes(1);
     });
 
+    it('故障描述超过 5000 字符时拒绝（直调 Usecase，绕过 DTO）', async () => {
+      await expect(
+        usecase.execute(buildCommand({ faultDescription: '长'.repeat(5001) })),
+      ).rejects.toMatchObject({
+        code: REPAIR_REQUEST_ERROR.INVALID_PARAMS,
+      });
+      expect(repairRequestService.insertRequest).not.toHaveBeenCalled();
+    });
+
+    it('故障描述恰好 5000 字符时允许创建（边界值）', async () => {
+      const result = await usecase.execute(buildCommand({ faultDescription: '长'.repeat(5000) }));
+      expect(result.requestNo).toMatch(/^RR\d{14}[A-Z0-9]{6}$/);
+      expect(repairRequestService.insertRequest).toHaveBeenCalledTimes(1);
+    });
+
     it('故障描述为空白时拒绝', async () => {
       await expect(
         usecase.execute(buildCommand({ faultDescription: '\n  ' })),

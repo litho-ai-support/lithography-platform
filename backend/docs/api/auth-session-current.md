@@ -18,6 +18,8 @@ Global error contract: Every GraphQL interface must also follow docs/api/graphql
 
 `SUPER_ADMIN` 继承 `ENGINEER` 与 `CUSTOMER` 的访问能力，`ENGINEER` 与 `CUSTOMER` 互不继承。公开注册只创建 `CUSTOMER`。
 
+例外（2026-08-29 负责人裁定）：「客户创建维修申请」页拒绝 `SUPER_ADMIN` 继承进入，前端路由与 `ENGINEER` 一致重定向回各自主页；后端 `equipmentModels` 与 `createRepairRequest` 仅接受精确 `CUSTOMER`。
+
 ## GraphQL 入口
 
 - `login(input: AuthLoginInput): LoginResult`
