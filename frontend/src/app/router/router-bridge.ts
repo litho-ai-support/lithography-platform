@@ -13,8 +13,20 @@ export function registerAppRouter(router: AppRouter) {
   appRouter = router;
 }
 
-export function navigateToLogin() {
+// 树外读取当前站内路径（含 query）的唯一入口：失效链路在会话清理前取此值，
+// 用于生成安全 returnTo；只读路由真源，不维护第二份位置状态。
+export function getCurrentAppRouterPath(): string | null {
+  if (!appRouter) {
+    return null;
+  }
+
+  const { pathname, search } = appRouter.state.location;
+
+  return `${pathname}${search}`;
+}
+
+export function navigateToLogin(targetPath: string = '/login') {
   if (appRouter) {
-    void appRouter.navigate('/login');
+    void appRouter.navigate(targetPath);
   }
 }

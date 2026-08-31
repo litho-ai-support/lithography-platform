@@ -2,7 +2,12 @@
 
 import { sanitizeRedirectTarget } from '@/shared/navigation';
 
-import { composeLoginRedirectPath, extractUrlPathname } from '../infrastructure/auth-return-to-url';
+import {
+  AUTH_LOGIN_REASON_SESSION_EXPIRED,
+  composeLoginRedirectPath,
+  composeSessionExpiredLoginRedirectPath,
+  extractUrlPathname,
+} from '../infrastructure/auth-return-to-url';
 
 import {
   AUTH_SESSION_ROLES,
@@ -206,4 +211,24 @@ export function resolveSafeReturnTo(value: unknown): string | null {
   }
 
   return sanitized;
+}
+
+// 失效原因的受控判定：仅预定义的 session-expired 成立；后端原始 message、
+// errorCode、Token 或任意字符串都不被视为失效原因。
+export function isAuthSessionExpiredReason(value: unknown): boolean {
+  return value === AUTH_LOGIN_REASON_SESSION_EXPIRED;
+}
+
+// 失效跳转目标的唯一决策：恒定携带固定失效原因；仅安全站内路径才作为
+// returnTo；当前已在 /login 前缀下（含 /login/ 等尾随形式）时不携带，避免循环。
+// /login 是叶子路由，其子路径都不是有效的返回目标，判定口径与角色路径表一致。
+export function resolveSessionExpiredLoginPath(currentPath?: unknown): string {
+  const safeReturnTo = resolveSafeReturnTo(currentPath);
+  const returnToPathname = safeReturnTo === null ? null : extractUrlPathname(safeReturnTo);
+
+  if (returnToPathname === null || isAuthSessionRolePathAllowed(returnToPathname, '/login')) {
+    return composeSessionExpiredLoginRedirectPath(null);
+  }
+
+  return composeSessionExpiredLoginRedirectPath(safeReturnTo);
 }

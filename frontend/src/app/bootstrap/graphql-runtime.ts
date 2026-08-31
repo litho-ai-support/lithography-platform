@@ -1,8 +1,13 @@
 // src/app/bootstrap/graphql-runtime.ts
 
-import { navigateToLogin } from '@/app/router';
+import { getCurrentAppRouterPath, navigateToLogin } from '@/app/router';
 
-import { getAuthSessionAccessToken, logoutAuthSession } from '@/features/auth-session';
+import {
+  getAuthSessionAccessToken,
+  hasCurrentAuthSession,
+  logoutAuthSession,
+  resolveSessionExpiredLoginPath,
+} from '@/features/auth-session';
 
 import { configureGraphQLRuntime } from '@/shared/graphql';
 
@@ -14,8 +19,11 @@ export function bootstrapGraphQLRuntime() {
   configureGraphQLRuntime({
     getAccessToken: getAuthSessionAccessToken,
     onAuthFailure: createGraphQLAuthFailureHandler({
+      getCurrentPath: getCurrentAppRouterPath,
+      hasAuthSession: hasCurrentAuthSession,
       logoutAuthSession,
       navigateToLogin,
+      resolveSessionExpiredLoginPath,
     }),
   });
 }
