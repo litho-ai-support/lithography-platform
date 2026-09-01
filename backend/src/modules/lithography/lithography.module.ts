@@ -8,6 +8,7 @@ import { EquipmentModelEntity } from './entities/equipment-model.entity';
 import { ReferenceDocumentEntity } from './entities/reference-document.entity';
 import { RepairRequestEntity } from './entities/repair-request.entity';
 import { EquipmentModelQueryService } from './queries/equipment-model.query.service';
+import { RepairRequestQueryService } from './queries/repair-request.query.service';
 import { RepairRequestService } from './repair-request.service';
 
 const LITHOGRAPHY_ENTITIES = [
@@ -22,7 +23,12 @@ const LITHOGRAPHY_ENTITIES = [
 
 @Module({
   imports: [TypeOrmModule.forFeature([...LITHOGRAPHY_ENTITIES])],
-  providers: [EquipmentModelQueryService, RepairRequestService],
-  exports: [TypeOrmModule, EquipmentModelQueryService, RepairRequestService],
+  providers: [EquipmentModelQueryService, RepairRequestQueryService, RepairRequestService],
+  exports: [
+    TypeOrmModule,
+    EquipmentModelQueryService,
+    RepairRequestQueryService,
+    RepairRequestService,
+  ],
 })
 export class LithographyModule {}
