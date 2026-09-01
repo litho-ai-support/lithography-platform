@@ -33,6 +33,10 @@ describe(GqlAllExceptionsFilter.name, () => {
     // 系统侧故障不得误报为输入错误
     [REPAIR_REQUEST_ERROR.CREATION_FAILED, 'INTERNAL_SERVER_ERROR'],
     [REPAIR_REQUEST_ERROR.REQUEST_NO_CONFLICT, 'INTERNAL_SERVER_ERROR'],
+    // 软删除（裁定 5）：不存在/非本人统一 NOT_FOUND、已接单互斥 CONFLICT、落库失败属系统侧故障
+    [REPAIR_REQUEST_ERROR.NOT_FOUND, 'NOT_FOUND'],
+    [REPAIR_REQUEST_ERROR.ALREADY_ACCEPTED, 'CONFLICT'],
+    [REPAIR_REQUEST_ERROR.DELETION_FAILED, 'INTERNAL_SERVER_ERROR'],
   ])('maps repair request error %s to GraphQL code %s', (errorCode, gqlCode) => {
     const configService = {
       get: jest.fn().mockReturnValue('production'),

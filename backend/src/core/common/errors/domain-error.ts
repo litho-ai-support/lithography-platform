@@ -163,6 +163,12 @@ export const REPAIR_REQUEST_ERROR = {
   EQUIPMENT_MODEL_DISABLED: 'REPAIR_REQUEST_EQUIPMENT_MODEL_DISABLED',
   // 唯一索引冲突（并发写入同一申请编号），由 usecase 内部重试消化，外泄时属系统异常
   REQUEST_NO_CONFLICT: 'REPAIR_REQUEST_REQUEST_NO_CONFLICT',
+  // 软删除：申请不存在或非本人（统一口径，防探测他人申请存在性，负责人 20260901 裁定 5）
+  NOT_FOUND: 'REPAIR_REQUEST_NOT_FOUND',
+  // 软删除：申请已被工程师接单（接单/删除互斥由原子条件更新保证，裁定 5）
+  ALREADY_ACCEPTED: 'REPAIR_REQUEST_ALREADY_ACCEPTED',
+  // 软删除落库失败（系统侧故障，非业务拒绝）
+  DELETION_FAILED: 'REPAIR_REQUEST_DELETION_FAILED',
 } as const;
 Object.freeze(REPAIR_REQUEST_ERROR);
 
