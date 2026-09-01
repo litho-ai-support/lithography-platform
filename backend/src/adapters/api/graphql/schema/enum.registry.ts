@@ -11,6 +11,7 @@ import {
   ThirdPartyProviderEnum,
 } from '@app-types/models/account.types';
 import { Gender, UserState } from '@app-types/models/user-info.types';
+import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
 import {
   CreatableVerificationRecordType,
   SubjectType,
@@ -37,6 +38,7 @@ export function registerEnums(): void {
   registerEnumType(VerificationRecordStatus, { name: 'VerificationRecordStatus' });
   registerEnumType(VerificationRecordType, { name: 'VerificationRecordType' });
   registerEnumType(CreatableVerificationRecordType, { name: 'CreatableVerificationRecordType' });
+  registerEnumType(EngineerResolutionStatus, { name: 'EngineerResolutionStatus' });
   registerEnumType(OrderDirection, { name: 'OrderDirection' });
   registerEnumType(GqlPaginationMode, { name: 'PaginationMode' });
   registerEnumType(GqlSortDirection, { name: 'SortDirection' });

@@ -1,4 +1,4 @@
-import { EngineerResolutionStatus } from '../lithography.types';
+import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
 import {
   Check,
   Column,

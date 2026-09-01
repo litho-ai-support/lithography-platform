@@ -16,7 +16,7 @@ import { normalizeEmail } from '@core/common/normalize/normalize.helper';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { getTypeOrmEntityManager } from '@src/infrastructure/database/transaction/typeorm-persistence-transaction-context';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import type {
   AccountCredentialSnapshot,
   AccountLoginBootstrapSnapshot,
@@ -116,6 +116,30 @@ export class AccountQueryService {
   async checkNicknameExists(nickname: string): Promise<boolean> {
     const userInfo = await this.userInfoRepository.findOne({ where: { nickname } });
     return !!userInfo;
+  }
+
+  /**
+   * 按账号 ID 批量读取安全昵称（只读公开显示名，不含敏感字段）。
+   * 供其他域读模型跨域富集展示昵称（负责人 20260901 裁定 3：不存快照，读时关联）；
+   * 缺失/空白昵称不进入结果，由调用方决定回落展示。
+   */
+  async findNicknamesByAccountIds(accountIds: ReadonlyArray<number>): Promise<Map<number, string>> {
+    const uniqueIds = [...new Set(accountIds.filter((id) => Number.isInteger(id) && id > 0))];
+    if (uniqueIds.length === 0) {
+      return new Map();
+    }
+    const rows = await this.userInfoRepository.find({
+      where: { accountId: In(uniqueIds) },
+      select: { accountId: true, nickname: true },
+    });
+    const nicknames = new Map<number, string>();
+    for (const row of rows) {
+      const trimmed = row.nickname?.trim();
+      if (trimmed) {
+        nicknames.set(row.accountId, trimmed);
+      }
+    }
+    return nicknames;
   }
 
   async pickAvailableNickname(params: {
