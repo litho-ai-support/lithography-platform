@@ -1,7 +1,7 @@
 /// <reference types="jest" />
 import { PERMISSION_ERROR } from '@core/common/errors/domain-error';
+import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
 import { In, type Repository } from 'typeorm';
-import { EngineerResolutionStatus } from '../lithography.types';
 import { EngineerResponseEntity } from '../entities/engineer-response.entity';
 import { EquipmentModelEntity } from '../entities/equipment-model.entity';
 import { RepairRequestEntity } from '../entities/repair-request.entity';
@@ -49,6 +49,7 @@ const makeModel = (overrides: Partial<EquipmentModelEntity> = {}): EquipmentMode
 
 const customerSession = { accountId: 10, roles: ['CUSTOMER'] };
 const engineerSession = { accountId: 20, roles: ['ENGINEER'] };
+const superAdminSession = { accountId: 99, roles: ['SUPER_ADMIN'] };
 
 describe('RepairRequestQueryService', () => {
   let requestRepository: ReturnType<typeof createMockRepository>;
@@ -154,12 +155,12 @@ describe('RepairRequestQueryService', () => {
   });
 
   describe('listByEngineer', () => {
-    it('AWAITING 视图仅查询未删除且未接单的申请', async () => {
+    it('AVAILABLE 范围仅查询未删除且未接单的申请', async () => {
       requestRepository.find.mockResolvedValue([]);
 
       await service.listByEngineer({
         engineerAccountId: 20,
-        view: 'AWAITING',
+        scope: 'AVAILABLE',
         pagination: { page: 1, pageSize: 10, withTotal: false },
       });
 
@@ -168,12 +169,12 @@ describe('RepairRequestQueryService', () => {
       );
     });
 
-    it('MINE 视图仅查询本人已接单的申请', async () => {
+    it('MINE 范围仅查询本人已接单的申请', async () => {
       requestRepository.find.mockResolvedValue([]);
 
       await service.listByEngineer({
         engineerAccountId: 20,
-        view: 'MINE',
+        scope: 'MINE',
         pagination: { page: 1, pageSize: 10, withTotal: false },
       });
 
@@ -188,16 +189,20 @@ describe('RepairRequestQueryService', () => {
       requestRepository.findOne.mockResolvedValue(null);
 
       await expect(
-        service.findDetail({ requestId: 99, session: customerSession }),
+        service.findDetail({ requestId: 99, session: customerSession, scope: 'CUSTOMER' }),
       ).rejects.toMatchObject({ code: PERMISSION_ERROR.ACCESS_DENIED });
     });
 
-    it('CUSTOMER 本人申请可读', async () => {
+    it('CUSTOMER 本人申请可读（客户入口）', async () => {
       requestRepository.findOne.mockResolvedValue(makeRequest());
       equipmentModelRepository.findOne.mockResolvedValue(makeModel());
       responseRepository.find.mockResolvedValue([]);
 
-      const result = await service.findDetail({ requestId: 1, session: customerSession });
+      const result = await service.findDetail({
+        requestId: 1,
+        session: customerSession,
+        scope: 'CUSTOMER',
+      });
 
       expect(result).toMatchObject({
         id: 1,
@@ -213,7 +218,7 @@ describe('RepairRequestQueryService', () => {
       requestRepository.findOne.mockResolvedValue(makeRequest({ customerAccountId: 11 }));
 
       await expect(
-        service.findDetail({ requestId: 1, session: customerSession }),
+        service.findDetail({ requestId: 1, session: customerSession, scope: 'CUSTOMER' }),
       ).rejects.toMatchObject({ code: PERMISSION_ERROR.ACCESS_DENIED });
     });
 
@@ -223,7 +228,15 @@ describe('RepairRequestQueryService', () => {
       );
 
       await expect(
-        service.findDetail({ requestId: 1, session: customerSession }),
+        service.findDetail({ requestId: 1, session: customerSession, scope: 'CUSTOMER' }),
+      ).rejects.toMatchObject({ code: PERMISSION_ERROR.ACCESS_DENIED });
+    });
+
+    it('纯 CUSTOMER 走工程师入口拒绝（入口 scope 隔离有效身份）', async () => {
+      requestRepository.findOne.mockResolvedValue(makeRequest());
+
+      await expect(
+        service.findDetail({ requestId: 1, session: customerSession, scope: 'ENGINEER' }),
       ).rejects.toMatchObject({ code: PERMISSION_ERROR.ACCESS_DENIED });
     });
 
@@ -233,7 +246,7 @@ describe('RepairRequestQueryService', () => {
       responseRepository.find.mockResolvedValue([]);
 
       await expect(
-        service.findDetail({ requestId: 1, session: engineerSession }),
+        service.findDetail({ requestId: 1, session: engineerSession, scope: 'ENGINEER' }),
       ).resolves.toMatchObject({ id: 1 });
     });
 
@@ -243,7 +256,7 @@ describe('RepairRequestQueryService', () => {
       );
 
       await expect(
-        service.findDetail({ requestId: 1, session: engineerSession }),
+        service.findDetail({ requestId: 1, session: engineerSession, scope: 'ENGINEER' }),
       ).rejects.toMatchObject({ code: PERMISSION_ERROR.ACCESS_DENIED });
     });
 
@@ -259,7 +272,7 @@ describe('RepairRequestQueryService', () => {
       responseRepository.find.mockResolvedValue([]);
 
       await expect(
-        service.findDetail({ requestId: 1, session: engineerSession }),
+        service.findDetail({ requestId: 1, session: engineerSession, scope: 'ENGINEER' }),
       ).resolves.toMatchObject({ isAccepted: true, acceptedAt: expect.any(Date) });
     });
 
@@ -276,7 +289,7 @@ describe('RepairRequestQueryService', () => {
       responseRepository.find.mockResolvedValue([]);
 
       await expect(
-        service.findDetail({ requestId: 1, session: engineerSession }),
+        service.findDetail({ requestId: 1, session: engineerSession, scope: 'ENGINEER' }),
       ).resolves.toMatchObject({ id: 1, isAccepted: true });
     });
 
@@ -286,26 +299,35 @@ describe('RepairRequestQueryService', () => {
       );
 
       await expect(
-        service.findDetail({ requestId: 1, session: engineerSession }),
+        service.findDetail({ requestId: 1, session: engineerSession, scope: 'ENGINEER' }),
       ).rejects.toMatchObject({ code: PERMISSION_ERROR.ACCESS_DENIED });
     });
 
-    it('其余角色（如 SUPER_ADMIN）第一版不继承读权限', async () => {
+    it('SUPER_ADMIN 按角色继承可读未接单申请（负责人裁定 2：工程师入口）', async () => {
       requestRepository.findOne.mockResolvedValue(makeRequest());
+      equipmentModelRepository.findOne.mockResolvedValue(makeModel());
+      responseRepository.find.mockResolvedValue([]);
 
       await expect(
-        service.findDetail({
-          requestId: 1,
-          session: { accountId: 10, roles: ['SUPER_ADMIN'] },
-        }),
+        service.findDetail({ requestId: 1, session: superAdminSession, scope: 'ENGINEER' }),
+      ).resolves.toMatchObject({ id: 1 });
+    });
+
+    it('SUPER_ADMIN 继承工程师身份仍不可读他人已接单申请', async () => {
+      requestRepository.findOne.mockResolvedValue(
+        makeRequest({ isAccepted: true, acceptedByEngineerAccountId: 21 }),
+      );
+
+      await expect(
+        service.findDetail({ requestId: 1, session: superAdminSession, scope: 'ENGINEER' }),
       ).rejects.toMatchObject({ code: PERMISSION_ERROR.ACCESS_DENIED });
     });
 
-    it('未归一化的小写角色不命中（归一化职责在 adapter 边界 mapJwtToUsecaseSession，QueryService 直接消费规范化后的 roles）', async () => {
-      requestRepository.findOne.mockResolvedValue(makeRequest());
+    it('SUPER_ADMIN 客户入口仅见本人名下申请（超管无客户申请时不可见他人申请）', async () => {
+      requestRepository.findOne.mockResolvedValue(makeRequest({ customerAccountId: 10 }));
 
       await expect(
-        service.findDetail({ requestId: 1, session: { accountId: 10, roles: ['customer'] } }),
+        service.findDetail({ requestId: 1, session: superAdminSession, scope: 'CUSTOMER' }),
       ).rejects.toMatchObject({ code: PERMISSION_ERROR.ACCESS_DENIED });
     });
   });
@@ -325,7 +347,11 @@ describe('RepairRequestQueryService', () => {
         }),
       ]);
 
-      const result = await service.findDetail({ requestId: 1, session: engineerSession });
+      const result = await service.findDetail({
+        requestId: 1,
+        session: engineerSession,
+        scope: 'ENGINEER',
+      });
 
       expect(responseRepository.find).toHaveBeenCalledWith({
         where: { requestId: 1 },
@@ -342,7 +368,11 @@ describe('RepairRequestQueryService', () => {
       equipmentModelRepository.findOne.mockResolvedValue(makeModel());
       responseRepository.find.mockResolvedValue([]);
 
-      const result = await service.findDetail({ requestId: 1, session: customerSession });
+      const result = await service.findDetail({
+        requestId: 1,
+        session: customerSession,
+        scope: 'CUSTOMER',
+      });
 
       expect(result.latestResolutionStatus).toBeNull();
       expect(result.responses).toEqual([]);

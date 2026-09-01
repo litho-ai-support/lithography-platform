@@ -6,8 +6,8 @@ import { applyDefaults, enforceMaxPageSize } from '@core/pagination/pagination.p
 import { OffsetParams, PaginationParams } from '@core/pagination/pagination.types';
 import { Injectable } from '@nestjs/common';
 import {
-  REPAIR_REQUEST_ENGINEER_LIST_VIEWS,
-  RepairRequestEngineerListView,
+  REPAIR_REQUEST_ENGINEER_LIST_SCOPES,
+  RepairRequestEngineerListScope,
   RepairRequestListPage,
 } from '@src/modules/lithography/lithography.types';
 import { RepairRequestQueryService } from '@src/modules/lithography/queries/repair-request.query.service';
@@ -16,12 +16,12 @@ import { RepairRequestQueryService } from '@src/modules/lithography/queries/repa
 const MAX_PAGE_SIZE = 100;
 
 /**
- * 查询工程师维修申请列表用例（待接单 / 我的接单 两视图）
+ * 查询工程师维修申请列表用例（scope = AVAILABLE 待接单 / MINE 我的接单）
  *
- * - 视图入参在 GraphQL 层为字符串，由本用例对照共享类型常量校验，
+ * - 范围入参在 GraphQL 层为字符串，由本用例对照共享类型常量校验，
  *   校验通过后才收窄类型（先验证后断言；adapter 不导入 lithography.types 枚举/常量）
- * - 账号仅取自 JWT/Session；角色准入由 adapter 层守卫决策（仅 ENGINEER）；
- *   页大小上限在传输无关的用例层强制，不依赖入口校验
+ * - 账号仅取自 JWT/Session；角色准入由 adapter 层守卫决策（ENGINEER，
+ *   SUPER_ADMIN 按角色继承规则同准入）；页大小上限在传输无关的用例层强制，不依赖入口校验
  */
 @Injectable()
 export class ListEngineerRepairRequestsUsecase {
@@ -29,16 +29,16 @@ export class ListEngineerRepairRequestsUsecase {
 
   async execute(params: {
     session: UsecaseSession;
-    view: string;
+    scope: string;
     pagination: PaginationParams;
   }): Promise<RepairRequestListPage> {
-    const views: readonly string[] = REPAIR_REQUEST_ENGINEER_LIST_VIEWS;
-    if (!views.includes(params.view)) {
-      throw new DomainError(REPAIR_REQUEST_ERROR.INVALID_PARAMS, '工程师列表视图无效', {
-        view: params.view,
+    const scopes: readonly string[] = REPAIR_REQUEST_ENGINEER_LIST_SCOPES;
+    if (!scopes.includes(params.scope)) {
+      throw new DomainError(REPAIR_REQUEST_ERROR.INVALID_PARAMS, '工程师列表范围无效', {
+        scope: params.scope,
       });
     }
-    const view = params.view as RepairRequestEngineerListView;
+    const scope = params.scope as RepairRequestEngineerListScope;
     if (params.pagination.mode !== 'OFFSET') {
       throw new DomainError(
         REPAIR_REQUEST_ERROR.INVALID_PARAMS,
@@ -52,7 +52,7 @@ export class ListEngineerRepairRequestsUsecase {
     ) as OffsetParams;
     return this.repairRequestQueryService.listByEngineer({
       engineerAccountId: params.session.accountId,
-      view,
+      scope,
       pagination: { page, pageSize, withTotal: withTotal ?? false },
     });
   }

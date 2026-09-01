@@ -2,6 +2,7 @@
 
 import { UsecaseSession } from '@app-types/auth/session.types';
 import { IdentityTypeEnum } from '@app-types/models/account.types';
+import { hasRole } from '@core/account/policy/role-access.policy';
 import { DomainError, PERMISSION_ERROR } from '@core/common/errors/domain-error';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -10,10 +11,11 @@ import { EngineerResponseEntity } from '../entities/engineer-response.entity';
 import { EquipmentModelEntity } from '../entities/equipment-model.entity';
 import { RepairRequestEntity } from '../entities/repair-request.entity';
 import {
-  EngineerResponseView,
+  EngineerResponseQueryResult,
   EquipmentModelView,
-  RepairRequestDetailView,
-  RepairRequestEngineerListView,
+  RepairRequestDetailQueryResult,
+  RepairRequestDetailReadScope,
+  RepairRequestEngineerListScope,
   RepairRequestListItemView,
   RepairRequestListPage,
   RepairRequestListPagination,
@@ -27,13 +29,15 @@ const LIST_ORDER = { createdAt: 'DESC', id: 'DESC' } as const;
  *
  * 职责范围：
  * - 客户维度有效申请列表（仅本人、未删除）
- * - 工程师两视图列表（待接单 / 本人已接单）
- * - 客户与工程师共用详情（含回复时间线、机型、最新处理状态）
- * - 细粒度读权限判定（对接方案第三节权限矩阵）
+ * - 工程师两范围列表（待接单 / 本人已接单）
+ * - 客户与工程师详情（含回复时间线、机型、最新处理状态；按入口 scope 限定有效身份）
+ * - 细粒度读权限判定（对接方案第三节权限矩阵 + 负责人 20260901 裁定）
  *
  * 不包含：
  * - 任何写入（接单 / 删除 / 回复由各自 Usecase 编排）
  * - 归属类账号 ID 输出（customerAccountId / acceptedByEngineerAccountId 不进入视图）
+ * - 工程师昵称富集（回复携带工程师账号 ID 的内部装配结果，
+ *   由 usecase 跨域关联账号域昵称后对外输出）
  */
 @Injectable()
 export class RepairRequestQueryService {
@@ -59,28 +63,28 @@ export class RepairRequestQueryService {
 
   /**
    * 工程师维度列表：
-   * - AWAITING：未删除且未接单（待接单池）
+   * - AVAILABLE：未删除且未接单（待接单池）
    * - MINE：本人已接单
    */
   async listByEngineer(params: {
     engineerAccountId: number;
-    view: RepairRequestEngineerListView;
+    scope: RepairRequestEngineerListScope;
     pagination: RepairRequestListPagination;
   }): Promise<RepairRequestListPage> {
     const where =
-      params.view === 'AWAITING'
+      params.scope === 'AVAILABLE'
         ? { deprecated: false, isAccepted: false }
         : { acceptedByEngineerAccountId: params.engineerAccountId };
     return this.listPage(where, params.pagination);
   }
 
   /**
-   * 共用详情读取（客户 + 工程师），细粒度读权限在本方法内判定。
+   * 详情读取（客户 / 工程师入口共用），细粒度读权限在本方法内按 scope 判定。
    *
-   * 权限口径（对接方案第三节）：
-   * - CUSTOMER：仅本人申请；已删除视为不可访问
-   * - ENGINEER：未接单且未删除的申请，或本人已接单的申请
-   * - 其余角色（含 SUPER_ADMIN）第一版不继承读权限
+   * 权限口径（对接方案第三节 + 负责人 20260901 裁定 2）：
+   * - scope=CUSTOMER：仅本人申请；已删除视为不可访问
+   * - scope=ENGINEER：未接单且未删除的申请，或本人已接单的申请
+   * - SUPER_ADMIN 按角色继承规则展开为 ENGINEER + CUSTOMER（roleHierarchy）
    *
    * 不存在、已删除与越权统一拒绝，不区分对外表述，防止资源存在性探测。
    *
@@ -89,9 +93,10 @@ export class RepairRequestQueryService {
   async findDetail(params: {
     requestId: number;
     session: UsecaseSession;
-  }): Promise<RepairRequestDetailView> {
+    scope: RepairRequestDetailReadScope;
+  }): Promise<RepairRequestDetailQueryResult> {
     const entity = await this.requestRepository.findOne({ where: { id: params.requestId } });
-    if (!entity || !this.canReadRequest(entity, params.session)) {
+    if (!entity || !this.canReadRequest(entity, params.session, params.scope)) {
       // details 仅含申请标识，不泄露归属与存在性
       throw new DomainError(PERMISSION_ERROR.ACCESS_DENIED, '维修申请不存在或不可查看', {
         id: params.requestId,
@@ -118,35 +123,35 @@ export class RepairRequestQueryService {
       acceptedAt: entity.acceptedAt,
       latestResolutionStatus:
         responses.length > 0 ? responses[responses.length - 1].resolutionStatus : null,
-      responses: responses.map((response) => this.toResponseView(response)),
+      responses: responses.map((response) => this.toResponseQueryResult(response)),
     };
   }
 
   /**
    * 细粒度读权限判定（纯函数语义，防探测：不区分「不存在/无权限」）
    *
-   * session.roles 由 adapter 边界 mapJwtToUsecaseSession 归一化（大写/去重/去空），
-   * 本处直接消费；不用 core 的 hasRole()——其角色层级展开会让 SUPER_ADMIN
-   * 继承 ENGINEER/CUSTOMER，与「第一版不继承读权限」裁定相抵触。
+   * 角色按 roleHierarchy 展开（hasRole）：SUPER_ADMIN 继承 ENGINEER + CUSTOMER
+   * 读能力（负责人 20260901 裁定 2）；写侧删除不继承（由删除用例另行约束）。
+   * scope 限定本入口的有效身份：客户入口只按客户身份判，工程师入口只按工程师身份判。
    */
-  private canReadRequest(entity: RepairRequestEntity, session: UsecaseSession): boolean {
-    const isCustomer = session.roles.includes(IdentityTypeEnum.CUSTOMER);
-    const isEngineer = session.roles.includes(IdentityTypeEnum.ENGINEER);
-
-    if (isCustomer && entity.customerAccountId === session.accountId) {
-      // 客户本人申请：已删除后不可访问
+  private canReadRequest(
+    entity: RepairRequestEntity,
+    session: UsecaseSession,
+    scope: RepairRequestDetailReadScope,
+  ): boolean {
+    if (scope === 'CUSTOMER') {
+      if (!hasRole(session.roles, IdentityTypeEnum.CUSTOMER)) return false;
+      // 客户本人申请：已删除后不可访问（超管以客户身份继承时同样只见本人申请）
+      return entity.customerAccountId === session.accountId && !entity.deprecated;
+    }
+    if (!hasRole(session.roles, IdentityTypeEnum.ENGINEER)) return false;
+    // 工程师：待接单（未删除且未接单）或本人已接单；
+    // 已接单分支不受软删除约束（对接方案第三节权限矩阵），
+    // 写契约保证已接单申请不可删除，此处为口径自洽而非遗漏
+    if (!entity.isAccepted) {
       return !entity.deprecated;
     }
-    if (isEngineer) {
-      // 工程师：待接单（未删除且未接单）或本人已接单；
-      // 已接单分支不受软删除约束（对接方案第三节权限矩阵），
-      // 写契约保证已接单申请不可删除，此处为口径自洽而非遗漏
-      if (!entity.isAccepted) {
-        return !entity.deprecated;
-      }
-      return entity.acceptedByEngineerAccountId === session.accountId;
-    }
-    return false;
+    return entity.acceptedByEngineerAccountId === session.accountId;
   }
 
   private async listPage(
@@ -219,7 +224,7 @@ export class RepairRequestQueryService {
     return latestByRequestId;
   }
 
-  private toResponseView(entity: EngineerResponseEntity): EngineerResponseView {
+  private toResponseQueryResult(entity: EngineerResponseEntity): EngineerResponseQueryResult {
     return {
       id: entity.id,
       engineerAccountId: entity.engineerAccountId,

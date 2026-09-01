@@ -1,3 +1,5 @@
+import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
+
 export enum AiConversationStatus {
   ACTIVE = 'ACTIVE',
   COMPLETED = 'COMPLETED',
@@ -8,11 +10,6 @@ export enum AiMessageRole {
   USER = 'USER',
   ASSISTANT = 'ASSISTANT',
   TOOL = 'TOOL',
-}
-
-export enum EngineerResolutionStatus {
-  PENDING = 'PENDING',
-  RESOLVED = 'RESOLVED',
 }
 
 /**
@@ -58,12 +55,18 @@ export type RepairRequestSnapshot = {
 };
 
 /**
- * 工程师列表视图枚举（对接方案第三节权限矩阵的两视图）。
+ * 工程师列表范围枚举（负责人 20260901 裁定：scope = AVAILABLE / MINE）。
  * GraphQL 层以字符串表达，由 Usecase 校验，adapter 不导入本常量。
  */
-export const REPAIR_REQUEST_ENGINEER_LIST_VIEWS = ['AWAITING', 'MINE'] as const;
+export const REPAIR_REQUEST_ENGINEER_LIST_SCOPES = ['AVAILABLE', 'MINE'] as const;
 
-export type RepairRequestEngineerListView = (typeof REPAIR_REQUEST_ENGINEER_LIST_VIEWS)[number];
+export type RepairRequestEngineerListScope = (typeof REPAIR_REQUEST_ENGINEER_LIST_SCOPES)[number];
+
+/**
+ * 详情读入口的角色范围：客户入口与工程师入口按角色分开（负责人 20260901 裁定），
+ * 同一 DTO 由 QueryService 按 scope 限定有效身份判定数据范围。
+ */
+export type RepairRequestDetailReadScope = 'CUSTOMER' | 'ENGINEER';
 
 /**
  * 维修申请列表项稳定读视图。
@@ -83,16 +86,24 @@ export type RepairRequestListItemView = {
 };
 
 /**
- * 工程师回复稳定读视图。
- * engineerAccountId 为展示专用字段（第一版昵称方案撤回后的唯一身份载体）：
- * 不参与归属判断、不作为访问控制依据，前端只读不回传。
+ * 工程师回复稳定读视图（对外契约）。
+ * engineerNickname 为实时关联账号安全昵称（负责人裁定 3：不存快照，读时关联返回，
+ * 缺失回落「工程师」由 usecase 保证）；不返回工程师账号 ID。
  */
 export type EngineerResponseView = {
   id: number;
-  engineerAccountId: number;
+  engineerNickname: string;
   resolutionStatus: EngineerResolutionStatus;
   responseText: string;
   createdAt: Date;
+};
+
+/**
+ * 工程师回复 QueryService 内部装配结果：含归属工程师账号 ID，
+ * 仅供 usecase 跨域富集昵称使用，不对外输出。
+ */
+export type EngineerResponseQueryResult = Omit<EngineerResponseView, 'engineerNickname'> & {
+  engineerAccountId: number;
 };
 
 /**
@@ -115,7 +126,7 @@ export type RepairRequestListPage = {
 };
 
 /**
- * 维修申请详情稳定读视图（客户与工程师共用结构，读权限由 QueryService 按身份判定）。
+ * 维修申请详情稳定读视图（客户与工程师入口共用结构，读权限由 QueryService 按身份判定）。
  * responses 按 createdAt ASC + id ASC 排序；不暴露归属类账号 ID。
  */
 export type RepairRequestDetailView = {
@@ -131,4 +142,12 @@ export type RepairRequestDetailView = {
   /** 最新回复处理状态（按 createdAt DESC + id DESC 取末条）；尚无回复时为 null */
   latestResolutionStatus: EngineerResolutionStatus | null;
   responses: EngineerResponseView[];
+};
+
+/**
+ * 详情 QueryService 装配结果（昵称富集前）：回复含工程师账号 ID，
+ * 由 usecase 跨域富集为工程师昵称后才对外输出。
+ */
+export type RepairRequestDetailQueryResult = Omit<RepairRequestDetailView, 'responses'> & {
+  responses: EngineerResponseQueryResult[];
 };

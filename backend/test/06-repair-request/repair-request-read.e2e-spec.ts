@@ -2,10 +2,11 @@
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ApiModule } from '@src/bootstraps/api/api.module';
+import { UserInfoEntity } from '@src/modules/account/base/entities/user-info.entity';
 import { EngineerResponseEntity } from '@src/modules/lithography/entities/engineer-response.entity';
 import { EquipmentModelEntity } from '@src/modules/lithography/entities/equipment-model.entity';
 import { RepairRequestEntity } from '@src/modules/lithography/entities/repair-request.entity';
-import { EngineerResolutionStatus } from '@src/modules/lithography/lithography.types';
+import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
 import { CreateAccountUsecase } from '@src/usecases/account/create-account.usecase';
 import { App } from 'supertest/types';
 import { DataSource, Repository } from 'typeorm';
@@ -34,8 +35,8 @@ const MY_LIST_QUERY = `
 `;
 
 const ENGINEER_LIST_QUERY = `
-  query EngineerRepairRequests($view: String!, $pagination: PaginationArgs!) {
-    engineerRepairRequests(view: $view, pagination: $pagination) {
+  query EngineerRepairRequests($scope: String!, $pagination: PaginationArgs!) {
+    engineerRepairRequests(scope: $scope, pagination: $pagination) {
       items {
         id
         requestNo
@@ -51,9 +52,10 @@ const ENGINEER_LIST_QUERY = `
   }
 `;
 
-const DETAIL_QUERY = `
-  query RepairRequestDetail($id: Int!) {
-    repairRequestDetail(id: $id) {
+// 详情入口按角色分开（负责人 20260901 裁定）：同 DTO，不同 Guard/数据范围
+const MY_DETAIL_QUERY = `
+  query MyRepairRequest($id: Int!) {
+    myRepairRequest(id: $id) {
       id
       requestNo
       errorCode
@@ -64,7 +66,25 @@ const DETAIL_QUERY = `
       acceptedAt
       latestResolutionStatus
       equipmentModel { id modelCode modelName }
-      responses { id engineerAccountId resolutionStatus responseText createdAt }
+      responses { id engineerNickname resolutionStatus responseText createdAt }
+    }
+  }
+`;
+
+const ENGINEER_DETAIL_QUERY = `
+  query EngineerRepairRequest($id: Int!) {
+    engineerRepairRequest(id: $id) {
+      id
+      requestNo
+      errorCode
+      faultDescription
+      contentMd
+      createdAt
+      isAccepted
+      acceptedAt
+      latestResolutionStatus
+      equipmentModel { id modelCode modelName }
+      responses { id engineerNickname resolutionStatus responseText createdAt }
     }
   }
 `;
@@ -74,11 +94,12 @@ const OFFSET_PAGINATION = { mode: 'OFFSET', page: 1, pageSize: 10, withTotal: tr
 /**
  * 维修申请公共读模型回归（core 组）
  *
- * 覆盖对接方案第一~三节契约：
- * - 客户列表仅本人且未删除；工程师两视图（待接单 / 我的接单）
- * - 共用详情（含回复时间线、机型、末条处理状态口径）
+ * 覆盖负责人 20260901 裁定契约：
+ * - 客户列表仅本人且未删除；工程师两范围（AVAILABLE 待接单 / MINE 我的接单）
+ * - 详情按角色分入口（myRepairRequest / engineerRepairRequest，含回复时间线、机型、末条状态口径）
+ * - 回复返回工程师安全昵称（实时关联，缺失回落「工程师」）；不返回工程师账号 ID
  * - 双角色读权限矩阵 + 越权/已删除/不存在统一拒绝（防探测）
- * - 未登录与守卫角色准入；分页参数（OFFSET 强制、withTotal）
+ * - SUPER_ADMIN 按角色继承规则准入；未登录与守卫角色准入；分页参数（OFFSET 强制、withTotal）
  *
  * 造数固定主键（111~115 申请、121~122 回复、41 型号），
  * 依赖 global-setup-e2e 的全表 TRUNCATE 保证无冲突。
@@ -368,12 +389,12 @@ describe('维修申请公共读模型 (e2e)', () => {
     });
   });
 
-  describe('engineerRepairRequests 工程师两视图', () => {
-    it('AWAITING 视图仅返回未删除且未接单的申请', async () => {
+  describe('engineerRepairRequests 工程师两范围', () => {
+    it('AVAILABLE 范围仅返回未删除且未接单的申请', async () => {
       const response = await postGql({
         app,
         query: ENGINEER_LIST_QUERY,
-        variables: { view: 'AWAITING', pagination: OFFSET_PAGINATION },
+        variables: { scope: 'AVAILABLE', pagination: OFFSET_PAGINATION },
         token: engineerToken,
       }).expect(200);
 
@@ -385,11 +406,11 @@ describe('维修申请公共读模型 (e2e)', () => {
       );
     });
 
-    it('MINE 视图仅返回本人已接单的申请', async () => {
+    it('MINE 范围仅返回本人已接单的申请', async () => {
       const response = await postGql({
         app,
         query: ENGINEER_LIST_QUERY,
-        variables: { view: 'MINE', pagination: OFFSET_PAGINATION },
+        variables: { scope: 'MINE', pagination: OFFSET_PAGINATION },
         token: engineerToken,
       }).expect(200);
 
@@ -398,11 +419,11 @@ describe('维修申请公共读模型 (e2e)', () => {
       expect(page.items[0].acceptedAt).not.toBeNull();
     });
 
-    it('另一位工程师的 MINE 视图互不串扰', async () => {
+    it('另一位工程师的 MINE 范围互不串扰', async () => {
       const response = await postGql({
         app,
         query: ENGINEER_LIST_QUERY,
-        variables: { view: 'MINE', pagination: OFFSET_PAGINATION },
+        variables: { scope: 'MINE', pagination: OFFSET_PAGINATION },
         token: otherEngineerToken,
       }).expect(200);
 
@@ -410,11 +431,11 @@ describe('维修申请公共读模型 (e2e)', () => {
       expect(page.items.map((item: { id: number }) => item.id)).toEqual([115]);
     });
 
-    it('非法视图字符串拒绝', async () => {
+    it('非法范围字符串拒绝', async () => {
       const response = await postGql({
         app,
         query: ENGINEER_LIST_QUERY,
-        variables: { view: 'ALL', pagination: OFFSET_PAGINATION },
+        variables: { scope: 'ALL', pagination: OFFSET_PAGINATION },
         token: engineerToken,
       }).expect(200);
 
@@ -423,17 +444,25 @@ describe('维修申请公共读模型 (e2e)', () => {
     });
   });
 
-  describe('repairRequestDetail 共用详情', () => {
+  describe('myRepairRequest / engineerRepairRequest 详情（按角色分入口）', () => {
+    const getExpectedEngineerNickname = async (): Promise<string> => {
+      const userInfo = await dataSource
+        .getRepository(UserInfoEntity)
+        .findOne({ where: { accountId: engineerAccountId } });
+      const nickname = userInfo?.nickname?.trim();
+      return nickname ? nickname : '工程师';
+    };
+
     it('客户本人未接单申请可读（无回复时状态为空）', async () => {
       const response = await postGql({
         app,
-        query: DETAIL_QUERY,
+        query: MY_DETAIL_QUERY,
         variables: { id: 111 },
         token: customerToken,
       }).expect(200);
 
       expect(response.body.errors).toBeUndefined();
-      const detail = response.body.data.repairRequestDetail;
+      const detail = response.body.data.myRepairRequest;
       expect(detail).toMatchObject({
         id: 111,
         requestNo: 'E2E-RD-111',
@@ -447,48 +476,49 @@ describe('维修申请公共读模型 (e2e)', () => {
       expect(detail).not.toHaveProperty('customerAccountId');
     });
 
-    it('客户本人已接单申请含回复时间线（时间正序，末条状态为最新）', async () => {
+    it('客户本人已接单申请含回复时间线与工程师当前昵称（时间正序，末条状态为最新）', async () => {
+      const expectedNickname = await getExpectedEngineerNickname();
       const response = await postGql({
         app,
-        query: DETAIL_QUERY,
+        query: MY_DETAIL_QUERY,
         variables: { id: 112 },
         token: customerToken,
       }).expect(200);
 
-      const detail = response.body.data.repairRequestDetail;
+      const detail = response.body.data.myRepairRequest;
       expect(detail.latestResolutionStatus).toBe('RESOLVED');
       expect(detail.responses.map((item: { id: number }) => item.id)).toEqual([121, 122]);
       expect(detail.responses[1]).toMatchObject({
-        engineerAccountId: engineerAccountId,
+        engineerNickname: expectedNickname,
         resolutionStatus: 'RESOLVED',
         responseText: '已更换部件，问题解决',
       });
     });
 
-    it('工程师可读未接单申请与自己已接单的申请', async () => {
+    it('工程师可读未接单申请与自己已接单的申请（工程师入口）', async () => {
       const awaiting = await postGql({
         app,
-        query: DETAIL_QUERY,
+        query: ENGINEER_DETAIL_QUERY,
         variables: { id: 114 },
         token: engineerToken,
       }).expect(200);
       expect(awaiting.body.errors).toBeUndefined();
-      expect(awaiting.body.data.repairRequestDetail.id).toBe(114);
+      expect(awaiting.body.data.engineerRepairRequest.id).toBe(114);
 
       const mine = await postGql({
         app,
-        query: DETAIL_QUERY,
+        query: ENGINEER_DETAIL_QUERY,
         variables: { id: 112 },
         token: engineerToken,
       }).expect(200);
       expect(mine.body.errors).toBeUndefined();
-      expect(mine.body.data.repairRequestDetail.id).toBe(112);
+      expect(mine.body.data.engineerRepairRequest.id).toBe(112);
     });
 
     it('客户访问他人申请 / 本人已删除申请统一拒绝（防探测）', async () => {
       const others = await postGql({
         app,
-        query: DETAIL_QUERY,
+        query: MY_DETAIL_QUERY,
         variables: { id: 114 },
         token: customerToken,
       }).expect(200);
@@ -497,7 +527,7 @@ describe('维修申请公共读模型 (e2e)', () => {
 
       const deleted = await postGql({
         app,
-        query: DETAIL_QUERY,
+        query: MY_DETAIL_QUERY,
         variables: { id: 113 },
         token: customerToken,
       }).expect(200);
@@ -508,7 +538,7 @@ describe('维修申请公共读模型 (e2e)', () => {
     it('工程师访问他人已接单申请 / 不存在申请统一拒绝', async () => {
       const others = await postGql({
         app,
-        query: DETAIL_QUERY,
+        query: ENGINEER_DETAIL_QUERY,
         variables: { id: 115 },
         token: engineerToken,
       }).expect(200);
@@ -517,7 +547,7 @@ describe('维修申请公共读模型 (e2e)', () => {
 
       const missing = await postGql({
         app,
-        query: DETAIL_QUERY,
+        query: ENGINEER_DETAIL_QUERY,
         variables: { id: 999999 },
         token: engineerToken,
       }).expect(200);
@@ -525,23 +555,95 @@ describe('维修申请公共读模型 (e2e)', () => {
       expectAccessDenied(missing.body.errors[0]);
     });
 
-    it('SUPER_ADMIN 第一版不继承读权限（守卫层拒绝）', async () => {
+    it('CUSTOMER 调工程师详情入口被守卫拒绝（入口按角色分开）', async () => {
       const response = await postGql({
         app,
-        query: DETAIL_QUERY,
+        query: ENGINEER_DETAIL_QUERY,
+        variables: { id: 111 },
+        token: customerToken,
+      }).expect(200);
+
+      expect(response.body.errors).toHaveLength(1);
+      expect(response.body.errors[0].extensions.code).toBe('FORBIDDEN');
+      expect(response.body.errors[0].extensions.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
+    });
+
+    it('回复契约不再包含 engineerAccountId 字段（负责人裁定 3，查询未知字段拒绝）', async () => {
+      const legacyQuery = `
+        query MyRepairRequest($id: Int!) {
+          myRepairRequest(id: $id) {
+            responses { id engineerAccountId }
+          }
+        }
+      `;
+      const response = await postGql({
+        app,
+        query: legacyQuery,
+        variables: { id: 112 },
+        token: customerToken,
+      });
+
+      // 未知字段在 schema 校验阶段被拒（400 或 200+errors），且不返回数据
+      expect([200, 400]).toContain(response.status);
+      expect(response.body.errors.length).toBeGreaterThan(0);
+      expect(JSON.stringify(response.body.errors)).toContain('engineerAccountId');
+      expect(response.body.data ?? null).toBeNull();
+    });
+  });
+
+  describe('SUPER_ADMIN 按角色继承规则准入（负责人 20260901 裁定 2）', () => {
+    it('超管经工程师入口可读未接单申请（继承工程师访问能力）', async () => {
+      const response = await postGql({
+        app,
+        query: ENGINEER_DETAIL_QUERY,
+        variables: { id: 111 },
+        token: adminToken,
+      }).expect(200);
+
+      expect(response.body.errors).toBeUndefined();
+      expect(response.body.data.engineerRepairRequest.id).toBe(111);
+    });
+
+    it('超管继承工程师身份仍不可读他人已接单申请', async () => {
+      const response = await postGql({
+        app,
+        query: ENGINEER_DETAIL_QUERY,
+        variables: { id: 115 },
+        token: adminToken,
+      }).expect(200);
+
+      expect(response.body.errors).toHaveLength(1);
+      expectAccessDenied(response.body.errors[0]);
+    });
+
+    it('超管经客户入口仅见本人名下申请（不可见客户申请）', async () => {
+      const response = await postGql({
+        app,
+        query: MY_DETAIL_QUERY,
         variables: { id: 111 },
         token: adminToken,
       }).expect(200);
 
       expect(response.body.errors).toHaveLength(1);
-      const err = response.body.errors[0];
-      expect(err.extensions.code).toBe('FORBIDDEN');
-      expect(err.extensions.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
+      expectAccessDenied(response.body.errors[0]);
+    });
+
+    it('超管调工程师列表可见待接单池', async () => {
+      const response = await postGql({
+        app,
+        query: ENGINEER_LIST_QUERY,
+        variables: { scope: 'AVAILABLE', pagination: OFFSET_PAGINATION },
+        token: adminToken,
+      }).expect(200);
+
+      expect(response.body.errors).toBeUndefined();
+      const page = response.body.data.engineerRepairRequests;
+      expect(page.items.map((item: { id: number }) => item.id)).toEqual([114, 111]);
     });
   });
 
   describe('端点守卫与未登录', () => {
-    it('未登录访问三个读入口均返回 UNAUTHENTICATED', async () => {
+    it('未登录访问读入口均返回 UNAUTHENTICATED', async () => {
       const myList = await postGql({
         app,
         query: MY_LIST_QUERY,
@@ -552,21 +654,30 @@ describe('维修申请公共读模型 (e2e)', () => {
       const engineerList = await postGql({
         app,
         query: ENGINEER_LIST_QUERY,
-        variables: { view: 'AWAITING', pagination: OFFSET_PAGINATION },
+        variables: { scope: 'AVAILABLE', pagination: OFFSET_PAGINATION },
       }).expect(200);
       expectUnauthenticated(engineerList.body.errors[0]);
 
-      const detail = await postGql({ app, query: DETAIL_QUERY, variables: { id: 111 } }).expect(
-        200,
-      );
-      expectUnauthenticated(detail.body.errors[0]);
+      const myDetail = await postGql({
+        app,
+        query: MY_DETAIL_QUERY,
+        variables: { id: 111 },
+      }).expect(200);
+      expectUnauthenticated(myDetail.body.errors[0]);
+
+      const engineerDetail = await postGql({
+        app,
+        query: ENGINEER_DETAIL_QUERY,
+        variables: { id: 111 },
+      }).expect(200);
+      expectUnauthenticated(engineerDetail.body.errors[0]);
     });
 
     it('角色互斥：CUSTOMER 调工程师列表 / ENGINEER 调客户列表均被拒', async () => {
       const customerAsEngineer = await postGql({
         app,
         query: ENGINEER_LIST_QUERY,
-        variables: { view: 'AWAITING', pagination: OFFSET_PAGINATION },
+        variables: { scope: 'AVAILABLE', pagination: OFFSET_PAGINATION },
         token: customerToken,
       }).expect(200);
       expect(customerAsEngineer.body.errors[0].extensions.code).toBe('FORBIDDEN');

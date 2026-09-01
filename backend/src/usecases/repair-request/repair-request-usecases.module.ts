@@ -1,25 +1,29 @@
 // src/usecases/repair-request/repair-request-usecases.module.ts
 
 import { Module } from '@nestjs/common';
+import { AccountInstallerModule } from '@src/modules/account/account-installer.module';
 import { LithographyModule } from '@src/modules/lithography/lithography.module';
 import { CreateRepairRequestUsecase } from './create-repair-request.usecase';
-import { GetRepairRequestDetailUsecase } from './get-repair-request-detail.usecase';
+import { GetEngineerRepairRequestDetailUsecase } from './get-engineer-repair-request-detail.usecase';
+import { GetMyRepairRequestDetailUsecase } from './get-my-repair-request-detail.usecase';
 import { ListEquipmentModelsUsecase } from './list-equipment-models.usecase';
 import { ListEngineerRepairRequestsUsecase } from './list-engineer-repair-requests.usecase';
 import { ListMyRepairRequestsUsecase } from './list-my-repair-requests.usecase';
 
 @Module({
-  imports: [LithographyModule],
+  imports: [LithographyModule, AccountInstallerModule],
   providers: [
     CreateRepairRequestUsecase,
-    GetRepairRequestDetailUsecase,
+    GetEngineerRepairRequestDetailUsecase,
+    GetMyRepairRequestDetailUsecase,
     ListEquipmentModelsUsecase,
     ListEngineerRepairRequestsUsecase,
     ListMyRepairRequestsUsecase,
   ],
   exports: [
     CreateRepairRequestUsecase,
-    GetRepairRequestDetailUsecase,
+    GetEngineerRepairRequestDetailUsecase,
+    GetMyRepairRequestDetailUsecase,
     ListEquipmentModelsUsecase,
     ListEngineerRepairRequestsUsecase,
     ListMyRepairRequestsUsecase,
