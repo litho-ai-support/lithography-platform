@@ -18,3 +18,16 @@ Object.defineProperty(window, 'matchMedia', {
   }),
   writable: false,
 });
+
+// Popconfirm / Tooltip 等浮层组件依赖 ResizeObserver，jsdom 同样未提供，补最小 stub。
+class ResizeObserverStub {
+  disconnect(): void {}
+  observe(): void {}
+  unobserve(): void {}
+}
+
+Object.defineProperty(window, 'ResizeObserver', {
+  configurable: true,
+  value: ResizeObserverStub,
+  writable: false,
+});

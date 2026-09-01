@@ -46,13 +46,8 @@ const CREATED_RECORD = {
 };
 
 function stubBrowserApis() {
-  // matchMedia 桩由全局测试 setup（src/test/setup.ts）提供，此处不重复定义；
-  // 只补齐 jsdom 缺失且 antd 依赖的其余浏览器 API。
-  (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
-    disconnect() {}
-    observe() {}
-    unobserve() {}
-  };
+  // matchMedia 与 ResizeObserver 桩均由全局测试 setup（src/test/setup.ts）提供，
+  // 此处只补齐 jsdom 缺失且 antd 依赖的其余浏览器 API。
   Element.prototype.scrollIntoView = () => {};
 }
 
