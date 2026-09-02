@@ -38,6 +38,9 @@ function resolvePageAfterDelete(page: number, pageSize: number, total: number): 
   return Math.min(page, lastPage);
 }
 
+// 列表每页条数：小页容是演示/评审场景的取舍，翻页器随总数自动出现。
+const PAGE_SIZE = 3;
+
 /**
  * 客户「我的维修申请」列表页。
  *
@@ -51,7 +54,7 @@ export function CustomerRepairRequestsPage() {
   const [listState, setListState] = useState<ListState>({ status: 'loading' });
   const [pagination, setPagination] = useState<RepairRequestListPagination>({
     page: 1,
-    pageSize: 10,
+    pageSize: PAGE_SIZE,
   });
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const deletingRef = useRef(false);

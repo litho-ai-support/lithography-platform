@@ -40,7 +40,7 @@ async function fulfillEmptyListQuery(page: Page): Promise<void> {
   await page.route('**/graphql', (route) =>
     route.fulfill({
       body: JSON.stringify({
-        data: { myRepairRequests: { items: [], total: 0, page: 1, pageSize: 10 } },
+        data: { myRepairRequests: { items: [], total: 0, page: 1, pageSize: 3 } },
       }),
       contentType: 'application/json',
       status: 200,
