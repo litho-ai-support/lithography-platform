@@ -1,11 +1,18 @@
 // e2e/repair-request-create.spec.ts
 
 import { expect, type Page, type Route, test } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 import { readStoredAuthSession, seedAuthSession } from './helpers/auth-session-seed';
+import {
+  deleteRepairRequestByRequestNo,
+  findRepairRequestByRequestNo,
+  hasFrontendGraphQLEndpoint,
+  isRealBackendAvailable,
+  readBackendEnv,
+  readBackendEnvOrNull,
+  realLoginAccountId,
+  REQUEST_NO_PATTERN,
+} from './helpers/real-backend';
 
 const CREATE_PAGE_PATH = '/customer/repair-requests/new';
 const CUSTOMER_HOME_PATH = '/customer';
@@ -320,10 +327,10 @@ test('double click sends exactly one mutation and shows the result', async ({ pa
   await expect(page.getByText('申请编号：RR-2026-0001')).toBeVisible();
   expect(getCreateCount()).toBe(1);
 
-  // 成功态返回客户首页（申请列表能力尚不存在，负责人裁定不跳尚不存在的列表）
-  await page.getByRole('button', { name: '返回客户首页' }).click();
-  await expect(page).toHaveURL(/\/customer$/);
-  await expect(page.getByRole('button', { name: '发起维修申请' })).toBeVisible();
+  // T-05：创建成功页跳维修申请列表（本用例 route 已 mock 成 create 响应形状，
+  // 列表页数据态不属本用例范围，仅断言导航路径；数据流断言见 manage 系列 spec）
+  await page.getByRole('button', { name: '查看维修申请' }).click();
+  await expect(page).toHaveURL(/\/customer\/repair-requests$/);
 });
 
 // ---------- 提交期 transport 失败（区别于业务拒绝与 UNAUTHENTICATED 的第三条错误路径） ----------
@@ -348,120 +355,8 @@ test('transport failure on submit keeps the form and must not clear the session'
 });
 
 // ---------- 真实后端：真实登录 + 真实 Mutation + 落库验证 ----------
-// 前提（任一不满足则用例自动跳过，不会以失败阻塞）：
-// 1. 本地 dev 后端在 127.0.0.1:3000 运行，且启动时 APP_CORS_ORIGINS 运行时覆盖含 http://127.0.0.1:4173；
-// 2. backend/env/.env.development 存在（本地文件，不入库）且本机可用 mysql CLI；
-// 3. frontend/env/.env.development.local 提供 VITE_GRAPHQL_ENDPOINT，否则前端回退相对路径 /graphql，
-//    浏览器侧请求到不了本地后端。
-// 运行后自行清理产生的申请行，不污染共享开发库基线。
-
-const BACKEND_GRAPHQL = 'http://127.0.0.1:3000/graphql';
-const BACKEND_HEALTH = 'http://127.0.0.1:3000/health';
-const BACKEND_ENV_FILE = fileURLToPath(
-  new URL('../../backend/env/.env.development', import.meta.url),
-);
-const FRONTEND_LOCAL_ENV_FILE = fileURLToPath(
-  new URL('../env/.env.development.local', import.meta.url),
-);
-// 后端生成的申请编号格式：RR + 14 位时间戳 + 6 位加密随机字符（与后端单测断言一致），
-// 仅白名单匹配的编号才允许进入 SQL 拼接。
-const REQUEST_NO_PATTERN = /^RR\d{14}[A-Z0-9]{6}$/;
-
-function readBackendEnv(): Record<string, string> {
-  const entries: Record<string, string> = {};
-
-  for (const line of readFileSync(BACKEND_ENV_FILE, 'utf-8').split('\n')) {
-    const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
-    if (match) {
-      entries[match[1]] = match[2];
-    }
-  }
-
-  return entries;
-}
-
-// env 文件缺失或不可读时返回 null，让用例走 skip 分支而不是直接失败（该文件是本地文件，不入库）。
-function readBackendEnvOrNull(): Record<string, string> | null {
-  try {
-    return readBackendEnv();
-  } catch {
-    return null;
-  }
-}
-
-// 前端侧真实通道前提：本地 .env.development.local 必须配置 VITE_GRAPHQL_ENDPOINT，
-// 否则 dev server 回退相对路径 /graphql，浏览器侧请求到不了本地后端。
-function hasFrontendGraphQLEndpoint(): boolean {
-  try {
-    return /VITE_GRAPHQL_ENDPOINT\s*=\s*\S+/.test(readFileSync(FRONTEND_LOCAL_ENV_FILE, 'utf-8'));
-  } catch {
-    return false;
-  }
-}
-
-function mysqlQuery(sql: string): string {
-  const env = readBackendEnv();
-
-  return execFileSync(
-    'mysql',
-    ['-h', env.DB_HOST, '-P', env.DB_PORT, `-u${env.DB_USER}`, env.DB_NAME, '-N', '-B', '-e', sql],
-    // 密码经 MYSQL_PWD 注入（不出现在进程参数列表），并抑制 stderr，
-    // 避免 mysql CLI 的密码告警污染测试输出。
-    {
-      encoding: 'utf-8',
-      env: { ...process.env, MYSQL_PWD: env.DB_PASS },
-      stdio: ['ignore', 'pipe', 'ignore'],
-    },
-  ).trim();
-}
-
-// 可用性探针：健康检查 + 用真实 Mock 账号登录（同时验证后端已种子且登录链路可用）。
-// CORS 不在 Node 侧预检（fetch 不允许设置 Origin 等受限头），留给浏览器用例自身暴露。
-async function isRealBackendAvailable(env: Record<string, string>): Promise<boolean> {
-  try {
-    const health = await fetch(BACKEND_HEALTH);
-
-    if (!health.ok) {
-      return false;
-    }
-
-    await realLoginAccountId(env);
-
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// 真实登录拿账号 ID：落库断言以真实后端返回的 accountId 为准，不硬编码种子 ID。
-async function realLoginAccountId(env: Record<string, string>): Promise<number> {
-  const response = await fetch(BACKEND_GRAPHQL, {
-    body: JSON.stringify({
-      query:
-        'mutation LoginWithPassword($input: AuthLoginInput!) { login(input: $input) { accessToken accountId role } }',
-      variables: {
-        input: {
-          audience: 'SSTSWEB',
-          loginName: 'mock_customer_alpha',
-          loginPassword: env.MOCK_SEED_PASSWORD,
-          type: 'PASSWORD',
-        },
-      },
-    }),
-    headers: { 'Content-Type': 'application/json' },
-    method: 'POST',
-  });
-
-  const body = (await response.json()) as {
-    data?: { login?: { accountId: number } };
-  };
-
-  if (!body.data?.login) {
-    throw new Error('real login failed in e2e setup');
-  }
-
-  return body.data.login.accountId;
-}
+// 共享工具（env/探针/mysql/真实登录）见 ./helpers/real-backend；
+// 前提不满足时用例自动跳过，不会以失败阻塞；运行后自行清理产生的申请行。
 
 test.describe('real backend mutation', () => {
   test.beforeEach(async () => {
@@ -508,41 +403,50 @@ test.describe('real backend mutation', () => {
     await page.getByRole('button', { name: /登\s*录/ }).click();
     await expect(page).toHaveURL(/\/customer$/);
 
-    // 真实创建：型号来自真实库，提交走真实受保护通道
-    await page.goto(CREATE_PAGE_PATH);
-    await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
-    await page.getByRole('combobox').click();
-    await page.locator('.ant-select-item-option').first().click();
-    await page.getByLabel('设备错误码').fill('E2E-REAL');
-    await page.getByLabel('故障描述').fill('阶段五真实后端 e2e 用例');
-    await page.getByRole('button', { name: '提交申请' }).click();
+    // 自建行落库始于下方提交，之后任何断言失败都必须仍能清理（try/finally 兜底）
+    let requestNo: string | undefined;
+    try {
+      // 真实创建：型号来自真实库，提交走真实受保护通道
+      await page.goto(CREATE_PAGE_PATH);
+      await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
+      await page.getByRole('combobox').click();
+      await page.locator('.ant-select-item-option').first().click();
+      await page.getByLabel('设备错误码').fill('E2E-REAL');
+      await page.getByLabel('故障描述').fill('阶段五真实后端 e2e 用例');
+      await page.getByRole('button', { name: '提交申请' }).click();
 
-    await expect(page.getByText('维修申请创建成功')).toBeVisible();
+      await expect(page.getByText('维修申请创建成功')).toBeVisible();
 
-    const requestNo = (await page.getByText(/申请编号：/).textContent())
-      ?.replace('申请编号：', '')
-      .trim();
-    expect(requestNo).toBeTruthy();
-    // 白名单校验：仅后端格式（RR + 14 位时间戳 + 6 位随机字符）的编号才允许进入下方 SQL 拼接。
-    expect(requestNo).toMatch(REQUEST_NO_PATTERN);
+      requestNo = (await page.getByText(/申请编号：/).textContent())
+        ?.replace('申请编号：', '')
+        .trim();
+      expect(requestNo).toBeTruthy();
+      // 白名单校验：业务断言（受保护 helper 内部还有强制校验，见 real-backend.ts 守卫说明）。
+      expect(requestNo).toMatch(REQUEST_NO_PATTERN);
 
-    // 受保护通道证据：真实 Mutation 携带 Bearer
-    expect(mutationAuthorizations.length).toBe(1);
-    expect(mutationAuthorizations[0]).toMatch(/^Bearer .+/);
+      // 受保护通道证据：真实 Mutation 携带 Bearer
+      expect(mutationAuthorizations.length).toBe(1);
+      expect(mutationAuthorizations[0]).toMatch(/^Bearer .+/);
 
-    // 落库证据：账号取自 JWT（customer_account_id 与 mock 客户一致），初始未接单未删除
-    const row = mysqlQuery(
-      `SELECT customer_account_id, is_accepted, deleted_at FROM repair_request WHERE request_no = '${requestNo}'`,
-    );
-    expect(row.split('\t')[0]).toBe(String(expectedAccountId));
-    expect(row.split('\t')[1]).toBe('0');
-    expect(row.split('\t')[2]).toMatch(/^NULL$/);
+      // 落库证据：账号取自 JWT（customer_account_id 与 mock 客户一致），初始未接单未删除
+      const row = findRepairRequestByRequestNo(
+        requestNo!,
+        'customer_account_id, is_accepted, deleted_at',
+      );
+      expect(row.split('\t')[0]).toBe(String(expectedAccountId));
+      expect(row.split('\t')[1]).toBe('0');
+      expect(row.split('\t')[2]).toMatch(/^NULL$/);
 
-    // 清理：删除本用例产生的行，保持共享开发库基线干净（无删除接口，直连清理）
-    mysqlQuery(`DELETE FROM repair_request WHERE request_no = '${requestNo}'`);
-    expect(
-      mysqlQuery(`SELECT COUNT(*) FROM repair_request WHERE request_no = '${requestNo}'`),
-    ).toBe('0');
+      // 清理：删除本用例产生的行，保持共享开发库基线干净（无删除接口，直连清理）
+      deleteRepairRequestByRequestNo(requestNo!);
+      expect(findRepairRequestByRequestNo(requestNo!, 'COUNT(*)')).toBe('0');
+    } finally {
+      // 清理兜底：断言中途失败时仍删除本用例产生的行；受保护 helper 内部先白名单校验，
+      // 对不存在行是 no-op，幂等成立
+      if (requestNo) {
+        deleteRepairRequestByRequestNo(requestNo);
+      }
+    }
   });
 
   // 2026-08-29 负责人裁定：SUPER_ADMIN 第一版不代客户创建，路由层与 ENGINEER 一致拒绝。

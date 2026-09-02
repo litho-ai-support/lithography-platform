@@ -155,7 +155,7 @@ export const TIME_ERROR = {
 } as const;
 Object.freeze(TIME_ERROR);
 
-// 维修申请相关错误码（客户创建维修申请、设备型号校验、工程师接单等）
+// 维修申请相关错误码（客户创建/删除、设备型号校验、工程师接单等）
 export const REPAIR_REQUEST_ERROR = {
   CREATION_FAILED: 'REPAIR_REQUEST_CREATION_FAILED',
   INVALID_PARAMS: 'REPAIR_REQUEST_INVALID_PARAMS',
@@ -163,12 +163,14 @@ export const REPAIR_REQUEST_ERROR = {
   EQUIPMENT_MODEL_DISABLED: 'REPAIR_REQUEST_EQUIPMENT_MODEL_DISABLED',
   // 唯一索引冲突（并发写入同一申请编号），由 usecase 内部重试消化，外泄时属系统异常
   REQUEST_NO_CONFLICT: 'REPAIR_REQUEST_REQUEST_NO_CONFLICT',
-  // 接单：目标申请不存在或已删除（对外大类 NOT_FOUND）
+  // 读取/删除/接单：目标不可访问时统一使用 NOT_FOUND，避免泄露归属和删除状态
   NOT_FOUND: 'REPAIR_REQUEST_NOT_FOUND',
-  // 接单：申请已被接单（不区分本人重复接单与他人接单，对外大类 CONFLICT）
+  // 删除/接单：申请已被接单（不泄露接单人身份，对外大类 CONFLICT）
   ALREADY_ACCEPTED: 'REPAIR_REQUEST_ALREADY_ACCEPTED',
   // 接单：系统侧写入失败，不向客户端泄漏数据库细节（对外大类 INTERNAL_SERVER_ERROR）
   ACCEPT_FAILED: 'REPAIR_REQUEST_ACCEPT_FAILED',
+  // 软删除落库失败（系统侧故障，非业务拒绝）
+  DELETION_FAILED: 'REPAIR_REQUEST_DELETION_FAILED',
 } as const;
 Object.freeze(REPAIR_REQUEST_ERROR);
 

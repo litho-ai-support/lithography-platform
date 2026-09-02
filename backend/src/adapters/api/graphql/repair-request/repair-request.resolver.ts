@@ -15,11 +15,13 @@ import { mapGqlToCoreParams } from '@src/adapters/api/graphql/pagination.mapper'
 import { PaginationArgs } from '@src/adapters/api/graphql/pagination.args';
 import { AcceptRepairRequestUsecase } from '@src/usecases/repair-request/accept-repair-request.usecase';
 import { CreateRepairRequestUsecase } from '@src/usecases/repair-request/create-repair-request.usecase';
+import { DeleteMyRepairRequestUsecase } from '@src/usecases/repair-request/delete-my-repair-request.usecase';
 import { GetEngineerRepairRequestDetailUsecase } from '@src/usecases/repair-request/get-engineer-repair-request-detail.usecase';
 import { GetMyRepairRequestDetailUsecase } from '@src/usecases/repair-request/get-my-repair-request-detail.usecase';
 import { ListEngineerRepairRequestsUsecase } from '@src/usecases/repair-request/list-engineer-repair-requests.usecase';
 import { ListMyRepairRequestsUsecase } from '@src/usecases/repair-request/list-my-repair-requests.usecase';
 import { CreateRepairRequestInput } from './dto/create-repair-request.input';
+import { DeleteMyRepairRequestResultDTO } from './dto/delete-my-repair-request-result.dto';
 import { RepairRequestDTO } from './dto/repair-request.dto';
 import {
   RepairRequestDetailDTO,
@@ -37,6 +39,7 @@ export class RepairRequestResolver {
   constructor(
     private readonly createRepairRequestUsecase: CreateRepairRequestUsecase,
     private readonly acceptRepairRequestUsecase: AcceptRepairRequestUsecase,
+    private readonly deleteMyRepairRequestUsecase: DeleteMyRepairRequestUsecase,
     private readonly listMyRepairRequestsUsecase: ListMyRepairRequestsUsecase,
     private readonly listEngineerRepairRequestsUsecase: ListEngineerRepairRequestsUsecase,
     private readonly getMyRepairRequestDetailUsecase: GetMyRepairRequestDetailUsecase,
@@ -94,6 +97,28 @@ export class RepairRequestResolver {
       session: mapJwtToUsecaseSession(user),
     });
     return this.toDetailDTO(detail);
+  }
+
+  /**
+   * 客户删除自己的未接单维修申请（原子条件软删除）
+   * 仅 CUSTOMER 可删除；SUPER_ADMIN 不能以客户身份删除（负责人 20260901 裁定 2）；
+   * 错误语义（裁定 5）：不存在/非本人统一 NOT_FOUND，已接单 CONFLICT，
+   * 本人重复删除幂等成功；账号仅取自会话，客户端不可传入
+   */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(IdentityTypeEnum.CUSTOMER)
+  @Mutation(() => DeleteMyRepairRequestResultDTO, {
+    description: '客户删除自己的未接单维修申请（软删除；重复删除幂等成功）',
+  })
+  async deleteMyRepairRequest(
+    @Args({ name: 'id', type: () => Int, description: '维修申请 ID' }) id: number,
+    @currentUser() user: JwtPayload,
+  ): Promise<DeleteMyRepairRequestResultDTO> {
+    const result = await this.deleteMyRepairRequestUsecase.execute({
+      requestId: id,
+      session: mapJwtToUsecaseSession(user),
+    });
+    return { id: result.id, requestNo: result.requestNo };
   }
 
   /**

@@ -11,6 +11,7 @@ import {
   RepairRequestAcceptanceStatusSnapshot,
   RepairRequestAcceptData,
   RepairRequestAcceptWriteResult,
+  RepairRequestDeleteOutcome,
   RepairRequestInsertData,
   RepairRequestSnapshot,
 } from './lithography.types';
@@ -22,6 +23,7 @@ import {
  * - 维修申请细粒度插入（显式落初始状态：未接单、未作废）
  * - 维修申请编号存在性读取（供 usecase 做唯一编号冲突检测）
  * - 维修申请原子接单条件更新与接单未命中时的最小状态读取（供 usecase 裁决错误类别）
+ * - 维修申请原子条件软删除（供 usecase 做客户侧删除，返回状态事实不表决策）
  *
  * 不包含：
  * - 权限判断、输入规范化、编号生成、contentMd 组装、接单结果裁决等业务决策（归 usecase）
@@ -208,6 +210,92 @@ export class RepairRequestService {
         error,
       );
     }
+  }
+
+  /**
+   * 原子条件软删除（负责人 20260901：删除/接单互斥由原子条件更新保证，
+   * 禁止「先查询再普通 update」）
+   *
+   * 条件更新命中（affectedRows = 1）即软删除完成；未命中时在同一事务内
+   * 以锁读重读当前状态区分原因（当前读不受 RR 快照时序影响）：
+   * - 行不存在或非本人归属 → NOT_FOUND_OR_NOT_OWNER（统一口径，防探测他人申请存在性）
+   * - 本人已软删除 → ALREADY_DELETED（幂等成功语义由 usecase 决定）
+   * - 本人已接单 → ALREADY_ACCEPTED（删除条件含 is_accepted = 0）
+   *
+   * 仅返回状态事实；错误映射与幂等决策归 usecase。
+   * 客户端可见 details 只含 id 标识，原始异常进 cause。
+   */
+  async softDeleteRequest(
+    params: { requestId: number; customerAccountId: number },
+    transactionContext?: PersistenceTransactionContext,
+  ): Promise<RepairRequestDeleteOutcome> {
+    const repository = this.getRepository(transactionContext);
+    let affected: number;
+    try {
+      const result = await repository.update(
+        {
+          id: params.requestId,
+          customerAccountId: params.customerAccountId,
+          isAccepted: false,
+          deprecated: false,
+        },
+        // 软删除固定落库 deleted_at（与实体 chk_repair_request_deletion_consistency 一致）
+        { deprecated: true, deletedAt: () => 'CURRENT_TIMESTAMP(3)' },
+      );
+      affected = result.affected ?? 0;
+    } catch (error) {
+      throw new DomainError(
+        REPAIR_REQUEST_ERROR.DELETION_FAILED,
+        '维修申请删除失败，请稍后重试',
+        { id: params.requestId },
+        error,
+      );
+    }
+
+    if (affected === 1) {
+      const deleted = await repository.findOne({
+        where: { id: params.requestId },
+        select: { id: true, requestNo: true },
+      });
+      if (!deleted) {
+        // 条件更新命中但行不可见：理论上不可达，防御性按系统故障处理
+        throw new DomainError(
+          REPAIR_REQUEST_ERROR.DELETION_FAILED,
+          '维修申请删除失败，请稍后重试',
+          { id: params.requestId },
+        );
+      }
+      return { kind: 'DELETED', id: deleted.id, requestNo: deleted.requestNo };
+    }
+
+    const row = await repository.findOne({
+      where: { id: params.requestId },
+      select: {
+        id: true,
+        requestNo: true,
+        customerAccountId: true,
+        isAccepted: true,
+        deprecated: true,
+      },
+      // 锁读（当前读）：取最新已提交版本，分类不受 RR 快照建立时序影响，
+      // 也不依赖「事务内本语句前无其他一致性读」的隐含前提
+      lock: { mode: 'pessimistic_read' },
+    });
+    // 先判归属再区分已删/已接单：他人申请一律统一为不存在，不泄露状态（裁定 5）
+    if (!row || row.customerAccountId !== params.customerAccountId) {
+      return { kind: 'NOT_FOUND_OR_NOT_OWNER', id: params.requestId };
+    }
+    if (row.deprecated) {
+      return { kind: 'ALREADY_DELETED', id: row.id, requestNo: row.requestNo };
+    }
+    if (row.isAccepted) {
+      return { kind: 'ALREADY_ACCEPTED', id: row.id, requestNo: row.requestNo };
+    }
+    // 锁读下重读已取最新已提交状态，仍满足删除条件却未命中：理论上不可达，
+    // 防御性按系统故障处理，避免误判为业务拒绝
+    throw new DomainError(REPAIR_REQUEST_ERROR.DELETION_FAILED, '维修申请删除失败，请稍后重试', {
+      id: params.requestId,
+    });
   }
 
   private toSnapshot(entity: RepairRequestEntity): RepairRequestSnapshot {

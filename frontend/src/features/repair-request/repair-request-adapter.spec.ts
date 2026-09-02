@@ -5,7 +5,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as sharedGraphql from '@/shared/graphql';
 import { GraphQLIngressError } from '@/shared/graphql';
 
-import { createRepairRequest, fetchEquipmentModels } from './index';
+import {
+  createRepairRequest,
+  deleteMyRepairRequest,
+  fetchEquipmentModels,
+  fetchMyRepairRequest,
+  fetchMyRepairRequests,
+} from './index';
 
 vi.mock('@/shared/graphql', async (importOriginal) => {
   const actual = await importOriginal<typeof sharedGraphql>();
@@ -243,5 +249,233 @@ describe('createRepairRequest', () => {
     executeGraphQLMock.mockRejectedValue(authError);
 
     await expect(createRepairRequest(input)).rejects.toBe(authError);
+  });
+});
+
+// ---- 客户侧读模型与删除（PR #C 阶段三 T-03） ----
+
+const MY_REPAIR_REQUEST_LIST_ITEM = {
+  id: 920001,
+  requestNo: 'RR20260901000000ABC001',
+  errorCode: 'E-1001',
+  createdAt: '2026-09-01T01:00:00.000Z',
+  isAccepted: false,
+  acceptedAt: null,
+  latestResolutionStatus: null,
+  equipmentModel: { id: 21, modelCode: 'LITHO-A', modelName: '型号A' },
+};
+
+const MY_REPAIR_REQUEST_DETAIL = {
+  ...MY_REPAIR_REQUEST_LIST_ITEM,
+  faultDescription: '双工件台干涉仪报错',
+  contentMd: '# 故障报告',
+  responses: [
+    {
+      id: 1,
+      engineerNickname: '工程师甲',
+      resolutionStatus: 'PENDING',
+      responseText: '已受理，排查中',
+      createdAt: '2026-09-01T02:00:00.000Z',
+    },
+  ],
+};
+
+describe('fetchMyRepairRequests', () => {
+  it('成功返回分页页，分页变量内部补齐 OFFSET 模式与 withTotal', async () => {
+    executeGraphQLMock.mockResolvedValue({
+      myRepairRequests: { items: [], total: 0, page: 2, pageSize: 10 },
+    });
+
+    await expect(fetchMyRepairRequests({ page: 2, pageSize: 10 })).resolves.toEqual({
+      items: [],
+      total: 0,
+      page: 2,
+      pageSize: 10,
+    });
+    expect(executeGraphQLMock).toHaveBeenCalledWith(expect.stringContaining('myRepairRequests'), {
+      pagination: { mode: 'OFFSET', page: 2, pageSize: 10, withTotal: true },
+    });
+  });
+
+  it('返回后端逐字段透传的列表项（含机型与末条处理状态）', async () => {
+    executeGraphQLMock.mockResolvedValue({
+      myRepairRequests: { items: [MY_REPAIR_REQUEST_LIST_ITEM], total: 1, page: 1, pageSize: 10 },
+    });
+
+    await expect(fetchMyRepairRequests({ page: 1, pageSize: 10 })).resolves.toEqual({
+      items: [MY_REPAIR_REQUEST_LIST_ITEM],
+      total: 1,
+      page: 1,
+      pageSize: 10,
+    });
+  });
+
+  it('transport 失败上抛 GraphQLIngressError（列表无 domain failure 显式结果）', async () => {
+    const networkError = new GraphQLIngressError({ type: 'network', message: 'fetch failed' });
+    executeGraphQLMock.mockRejectedValue(networkError);
+
+    await expect(fetchMyRepairRequests({ page: 1, pageSize: 10 })).rejects.toBe(networkError);
+  });
+
+  it('domain failure（如守卫 FORBIDDEN/INSUFFICIENT_PERMISSIONS）上抛，列表无显式失败结果', async () => {
+    const forbiddenError = buildDomainIngressError({
+      code: 'FORBIDDEN',
+      errorCode: 'INSUFFICIENT_PERMISSIONS',
+      errorMessage: '权限不足',
+    });
+    executeGraphQLMock.mockRejectedValue(forbiddenError);
+
+    await expect(fetchMyRepairRequests({ page: 1, pageSize: 10 })).rejects.toBe(forbiddenError);
+  });
+});
+
+describe('fetchMyRepairRequest', () => {
+  it('成功返回详情（含回复时间线）', async () => {
+    executeGraphQLMock.mockResolvedValue({ myRepairRequest: MY_REPAIR_REQUEST_DETAIL });
+
+    await expect(fetchMyRepairRequest(920001)).resolves.toEqual({
+      ok: true,
+      detail: MY_REPAIR_REQUEST_DETAIL,
+    });
+    expect(executeGraphQLMock).toHaveBeenCalledWith(expect.stringContaining('myRepairRequest'), {
+      id: 920001,
+    });
+  });
+
+  it('NOT_FOUND 统一归并为 not-found 防探测拒绝，透传后端 errorMessage', async () => {
+    executeGraphQLMock.mockRejectedValue(
+      buildDomainIngressError({
+        code: 'NOT_FOUND',
+        errorCode: 'REPAIR_REQUEST_NOT_FOUND',
+        errorMessage: '维修申请不存在或不可查看',
+      }),
+    );
+
+    await expect(fetchMyRepairRequest(920001)).resolves.toEqual({
+      ok: false,
+      reason: 'not-found',
+      message: '维修申请不存在或不可查看',
+    });
+  });
+
+  it('NOT_FOUND 且后端隐藏 errorMessage 时用前端兜底文案', async () => {
+    executeGraphQLMock.mockRejectedValue(
+      buildDomainIngressError({ code: 'NOT_FOUND', errorCode: 'REPAIR_REQUEST_NOT_FOUND' }),
+    );
+
+    await expect(fetchMyRepairRequest(920001)).resolves.toMatchObject({
+      ok: false,
+      reason: 'not-found',
+      message: '维修申请不存在或不可查看。',
+    });
+  });
+
+  it('FORBIDDEN/ACCESS_DENIED（详情读取既有契约，防探测文案）也归并为 not-found', async () => {
+    executeGraphQLMock.mockRejectedValue(
+      buildDomainIngressError({
+        code: 'FORBIDDEN',
+        errorCode: 'ACCESS_DENIED',
+        errorMessage: '维修申请不存在或不可查看',
+      }),
+    );
+
+    await expect(fetchMyRepairRequest(920002)).resolves.toEqual({
+      ok: false,
+      reason: 'not-found',
+      message: '维修申请不存在或不可查看',
+    });
+  });
+
+  it('非 not-found 类失败（如 auth UNAUTHENTICATED）不归并，上抛原始错误走失效链路', async () => {
+    const unauthenticatedError = buildDomainIngressError({
+      code: 'UNAUTHENTICATED',
+      errorCode: 'JWT_AUTHENTICATION_FAILED',
+      errorMessage: '登录状态已失效',
+    });
+    executeGraphQLMock.mockRejectedValue(unauthenticatedError);
+
+    await expect(fetchMyRepairRequest(920001)).rejects.toBe(unauthenticatedError);
+  });
+
+  it('transport 失败上抛 GraphQLIngressError（详情仅归并 not-found 类域拒绝）', async () => {
+    const networkError = new GraphQLIngressError({ type: 'network', message: 'fetch failed' });
+    executeGraphQLMock.mockRejectedValue(networkError);
+
+    await expect(fetchMyRepairRequest(920001)).rejects.toBe(networkError);
+  });
+});
+
+describe('deleteMyRepairRequest', () => {
+  it('删除成功返回 ok: true，透传申请 ID 变量', async () => {
+    executeGraphQLMock.mockResolvedValue({
+      deleteMyRepairRequest: { id: 920001, requestNo: 'RR20260901000000ABC001' },
+    });
+
+    await expect(deleteMyRepairRequest(920001)).resolves.toEqual({ ok: true });
+    expect(executeGraphQLMock).toHaveBeenCalledWith(
+      expect.stringContaining('deleteMyRepairRequest'),
+      { id: 920001 },
+    );
+  });
+
+  it.each([
+    ['NOT_FOUND', 'not-found', '维修申请不存在或不可删除。'],
+    ['CONFLICT', 'already-accepted', '该申请已被工程师接单，不能删除。'],
+    ['FORBIDDEN', 'forbidden', '仅客户账号可以删除维修申请。'],
+    ['BAD_USER_INPUT', 'invalid-input', '维修申请参数无效，请刷新后重试。'],
+    ['INTERNAL_SERVER_ERROR', 'delete-failed', '维修申请删除失败，请稍后重试。'],
+  ] as const)(
+    '大类码 %s 映射为 %s，后端隐藏 errorMessage 时用兜底文案',
+    async (code, reason, fallback) => {
+      executeGraphQLMock.mockRejectedValue(
+        buildDomainIngressError({ code, errorCode: 'SOME_BUSINESS_CODE' }),
+      );
+
+      await expect(deleteMyRepairRequest(920001)).resolves.toEqual({
+        ok: false,
+        reason,
+        message: fallback,
+      });
+    },
+  );
+
+  it('后端暴露 errorMessage 时透传为业务消息（不取顶层通用 message）', async () => {
+    executeGraphQLMock.mockRejectedValue(
+      buildDomainIngressError({
+        code: 'CONFLICT',
+        errorCode: 'REPAIR_REQUEST_ALREADY_ACCEPTED',
+        errorMessage: '已接单的维修申请不能删除',
+      }),
+    );
+
+    await expect(deleteMyRepairRequest(920001)).resolves.toEqual({
+      ok: false,
+      reason: 'already-accepted',
+      message: '已接单的维修申请不能删除',
+    });
+  });
+
+  it('未知大类码（如 GRAPHQL_VALIDATION_FAILED）上抛原始错误，不误归为业务拒绝', async () => {
+    const unknownError = buildDomainIngressError({
+      code: 'GRAPHQL_VALIDATION_FAILED',
+      errorCode: 'SOME_VALIDATION_CODE',
+    });
+    executeGraphQLMock.mockRejectedValue(unknownError);
+
+    await expect(deleteMyRepairRequest(920001)).rejects.toBe(unknownError);
+  });
+
+  it('transport 失败上抛 GraphQLIngressError，不吞为业务拒绝', async () => {
+    const networkError = new GraphQLIngressError({ type: 'network', message: 'fetch failed' });
+    executeGraphQLMock.mockRejectedValue(networkError);
+
+    await expect(deleteMyRepairRequest(920001)).rejects.toBe(networkError);
+  });
+
+  it('auth 失败上抛原始错误（复用 createGraphQLAuthFailureHandler 失效链路，T-06）', async () => {
+    const authError = new GraphQLIngressError({ type: 'auth', message: 'token invalid' });
+    executeGraphQLMock.mockRejectedValue(authError);
+
+    await expect(deleteMyRepairRequest(920001)).rejects.toBe(authError);
   });
 });

@@ -4,34 +4,33 @@
 // 按 frontend/docs/testing.md 只在测试 setup 中补齐最小 shim。
 import '@testing-library/jest-dom/vitest';
 
-Object.defineProperty(window, 'matchMedia', {
-  configurable: true,
-  value: (query: string) => ({
-    addEventListener: () => {},
-    addListener: () => {},
-    dispatchEvent: () => false,
-    matches: false,
-    media: query,
-    onchange: null,
-    removeEventListener: () => {},
-    removeListener: () => {},
-  }),
-  writable: false,
-});
+// node 环境的纯逻辑单测（如 e2e helper 白名单 spec）无 window，跳过 DOM shim。
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: (query: string) => ({
+      addEventListener: () => {},
+      addListener: () => {},
+      dispatchEvent: () => false,
+      matches: false,
+      media: query,
+      onchange: null,
+      removeEventListener: () => {},
+      removeListener: () => {},
+    }),
+    writable: false,
+  });
 
-// Ant Design 的 Table 等组件经 rc-resize-observer 依赖全局 ResizeObserver，
-// jsdom 同样未提供；与 matchMedia 同源处理，只补最小空实现，
-// 不模拟尺寸回调（布局尺寸不是本仓库 UI 测试的断言对象）。
-class ResizeObserverStub {
-  observe(): void {}
+  // Popconfirm / Tooltip 等浮层组件依赖 ResizeObserver，jsdom 同样未提供，补最小 stub。
+  class ResizeObserverStub {
+    disconnect(): void {}
+    observe(): void {}
+    unobserve(): void {}
+  }
 
-  unobserve(): void {}
-
-  disconnect(): void {}
+  Object.defineProperty(window, 'ResizeObserver', {
+    configurable: true,
+    value: ResizeObserverStub,
+    writable: false,
+  });
 }
-
-Object.defineProperty(globalThis, 'ResizeObserver', {
-  configurable: true,
-  value: ResizeObserverStub,
-  writable: true,
-});

@@ -1,4 +1,11 @@
-// src/features/repair-request/infrastructure/engineer-repair-request.types.ts
+import type {
+  EngineerResolutionStatus,
+  EngineerResponse,
+  RepairRequestDetail,
+  RepairRequestEquipmentModel,
+  RepairRequestListItem,
+  RepairRequestListPage,
+} from './repair-request-read.types';
 
 /**
  * 工程师维修申请读写的 GraphQL 契约类型（与后端公共读模型 DTO 对齐）
@@ -12,7 +19,7 @@
  */
 
 /** 工程师回复处理状态（后端正式 GraphQL enum，值域一致） */
-export type EngineerResolutionStatusValue = 'PENDING' | 'RESOLVED';
+export type EngineerResolutionStatusValue = EngineerResolutionStatus;
 
 /** 工程师列表范围，与后端 REPAIR_REQUEST_ENGINEER_LIST_SCOPES 取值严格一致，不创建第三套状态值 */
 export type EngineerRepairListScope = 'AVAILABLE' | 'MINE';
@@ -86,11 +93,7 @@ export type RepairRequestPaginationVariables = {
  * 设备型号内部模型：由 DTO 显式映射而来，
  * application / ui 不直接引用任何原始 DTO 类型。
  */
-export type EngineerRepairRequestEquipmentModel = {
-  id: number;
-  modelCode: string;
-  modelName: string;
-};
+export type EngineerRepairRequestEquipmentModel = RepairRequestEquipmentModel;
 
 /** 列表查询参数（scope 与 GraphQL 参数一一对应，分页为 OFFSET 页码口径） */
 export type EngineerRepairListQuery = {
@@ -99,45 +102,13 @@ export type EngineerRepairListQuery = {
   pageSize: number;
 };
 
-export type EngineerRepairRequestListItem = {
-  id: number;
-  requestNo: string;
-  equipmentModel: EngineerRepairRequestEquipmentModel;
-  errorCode: string;
-  createdAt: string;
-  isAccepted: boolean;
-  acceptedAt: string | null;
-  latestResolutionStatus: EngineerResolutionStatusValue | null;
-};
+export type EngineerRepairRequestListItem = RepairRequestListItem;
 
-export type EngineerRepairRequestPage = {
-  items: EngineerRepairRequestListItem[];
-  total: number;
-  page: number;
-  pageSize: number;
-};
+export type EngineerRepairRequestPage = RepairRequestListPage;
 
-export type EngineerRepairRequestResponseItem = {
-  id: number;
-  engineerNickname: string;
-  resolutionStatus: EngineerResolutionStatusValue;
-  responseText: string;
-  createdAt: string;
-};
+export type EngineerRepairRequestResponseItem = EngineerResponse;
 
-export type EngineerRepairRequestDetail = {
-  id: number;
-  requestNo: string;
-  equipmentModel: EngineerRepairRequestEquipmentModel;
-  errorCode: string;
-  faultDescription: string;
-  contentMd: string;
-  createdAt: string;
-  isAccepted: boolean;
-  acceptedAt: string | null;
-  latestResolutionStatus: EngineerResolutionStatusValue | null;
-  responses: EngineerRepairRequestResponseItem[];
-};
+export type EngineerRepairRequestDetail = RepairRequestDetail;
 
 /**
  * 详情读取的显式失败原因（业务拒绝，非 transport）：

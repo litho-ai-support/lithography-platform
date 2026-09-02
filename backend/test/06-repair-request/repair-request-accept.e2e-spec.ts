@@ -27,6 +27,12 @@ const ACCEPT_MUTATION = `
   }
 `;
 
+const DELETE_MUTATION = `
+  mutation DeleteMyRepairRequest($id: Int!) {
+    deleteMyRepairRequest(id: $id) { id requestNo }
+  }
+`;
+
 const ENGINEER_LIST_QUERY = `
   query EngineerRepairRequests($scope: String!, $pagination: PaginationArgs!) {
     engineerRepairRequests(scope: $scope, pagination: $pagination) {
@@ -47,9 +53,9 @@ const OFFSET_PAGINATION = { mode: 'OFFSET', page: 1, pageSize: 10, withTotal: tr
  *   与后端生成口径（接单人与时间均不可由客户端传入）
  * - 权限矩阵：CUSTOMER / SUPER_ADMIN / 未登录（写入口精确 ENGINEER，读继承不等于写继承）
  * - 错误分类：不存在/已删除 → NOT_FOUND；已接单（含本人重复接单）→ CONFLICT，文案中性
- * - 并发竞争：两名工程师真实并发接单同一申请，数据库最终只能有一个接单人
+ * - 并发竞争：两名工程师抢单，以及客户删除与工程师接单竞争，数据库终态只能有一个赢家
  *
- * 造数固定主键（131~135 申请、42 型号），依赖 global-setup-e2e 的全表 TRUNCATE 保证无冲突。
+ * 造数固定主键（131~136 申请、42 型号），依赖 global-setup-e2e 的全表 TRUNCATE 保证无冲突。
  */
 describe('工程师接单写链路 (e2e)', () => {
   let app: INestApplication<App>;
@@ -418,6 +424,71 @@ describe('工程师接单写链路 (e2e)', () => {
         row.acceptedByEngineerAccountId,
       );
       expect(row.acceptedAt).not.toBeNull();
+    });
+
+    it('客户删除与工程师接单真实并发同一申请：仅一方成功，数据库终态互斥', async () => {
+      const customerAccountId = await getAccountIdByLoginName(
+        dataSource,
+        testAccountsConfig.guestPrimary.loginName,
+      );
+      await requestRepository.save(
+        requestRepository.create({
+          id: 136,
+          requestNo: 'E2E-AC-136',
+          customerAccountId,
+          equipmentModelId: 42,
+          errorCode: 'E-3006',
+          faultDescription: '删除与接单并发竞争场景',
+          contentMd: '# E2E-136',
+          createdAt: new Date('2026-08-30T08:00:00.000Z'),
+          isAccepted: false,
+          acceptedByEngineerAccountId: null,
+          acceptedAt: null,
+          deprecated: false,
+          deletedAt: null,
+        }),
+      );
+
+      const [acceptResponse, deleteResponse] = await Promise.all([
+        acceptMutation(engineerToken, 136),
+        postGql({
+          app,
+          query: DELETE_MUTATION,
+          variables: { id: 136 },
+          token: customerToken,
+        }),
+      ]);
+
+      const acceptSucceeded = Boolean(acceptResponse.body.data?.acceptRepairRequest);
+      const deleteSucceeded = Boolean(deleteResponse.body.data?.deleteMyRepairRequest);
+      expect(Number(acceptSucceeded) + Number(deleteSucceeded)).toBe(1);
+
+      const row = await requestRepository.findOneOrFail({ where: { id: 136 } });
+      if (acceptSucceeded) {
+        expect(deleteResponse.body.errors[0].extensions.code).toBe('CONFLICT');
+        expect(deleteResponse.body.errors[0].extensions.errorCode).toBe(
+          'REPAIR_REQUEST_ALREADY_ACCEPTED',
+        );
+        expect(row).toMatchObject({
+          isAccepted: true,
+          acceptedByEngineerAccountId: engineerAccountId,
+          deprecated: false,
+          deletedAt: null,
+        });
+        expect(row.acceptedAt).not.toBeNull();
+      } else {
+        expect(acceptResponse.body.errors[0].extensions.code).toBe('NOT_FOUND');
+        expect(acceptResponse.body.errors[0].extensions.errorCode).toBe('REPAIR_REQUEST_NOT_FOUND');
+        expect(row).toMatchObject({
+          isAccepted: false,
+          acceptedByEngineerAccountId: null,
+          acceptedAt: null,
+          deprecated: true,
+        });
+        expect(row.deletedAt).not.toBeNull();
+      }
+
+      expect(row.isAccepted && row.deprecated).toBe(false);
     });
   });
 });

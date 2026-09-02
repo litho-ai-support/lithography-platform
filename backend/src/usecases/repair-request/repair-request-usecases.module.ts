@@ -5,6 +5,7 @@ import { AccountInstallerModule } from '@src/modules/account/account-installer.m
 import { LithographyModule } from '@src/modules/lithography/lithography.module';
 import { AcceptRepairRequestUsecase } from './accept-repair-request.usecase';
 import { CreateRepairRequestUsecase } from './create-repair-request.usecase';
+import { DeleteMyRepairRequestUsecase } from './delete-my-repair-request.usecase';
 import { GetEngineerRepairRequestDetailUsecase } from './get-engineer-repair-request-detail.usecase';
 import { GetMyRepairRequestDetailUsecase } from './get-my-repair-request-detail.usecase';
 import { ListEquipmentModelsUsecase } from './list-equipment-models.usecase';
@@ -16,6 +17,7 @@ import { ListMyRepairRequestsUsecase } from './list-my-repair-requests.usecase';
   providers: [
     AcceptRepairRequestUsecase,
     CreateRepairRequestUsecase,
+    DeleteMyRepairRequestUsecase,
     GetEngineerRepairRequestDetailUsecase,
     GetMyRepairRequestDetailUsecase,
     ListEquipmentModelsUsecase,
@@ -25,6 +27,7 @@ import { ListMyRepairRequestsUsecase } from './list-my-repair-requests.usecase';
   exports: [
     AcceptRepairRequestUsecase,
     CreateRepairRequestUsecase,
+    DeleteMyRepairRequestUsecase,
     GetEngineerRepairRequestDetailUsecase,
     GetMyRepairRequestDetailUsecase,
     ListEquipmentModelsUsecase,

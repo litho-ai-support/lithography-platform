@@ -13,6 +13,7 @@ const GROUPS = {
       'test/05-verification-record/verification-record-types.e2e-spec.ts',
       'test/05-verification-record/verification-record-invite.e2e-spec.ts',
       'test/06-repair-request/repair-request-auth.e2e-spec.ts',
+      'test/06-repair-request/repair-request-delete.e2e-spec.ts',
       'test/06-repair-request/repair-request-flow.e2e-spec.ts',
       'test/06-repair-request/repair-request-read.e2e-spec.ts',
       'test/06-repair-request/repair-request-accept.e2e-spec.ts',
