@@ -151,3 +151,17 @@ export type RepairRequestDetailView = {
 export type RepairRequestDetailQueryResult = Omit<RepairRequestDetailView, 'responses'> & {
   responses: EngineerResponseQueryResult[];
 };
+
+/**
+ * 维修申请软删除条件更新结果（模块内细粒度写操作产物，仅报告状态事实）。
+ * 错误映射与幂等成功决策归 usecase（负责人 20260901 裁定 5）：
+ * - DELETED：条件更新命中，软删除完成
+ * - ALREADY_DELETED：本人已删除（幂等成功语义由 usecase 决定）
+ * - NOT_FOUND_OR_NOT_OWNER：行不存在或非本人归属（统一口径，不泄露存在性）
+ * - ALREADY_ACCEPTED：本人已接单（接单/删除互斥）
+ */
+export type RepairRequestDeleteOutcome =
+  | { kind: 'DELETED'; id: number; requestNo: string }
+  | { kind: 'ALREADY_DELETED'; id: number; requestNo: string }
+  | { kind: 'NOT_FOUND_OR_NOT_OWNER'; id: number }
+  | { kind: 'ALREADY_ACCEPTED'; id: number; requestNo: string };

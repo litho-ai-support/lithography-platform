@@ -10,6 +10,8 @@ export default defineConfig({
   reporter: 'list',
   retries: 0,
   testDir: './e2e',
+  // helpers 目录是 e2e 共享工具（含 vitest 单测，如 real-backend 白名单 helper），不是 Playwright 用例
+  testIgnore: '**/helpers/**',
   timeout: 20_000,
   use: {
     baseURL: 'http://127.0.0.1:4173',

@@ -11,7 +11,11 @@ import {
 import { AppLayout } from '@/app/layout';
 
 import { AdminPage } from '@/pages/admin';
-import { CustomerPage } from '@/pages/customer';
+import {
+  CustomerPage,
+  CustomerRepairRequestDetailRoute,
+  CustomerRepairRequestsPage,
+} from '@/pages/customer';
 import { EngineerPage } from '@/pages/engineer';
 import { ErrorPreviewPage } from '@/pages/error-preview';
 import { ProjectStructurePage } from '@/pages/project-structure';
@@ -97,6 +101,18 @@ const router = createBrowserRouter([
         element: <CustomerPage />,
         loader: protectedRouteLoader,
         path: 'customer',
+      },
+      {
+        // T-04（前移注册）：列表与详情；角色治理复用 protectedRouteLoader，
+        // SUPER_ADMIN 按裁定 2 继承放行（不扩大拒绝清单，拒绝清单仍仅拒 /new）。
+        element: <CustomerRepairRequestsPage />,
+        loader: protectedRouteLoader,
+        path: 'customer/repair-requests',
+      },
+      {
+        element: <CustomerRepairRequestDetailRoute />,
+        loader: protectedRouteLoader,
+        path: 'customer/repair-requests/:requestId',
       },
       {
         element: <RepairRequestCreatePage />,
