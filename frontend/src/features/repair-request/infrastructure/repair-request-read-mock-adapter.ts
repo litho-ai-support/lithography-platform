@@ -15,6 +15,9 @@ import {
  * 阶段一 Mock 数据访问层：签名与阶段三的真实 adapter 完全一致，
  * 页面经 barrel（@/features/repair-request）消费统一导出名，替换真实实现时页面零改动。
  *
+ * 当前状态（阶段三 T-02 之后）：barrel 已指向真实 adapter，本文件无生产消费方，
+ * 保留作 read-mock 演示数据源；不进公开出口（隔离函数仅供自身 spec 直连）。
+ *
  * 行为对齐后端契约（负责人裁定 5 + 读模型权限矩阵）：
  * - 列表：仅未删除、createdAt DESC + id DESC、OFFSET 分页；
  * - 详情：不存在 / 已删除统一 not-found（防探测，不区分原因）；
