@@ -19,6 +19,8 @@
  *   仍优先展示冲突反馈，避免被通用不可访问文案掩盖；
  *   该分支不渲染详情与接单按钮，不泄露申请归属；
  * - 统一不可访问反馈引导返回工程师列表，不泄露申请归属；
+ * - 详情就绪后始终提供「返回维修申请列表」入口（与接单状态、查看者角色无关），
+ *   且固定前往列表路径，保证从地址栏直达详情页也能稳定返回；
  * - 本仓库无 markdown 渲染依赖，contentMd 按保留换行的纯文本展示。
  */
 
@@ -208,6 +210,16 @@ export function EngineerRepairRequestDetailPanel({
         {!detail.isAccepted && !canAccept ? (
           <div className="text-text-secondary">当前账号仅可查看详情，接单需使用工程师账号。</div>
         ) : null}
+
+        {/*
+         * 底部常驻返回入口：不依赖接单状态与查看者角色，
+         * 固定前往列表路径（不用 navigate(-1)），从地址栏直达详情页也能稳定返回。
+         */}
+        <div className="flex justify-start">
+          <Button onClick={() => navigate(ENGINEER_REPAIR_REQUEST_LIST_PATH)}>
+            返回维修申请列表
+          </Button>
+        </div>
       </div>
     </Card>
   );
