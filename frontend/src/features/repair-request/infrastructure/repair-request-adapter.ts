@@ -12,8 +12,8 @@ import type {
 import type {
   DeleteMyRepairRequestFailureReason,
   DeleteMyRepairRequestResult,
-  MyRepairRequestDetail,
   MyRepairRequestDetailResult,
+  RepairRequestDetail,
   RepairRequestListPage,
   RepairRequestListPagination,
 } from './repair-request-read.types';
@@ -230,7 +230,7 @@ type MyRepairRequestsData = {
 };
 
 type MyRepairRequestData = {
-  myRepairRequest: MyRepairRequestDetail;
+  myRepairRequest: RepairRequestDetail;
 };
 
 type DeleteMyRepairRequestData = {

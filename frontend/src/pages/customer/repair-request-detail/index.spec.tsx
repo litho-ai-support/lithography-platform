@@ -5,7 +5,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { message } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { MyRepairRequestDetail } from '@/features/repair-request';
+import type { RepairRequestDetail } from '@/features/repair-request';
 
 import { GraphQLIngressError } from '@/shared/graphql';
 
@@ -33,7 +33,7 @@ vi.mock('@/features/repair-request', async (importOriginal) => {
   };
 });
 
-function makeDetail(overrides?: Partial<MyRepairRequestDetail>): MyRepairRequestDetail {
+function makeDetail(overrides?: Partial<RepairRequestDetail>): RepairRequestDetail {
   return {
     id: 920001,
     requestNo: 'MOCK-RR-2026-0001',
@@ -173,6 +173,22 @@ describe('客户维修申请详情页', () => {
       expect(fetchDetailMock.mock.calls.length).toBe(2);
       expect(navigateMock).not.toHaveBeenCalledWith('/customer/repair-requests');
     });
+  });
+
+  it('尚无回复时保留区块标题并呈现明确空状态，不渲染回复项', async () => {
+    fetchDetailMock.mockResolvedValue({
+      ok: true,
+      detail: makeDetail({ responses: [] }),
+    });
+    render(<CustomerRepairRequestDetailPage requestId={920001} />);
+    await screen.findByText('MOCK-RR-2026-0001');
+
+    // 区块标题保留且计数为 0，空状态文案明确可见
+    expect(screen.getByText('工程师回复（0）')).toBeTruthy();
+    expect(screen.getByText('暂无工程师回复。')).toBeTruthy();
+    // 不渲染任何回复项内容
+    expect(screen.queryByText('李工')).toBeNull();
+    expect(screen.queryByText('已接单，正在排查。')).toBeNull();
   });
 
   it('多条回复按后端给定顺序直接渲染不重排，PENDING 与 RESOLVED 标签正确', async () => {

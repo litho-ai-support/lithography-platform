@@ -2,8 +2,8 @@
 
 import type {
   EngineerResponse,
-  MyRepairRequestDetail,
-  MyRepairRequestListItem,
+  RepairRequestDetail,
+  RepairRequestListItem,
 } from './repair-request-read.types';
 
 /**
@@ -21,7 +21,7 @@ const MOCK_EQUIPMENT_MODEL = {
 };
 
 /** 列表可见数据（Mock 数据源内部的「落库全量」，含已软删除条目） */
-export const MOCK_MY_REPAIR_REQUESTS: Array<MyRepairRequestListItem & { deprecated: boolean }> = [
+export const MOCK_MY_REPAIR_REQUESTS: Array<RepairRequestListItem & { deprecated: boolean }> = [
   {
     id: 920001,
     requestNo: 'MOCK-RR-2026-0001',
@@ -111,8 +111,8 @@ export const MOCK_ENGINEER_RESPONSES: Record<number, EngineerResponse[]> = {
 
 /** 详情由列表条目补充正文与回复组装（逐字段显式映射，剔除数据源内部标志 deprecated） */
 export function buildMockMyRepairRequestDetail(
-  listItem: MyRepairRequestListItem & { deprecated: boolean },
-): MyRepairRequestDetail {
+  listItem: RepairRequestListItem & { deprecated: boolean },
+): RepairRequestDetail {
   return {
     id: listItem.id,
     requestNo: listItem.requestNo,

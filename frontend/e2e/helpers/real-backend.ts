@@ -23,7 +23,7 @@ const FRONTEND_LOCAL_ENV_FILE = fileURLToPath(
 );
 
 // 后端生成的申请编号格式：RR + 14 位时间戳 + 6 位加密随机字符（与后端单测断言一致），
-// 仅白名单匹配的编号才允许进入 SQL 拼接。
+// 仅白名单匹配的编号才允许进入 SQL 拼接（由受保护 helper 强制，见下方守卫说明）。
 export const REQUEST_NO_PATTERN = /^RR\d{14}[A-Z0-9]{6}$/;
 
 export function readBackendEnv(): Record<string, string> {
@@ -72,6 +72,33 @@ export function mysqlQuery(sql: string): string {
       stdio: ['ignore', 'pipe', 'ignore'],
     },
   ).trim();
+}
+
+// requestNo 白名单守卫：expect 断言不是安全边界，页面文本异常时断言抛错后 finally
+// 仍会拿同一字符串执行 SQL。因此任何 requestNo 进入 SQL 前都必须在 helper 内部、
+// 访问数据库之前强制校验；失败直接抛错且绝不启动 mysql 进程（含 finally 兜底路径）。
+function assertWhitelistedRequestNo(requestNo: string): void {
+  if (!REQUEST_NO_PATTERN.test(requestNo)) {
+    throw new Error(`requestNo 未通过白名单校验，拒绝访问数据库：${JSON.stringify(requestNo)}`);
+  }
+}
+
+/**
+ * 按白名单 requestNo 查询维修申请行。
+ * selectExpression 必须是代码内静态字面量（如 'id'、'COUNT(*)'），不得拼接外部输入。
+ */
+export function findRepairRequestByRequestNo(requestNo: string, selectExpression: string): string {
+  assertWhitelistedRequestNo(requestNo);
+
+  return mysqlQuery(
+    `SELECT ${selectExpression} FROM repair_request WHERE request_no = '${requestNo}'`,
+  );
+}
+
+/** 按白名单 requestNo 物理删除维修申请行（清理用；对不存在行是 no-op，幂等成立）。 */
+export function deleteRepairRequestByRequestNo(requestNo: string): void {
+  assertWhitelistedRequestNo(requestNo);
+  mysqlQuery(`DELETE FROM repair_request WHERE request_no = '${requestNo}'`);
 }
 
 // 可用性探针：健康检查 + 用真实 Mock 账号登录（同时验证后端已种子且登录链路可用）。

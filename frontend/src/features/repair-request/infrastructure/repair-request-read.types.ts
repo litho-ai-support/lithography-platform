@@ -24,8 +24,8 @@ export type RepairRequestEquipmentModel = {
   modelName: string;
 };
 
-/** 客户列表项（myRepairRequests 输出；无任何账号 ID 字段，裁定 3） */
-export type MyRepairRequestListItem = {
+/** 公共列表项（列表查询输出；无任何账号 ID 字段，裁定 3） */
+export type RepairRequestListItem = {
   id: number;
   requestNo: string;
   errorCode: string;
@@ -47,8 +47,8 @@ export type EngineerResponse = {
   createdAt: string;
 };
 
-/** 客户详情（myRepairRequest 输出；回复按 createdAt ASC + id ASC） */
-export type MyRepairRequestDetail = {
+/** 公共详情（详情查询输出；回复按 createdAt ASC + id ASC） */
+export type RepairRequestDetail = {
   id: number;
   requestNo: string;
   errorCode: string;
@@ -70,7 +70,7 @@ export type RepairRequestListPagination = {
 
 /** OFFSET 分页结果（列表统一 createdAt DESC + id DESC） */
 export type RepairRequestListPage = {
-  items: MyRepairRequestListItem[];
+  items: RepairRequestListItem[];
   total: number;
   page: number;
   pageSize: number;
@@ -82,7 +82,7 @@ export type RepairRequestListPage = {
  * transport / auth / network 失败不上抛为该结果，仍抛 GraphQLIngressError。
  */
 export type MyRepairRequestDetailResult =
-  | { ok: true; detail: MyRepairRequestDetail }
+  | { ok: true; detail: RepairRequestDetail }
   | { ok: false; reason: 'not-found'; message: string };
 
 /**

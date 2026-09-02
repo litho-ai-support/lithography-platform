@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router';
 import {
   deleteMyRepairRequest,
   fetchMyRepairRequests,
-  type MyRepairRequestListItem,
+  type RepairRequestListItem,
   type RepairRequestListPage,
   type RepairRequestListPagination,
   RESOLUTION_STATUS_LABELS,
@@ -38,8 +38,8 @@ function resolvePageAfterDelete(page: number, pageSize: number, total: number): 
   return Math.min(page, lastPage);
 }
 
-// 列表每页条数：小页容是演示/评审场景的取舍，翻页器随总数自动出现。
-const PAGE_SIZE = 3;
+// 列表每页条数：正式产品默认值；评审演示的分页需求不写入生产代码（review 裁定）。
+const PAGE_SIZE = 10;
 
 /**
  * 客户「我的维修申请」列表页。
@@ -129,7 +129,7 @@ export function CustomerRepairRequestsPage() {
     [listState, loadList, pagination],
   );
 
-  const columns: ColumnsType<MyRepairRequestListItem> = [
+  const columns: ColumnsType<RepairRequestListItem> = [
     {
       title: '申请编号',
       dataIndex: 'requestNo',

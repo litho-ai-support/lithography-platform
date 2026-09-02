@@ -23,10 +23,10 @@ export type {
   DeleteMyRepairRequestResult,
   EngineerResolutionStatus,
   EngineerResponse,
-  MyRepairRequestDetail,
   MyRepairRequestDetailResult,
-  MyRepairRequestListItem,
+  RepairRequestDetail,
   RepairRequestEquipmentModel,
+  RepairRequestListItem,
   RepairRequestListPage,
   RepairRequestListPagination,
 } from './infrastructure/repair-request-read.types';

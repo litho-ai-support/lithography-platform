@@ -4,9 +4,10 @@ import { expect, type Page, type Route, test } from '@playwright/test';
 
 import { readStoredAuthSession, seedAuthSession } from './helpers/auth-session-seed';
 import {
+  deleteRepairRequestByRequestNo,
+  findRepairRequestByRequestNo,
   hasFrontendGraphQLEndpoint,
   isRealBackendAvailable,
-  mysqlQuery,
   readBackendEnv,
   readBackendEnvOrNull,
   realLoginAccountId,
@@ -420,7 +421,7 @@ test.describe('real backend mutation', () => {
         ?.replace('申请编号：', '')
         .trim();
       expect(requestNo).toBeTruthy();
-      // 白名单校验：仅后端格式（RR + 14 位时间戳 + 6 位随机字符）的编号才允许进入下方 SQL 拼接。
+      // 白名单校验：业务断言（受保护 helper 内部还有强制校验，见 real-backend.ts 守卫说明）。
       expect(requestNo).toMatch(REQUEST_NO_PATTERN);
 
       // 受保护通道证据：真实 Mutation 携带 Bearer
@@ -428,22 +429,22 @@ test.describe('real backend mutation', () => {
       expect(mutationAuthorizations[0]).toMatch(/^Bearer .+/);
 
       // 落库证据：账号取自 JWT（customer_account_id 与 mock 客户一致），初始未接单未删除
-      const row = mysqlQuery(
-        `SELECT customer_account_id, is_accepted, deleted_at FROM repair_request WHERE request_no = '${requestNo}'`,
+      const row = findRepairRequestByRequestNo(
+        requestNo!,
+        'customer_account_id, is_accepted, deleted_at',
       );
       expect(row.split('\t')[0]).toBe(String(expectedAccountId));
       expect(row.split('\t')[1]).toBe('0');
       expect(row.split('\t')[2]).toMatch(/^NULL$/);
 
       // 清理：删除本用例产生的行，保持共享开发库基线干净（无删除接口，直连清理）
-      mysqlQuery(`DELETE FROM repair_request WHERE request_no = '${requestNo}'`);
-      expect(
-        mysqlQuery(`SELECT COUNT(*) FROM repair_request WHERE request_no = '${requestNo}'`),
-      ).toBe('0');
+      deleteRepairRequestByRequestNo(requestNo!);
+      expect(findRepairRequestByRequestNo(requestNo!, 'COUNT(*)')).toBe('0');
     } finally {
-      // 清理兜底：断言中途失败时仍删除本用例产生的行；对不存在行是 no-op，幂等成立
+      // 清理兜底：断言中途失败时仍删除本用例产生的行；受保护 helper 内部先白名单校验，
+      // 对不存在行是 no-op，幂等成立
       if (requestNo) {
-        mysqlQuery(`DELETE FROM repair_request WHERE request_no = '${requestNo}'`);
+        deleteRepairRequestByRequestNo(requestNo);
       }
     }
   });

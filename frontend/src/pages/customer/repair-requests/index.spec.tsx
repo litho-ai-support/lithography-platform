@@ -6,7 +6,7 @@ import { message } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
-  MyRepairRequestListItem,
+  RepairRequestListItem,
   RepairRequestListPage,
   RepairRequestListPagination,
 } from '@/features/repair-request';
@@ -39,7 +39,7 @@ vi.mock('@/features/repair-request', async (importOriginal) => {
   };
 });
 
-function makeItem(id: number): MyRepairRequestListItem {
+function makeItem(id: number): RepairRequestListItem {
   return {
     id,
     requestNo: `MOCK-RR-2026-${String(id).slice(-4)}`,
@@ -232,7 +232,7 @@ describe('客户「我的维修申请」列表页', () => {
 
   it('翻页后以新的分页参数重新拉取', async () => {
     fetchListMock.mockImplementation((target: RepairRequestListPagination) =>
-      makePage({ page: target.page, pageSize: 3, total: 4 }),
+      makePage({ page: target.page, pageSize: 10, total: 11 }),
     );
     render(<CustomerRepairRequestsPage />);
     await screen.findByText('MOCK-RR-2026-0001');
@@ -240,7 +240,7 @@ describe('客户「我的维修申请」列表页', () => {
     fireEvent.click(screen.getByText('2'));
 
     await waitFor(() => {
-      expect(fetchListMock).toHaveBeenLastCalledWith({ page: 2, pageSize: 3 });
+      expect(fetchListMock).toHaveBeenLastCalledWith({ page: 2, pageSize: 10 });
     });
   });
 
@@ -248,8 +248,8 @@ describe('客户「我的维修申请」列表页', () => {
     fetchListMock.mockImplementation((target: RepairRequestListPagination) =>
       makePage({
         page: target.page,
-        pageSize: 3,
-        total: 4,
+        pageSize: 10,
+        total: 11,
         items: target.page === 2 ? [makeItem(920005)] : makePage().items,
       }),
     );
@@ -264,7 +264,7 @@ describe('客户「我的维修申请」列表页', () => {
     fireEvent.click(await screen.findByRole('button', { name: '确认删除' }));
 
     await waitFor(() => {
-      expect(fetchListMock).toHaveBeenLastCalledWith({ page: 1, pageSize: 3 });
+      expect(fetchListMock).toHaveBeenLastCalledWith({ page: 1, pageSize: 10 });
     });
   });
 });

@@ -1,14 +1,14 @@
 // src/pages/customer/repair-request-detail/index.tsx
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Descriptions, Popconfirm, Tag, Timeline } from 'antd';
+import { Alert, Button, Descriptions, Popconfirm, Tag, Timeline, Typography } from 'antd';
 import { message } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 
 import {
   deleteMyRepairRequest,
   fetchMyRepairRequest,
-  type MyRepairRequestDetail,
+  type RepairRequestDetail,
   RESOLUTION_STATUS_LABELS,
 } from '@/features/repair-request';
 
@@ -32,7 +32,7 @@ export function CustomerRepairRequestDetailRoute() {
 type DetailState =
   | { status: 'loading' }
   | { status: 'failed'; message: string; notFound: boolean }
-  | { status: 'ready'; detail: MyRepairRequestDetail };
+  | { status: 'ready'; detail: RepairRequestDetail };
 
 /**
  * 客户维修申请详情页。
@@ -182,9 +182,9 @@ export function CustomerRepairRequestDetailPage({ requestId }: { requestId: numb
         <pre className="whitespace-pre-wrap break-words text-sm">{detail.contentMd}</pre>
       </div>
 
-      {detail.responses.length > 0 ? (
-        <div className="surface-panel">
-          <div className="mb-2 font-medium">工程师回复（{detail.responses.length}）</div>
+      <div className="surface-panel">
+        <div className="mb-2 font-medium">工程师回复（{detail.responses.length}）</div>
+        {detail.responses.length > 0 ? (
           <Timeline
             items={detail.responses.map((response) => ({
               children: (
@@ -204,8 +204,11 @@ export function CustomerRepairRequestDetailPage({ requestId }: { requestId: numb
               key: response.id,
             }))}
           />
-        </div>
-      ) : null}
+        ) : (
+          // 空状态显式化：与列表页「暂无回复」口径一致，避免用户误判为加载不完整或页面遗漏
+          <Typography.Text type="secondary">暂无工程师回复。</Typography.Text>
+        )}
+      </div>
 
       <div>
         <Button onClick={() => navigate(REPAIR_REQUESTS_LIST_PATH)}>返回列表</Button>

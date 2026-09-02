@@ -15,6 +15,8 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  deleteRepairRequestByRequestNo,
+  findRepairRequestByRequestNo,
   hasFrontendGraphQLEndpoint,
   isRealBackendAvailable,
   mysqlQuery,
@@ -107,14 +109,15 @@ test.describe('real backend manage flow', () => {
       await expect(page.getByText('维修申请已删除。')).toBeVisible();
       await expect(page.getByRole('row', { name: new RegExp(requestNo!) })).toHaveCount(0);
 
-      // 落库证据：软删除（deprecated=1 且 deleted_at 非空），非物理删除
-      const row = mysqlQuery(
-        `SELECT is_accepted, deprecated, deleted_at IS NOT NULL FROM repair_request WHERE request_no = '${requestNo}'`,
+      // 落库证据：软删除（deprecated=1 且 deleted_at 非空），非物理删除（受保护 helper，内部白名单校验）
+      const row = findRepairRequestByRequestNo(
+        requestNo!,
+        'is_accepted, deprecated, deleted_at IS NOT NULL',
       );
       expect(row.split('\t')).toEqual(['0', '1', '1']);
 
       // 幂等（裁定 5）：API 重复删除同一申请仍成功
-      const id = mysqlQuery(`SELECT id FROM repair_request WHERE request_no = '${requestNo}'`);
+      const id = findRepairRequestByRequestNo(requestNo!, 'id');
       const repeat = await realGraphqlCall(env, DELETE_MUTATION, { id: Number(id) });
       expect(
         (repeat.body as { data?: { deleteMyRepairRequest?: { requestNo: string } } }).data
@@ -122,9 +125,10 @@ test.describe('real backend manage flow', () => {
       ).toBe(requestNo);
     } finally {
       // 清理兜底：无论断言成败都删除本用例自建的行，保持共享开发库基线干净；
-      // 主路径已软删除（deprecated=1）不影响物理 DELETE，对不存在行是 no-op，幂等成立。
+      // 受保护 helper 内部先白名单校验，主路径已软删除（deprecated=1）不影响物理 DELETE，
+      // 对不存在行是 no-op，幂等成立。
       if (requestNo) {
-        mysqlQuery(`DELETE FROM repair_request WHERE request_no = '${requestNo}'`);
+        deleteRepairRequestByRequestNo(requestNo);
       }
     }
   });
