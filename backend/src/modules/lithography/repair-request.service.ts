@@ -7,7 +7,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { getTypeOrmEntityManager } from '@src/infrastructure/database/transaction/typeorm-persistence-transaction-context';
 import { QueryFailedError, Repository } from 'typeorm';
 import { RepairRequestEntity } from './entities/repair-request.entity';
-import { RepairRequestInsertData, RepairRequestSnapshot } from './lithography.types';
+import {
+  RepairRequestAcceptanceStatusSnapshot,
+  RepairRequestAcceptData,
+  RepairRequestAcceptWriteResult,
+  RepairRequestInsertData,
+  RepairRequestSnapshot,
+} from './lithography.types';
 
 /**
  * 维修申请写服务
@@ -15,9 +21,10 @@ import { RepairRequestInsertData, RepairRequestSnapshot } from './lithography.ty
  * 职责范围：
  * - 维修申请细粒度插入（显式落初始状态：未接单、未作废）
  * - 维修申请编号存在性读取（供 usecase 做唯一编号冲突检测）
+ * - 维修申请原子接单条件更新与接单未命中时的最小状态读取（供 usecase 裁决错误类别）
  *
  * 不包含：
- * - 权限判断、输入规范化、编号生成、contentMd 组装等业务决策（归 usecase）
+ * - 权限判断、输入规范化、编号生成、contentMd 组装、接单结果裁决等业务决策（归 usecase）
  * - 事务开启（事务边界由 usecase 通过 TransactionRunner 持有）
  */
 @Injectable()
@@ -120,6 +127,87 @@ export class RepairRequestService {
     const repository = this.getRepository(transactionContext);
     const count = await repository.count({ where: { requestNo } });
     return count > 0;
+  }
+
+  /**
+   * 原子接单：单条带条件 UPDATE，命中条件为主键匹配、未删除且未接单。
+   *
+   * 并发语义：
+   * - 两个工程师竞争时行锁串行化，仅条件先命中的一方写入成功；
+   * - 客户删除与接单竞争时，先提交者生效，后到者条件不命中；
+   * - affected = 1 才代表接单写入成功，为 0 时由 usecase 裁决错误类别。
+   *
+   * 三个接单字段在同一语句内同时写入，满足实体接单一致性 CHECK。
+   *
+   * @param data 接单写入数据（工程师身份与接单时间由 usecase 从 Session / 系统事件时间取得）
+   * @param transactionContext 可选的事务上下文
+   * @returns 条件更新命中行数（最小写入结果，不返回 ORM Entity）
+   */
+  async acceptRequest(
+    data: RepairRequestAcceptData,
+    transactionContext?: PersistenceTransactionContext,
+  ): Promise<RepairRequestAcceptWriteResult> {
+    const repository = this.getRepository(transactionContext);
+    try {
+      const result = await repository.update(
+        { id: data.requestId, deprecated: false, isAccepted: false },
+        {
+          isAccepted: true,
+          acceptedByEngineerAccountId: data.engineerAccountId,
+          acceptedAt: data.acceptedAt,
+        },
+      );
+      return { affected: result.affected ?? 0 };
+    } catch (error) {
+      // 客户端可见的 details 仅携带申请标识，不得携带表名/SQL/约束等数据库细节；
+      // 底层异常仅以 cause 保留，供服务端日志与排查使用（全局 GraphQL Filter 会将
+      // details 原样写入响应）
+      throw new DomainError(
+        REPAIR_REQUEST_ERROR.ACCEPT_FAILED,
+        '维修申请接单失败，请稍后重试',
+        { requestId: data.requestId },
+        error,
+      );
+    }
+  }
+
+  /**
+   * 接单最小状态读取：仅供接单 usecase 在条件更新未命中时区分
+   * “不存在/已删除”与“已接单”，不得向 Adapter 或前端输出。
+   *
+   * 数据库异常包装为 ACCEPT_FAILED（与 acceptRequest 同一错误路径）：
+   * details 仅携带申请标识，不泄漏 SQL/表名/约束，底层异常仅作 cause 留待日志。
+   *
+   * @param requestId 目标申请主键
+   * @param transactionContext 可选的事务上下文（与条件更新同事务内读取）
+   * @returns 最小状态快照；申请不存在时为 null
+   */
+  async findAcceptanceStatus(
+    requestId: number,
+    transactionContext?: PersistenceTransactionContext,
+  ): Promise<RepairRequestAcceptanceStatusSnapshot | null> {
+    const repository = this.getRepository(transactionContext);
+    try {
+      const entity = await repository.findOne({
+        where: { id: requestId },
+        select: { id: true, isAccepted: true, deprecated: true },
+      });
+      if (!entity) {
+        return null;
+      }
+      return {
+        id: entity.id,
+        isAccepted: entity.isAccepted,
+        deprecated: entity.deprecated,
+      };
+    } catch (error) {
+      throw new DomainError(
+        REPAIR_REQUEST_ERROR.ACCEPT_FAILED,
+        '维修申请接单失败，请稍后重试',
+        { requestId },
+        error,
+      );
+    }
   }
 
   private toSnapshot(entity: RepairRequestEntity): RepairRequestSnapshot {

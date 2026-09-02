@@ -18,3 +18,20 @@ Object.defineProperty(window, 'matchMedia', {
   }),
   writable: false,
 });
+
+// Ant Design 的 Table 等组件经 rc-resize-observer 依赖全局 ResizeObserver，
+// jsdom 同样未提供；与 matchMedia 同源处理，只补最小空实现，
+// 不模拟尺寸回调（布局尺寸不是本仓库 UI 测试的断言对象）。
+class ResizeObserverStub {
+  observe(): void {}
+
+  unobserve(): void {}
+
+  disconnect(): void {}
+}
+
+Object.defineProperty(globalThis, 'ResizeObserver', {
+  configurable: true,
+  value: ResizeObserverStub,
+  writable: true,
+});

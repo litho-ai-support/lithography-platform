@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '@src/adapters/api/graphql/guards/jwt-auth.guard';
 import { RolesGuard } from '@src/adapters/api/graphql/guards/roles.guard';
 import { mapGqlToCoreParams } from '@src/adapters/api/graphql/pagination.mapper';
 import { PaginationArgs } from '@src/adapters/api/graphql/pagination.args';
+import { AcceptRepairRequestUsecase } from '@src/usecases/repair-request/accept-repair-request.usecase';
 import { CreateRepairRequestUsecase } from '@src/usecases/repair-request/create-repair-request.usecase';
 import { GetEngineerRepairRequestDetailUsecase } from '@src/usecases/repair-request/get-engineer-repair-request-detail.usecase';
 import { GetMyRepairRequestDetailUsecase } from '@src/usecases/repair-request/get-my-repair-request-detail.usecase';
@@ -35,6 +36,7 @@ import {
 export class RepairRequestResolver {
   constructor(
     private readonly createRepairRequestUsecase: CreateRepairRequestUsecase,
+    private readonly acceptRepairRequestUsecase: AcceptRepairRequestUsecase,
     private readonly listMyRepairRequestsUsecase: ListMyRepairRequestsUsecase,
     private readonly listEngineerRepairRequestsUsecase: ListEngineerRepairRequestsUsecase,
     private readonly getMyRepairRequestDetailUsecase: GetMyRepairRequestDetailUsecase,
@@ -71,6 +73,27 @@ export class RepairRequestResolver {
       createdAt: snapshot.createdAt,
       isAccepted: snapshot.isAccepted,
     };
+  }
+
+  /**
+   * 工程师接单（原子条件更新，竞争时仅一方可成功）
+   * 仅精确 ENGINEER 可调用，SUPER_ADMIN 不准入（读权限继承不等于写权限继承）；
+   * 接单工程师取自会话，接单时间由后端生成，均不可由客户端传入；
+   * 成功输出复用工程师详情读链路与本 Resolver 既有详情 DTO 映射，
+   * 业务异常（不存在/已接单/越权/系统失败）不在此捕获，交由全局过滤器映射
+   */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(IdentityTypeEnum.ENGINEER)
+  @Mutation(() => RepairRequestDetailDTO, { description: '工程师接单维修申请' })
+  async acceptRepairRequest(
+    @Args({ name: 'id', type: () => Int, description: '维修申请 ID' }) id: number,
+    @currentUser() user: JwtPayload,
+  ): Promise<RepairRequestDetailDTO> {
+    const detail = await this.acceptRepairRequestUsecase.execute({
+      requestId: id,
+      session: mapJwtToUsecaseSession(user),
+    });
+    return this.toDetailDTO(detail);
   }
 
   /**
