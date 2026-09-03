@@ -1,5 +1,6 @@
 // src/types/auth/session.types.ts
 import { JwtPayload } from '../jwt.types';
+import { IdentityTypeEnum } from '../models/account.types';
 
 /**
  * Usecase 层统一会话类型
@@ -15,6 +16,12 @@ export interface UsecaseSession {
    * - 语义：与 GraphQL `@Roles()` 所使用的角色编码保持一致（如 "ENGINEER"）
    */
   roles: string[];
+  /**
+   * 当前使用角色（可选）
+   * - 来源：JWT `activeRole`（登录后角色决策阶段写入）
+   * - 缺失或异常值不做补全/伪造，由需要精确角色判定的用例自行失败关闭
+   */
+  activeRole?: IdentityTypeEnum;
 }
 
 /**
@@ -25,6 +32,9 @@ export function mapJwtToUsecaseSession(jwt: JwtPayload): UsecaseSession {
   return {
     accountId: jwt.sub,
     roles: normalizeAccessGroup(jwt.accessGroup),
+    // 直接透传 JWT activeRole（可能为 undefined），不在此处推导或伪造；
+    // 精确角色用例（如接单）在缺失/异常时自行失败关闭
+    activeRole: jwt.activeRole,
   };
 }
 

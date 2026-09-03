@@ -21,8 +21,11 @@ import { GetEngineerRepairRequestDetailUsecase } from './get-engineer-repair-req
  * 工程师接单用例
  *
  * 业务流程：
- * 1. 角色兜底：仅精确 ENGINEER 业务身份可接单（不展开角色继承，
- *    SUPER_ADMIN 只继承既有读权限，读权限继承不等于写权限继承）
+ * 1. 接单权限作为业务规则在本用例内执行（参数校验与事务之前）：
+ *    仅 roles 含 ENGINEER 且可信 JWT activeRole 精确为 ENGINEER 可接单。
+ *    守卫层只做入口粗粒度准入（按 accessGroup），混合角色账号
+ *    （如 SUPER_ADMIN + ENGINEER）以 activeRole=SUPER_ADMIN 进入时在此被拒绝；
+ *    SUPER_ADMIN 的既有读权限继承语义不受影响（读权限继承不等于写权限继承）
  * 2. 事务内原子条件更新：未删除且未接单才可写入，竞争时仅一方成功
  * 3. 未命中（affected = 0）时按最小状态读取裁决错误类别：
  *    不存在/已删除 → NOT_FOUND；已接单 → CONFLICT
@@ -51,7 +54,7 @@ export class AcceptRepairRequestUsecase {
     requestId: number;
     session: UsecaseSession;
   }): Promise<RepairRequestDetailView> {
-    this.assertEngineerRole(params.session.roles);
+    this.assertEngineerAcceptance(params.session);
 
     if (!Number.isInteger(params.requestId) || params.requestId <= 0) {
       throw new DomainError(REPAIR_REQUEST_ERROR.INVALID_PARAMS, '维修申请 ID 无效', {
@@ -83,17 +86,23 @@ export class AcceptRepairRequestUsecase {
   }
 
   /**
-   * 角色兜底决策：仅精确 ENGINEER 可接单
-   * 守卫层已按 @Roles(ENGINEER) 拦截，此处兜底防止守卫被绕过或角色数据漂移；
-   * UsecaseSession.roles 已大写归一，直接精确匹配，不使用按角色继承展开的 hasRole，
-   * 否则 SUPER_ADMIN 会经继承链被误放行
+   * 接单权限业务规则：仅 roles 含 ENGINEER 且可信 JWT activeRole 精确为 ENGINEER 可接单
+   *
+   * 守卫层（RolesGuard）只做入口粗粒度准入（按 accessGroup 判断），
+   * 混合角色账号（如 SUPER_ADMIN + ENGINEER）以任一 activeRole 均可通过入口；
+   * 精确的接单写权限在此裁决，不依赖前端隐藏按钮，也不改变守卫的读权限继承语义。
+   * activeRole 缺失或异常值一律拒绝（失败关闭）；UsecaseSession.roles 已大写归一，
+   * 直接精确匹配，不使用按角色继承展开的 hasRole。
+   * 错误 details 不携带 accessGroup/角色列表等身份信息，避免不必要的身份暴露。
    */
-  private assertEngineerRole(roles: readonly string[]): void {
-    if (!roles.includes(IdentityTypeEnum.ENGINEER)) {
+  private assertEngineerAcceptance(session: UsecaseSession): void {
+    const hasEngineerRole = session.roles.includes(IdentityTypeEnum.ENGINEER);
+    const isActiveRoleEngineer = session.activeRole === IdentityTypeEnum.ENGINEER;
+
+    if (!hasEngineerRole || !isActiveRoleEngineer) {
       throw new DomainError(
         PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS,
         '仅工程师账号可以接单维修申请',
-        { accessGroup: [...roles] },
       );
     }
   }

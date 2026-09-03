@@ -25,6 +25,14 @@ import {
  * - auth 错误不在这里特殊处理，仍由共享 GraphQL + auth-session 全局链路负责。
  */
 
+/**
+ * 详情加载/重查的完整结果（含 transport 失败 reason=null 的形态）。
+ * reload 返回该结果，供编排层在接单结果不确定（accept-failed）场景做反馈收敛决策。
+ */
+export type EngineerRepairRequestDetailLoadOutcome =
+  | { ok: true; detail: EngineerRepairRequestDetail }
+  | { ok: false; reason: EngineerRepairRequestDetailFailureReason | null; message: string };
+
 export type EngineerRepairRequestDetailState =
   | { status: 'loading'; requestSeq: number }
   | { status: 'ready'; requestSeq: number; detail: EngineerRepairRequestDetail }
@@ -93,33 +101,41 @@ export function useEngineerRepairRequestDetail(requestId: number | null) {
   });
   const sequenceRef = useRef(0);
 
-  const loadDetail = useCallback(async (targetId: number) => {
-    sequenceRef.current += 1;
-    const sequence = sequenceRef.current;
-    dispatch({ type: 'load-start', requestId: sequence });
+  const loadDetail = useCallback(
+    async (targetId: number): Promise<EngineerRepairRequestDetailLoadOutcome> => {
+      sequenceRef.current += 1;
+      const sequence = sequenceRef.current;
+      dispatch({ type: 'load-start', requestId: sequence });
 
-    try {
-      const result = await fetchEngineerRepairRequestDetail(targetId);
+      try {
+        const result = await fetchEngineerRepairRequestDetail(targetId);
 
-      if (result.ok) {
-        dispatch({ type: 'load-ready', requestId: sequence, detail: result.detail });
-      } else {
+        if (result.ok) {
+          dispatch({ type: 'load-ready', requestId: sequence, detail: result.detail });
+        } else {
+          dispatch({
+            type: 'load-failed',
+            requestId: sequence,
+            reason: result.reason,
+            message: result.message,
+          });
+        }
+
+        return result;
+      } catch (error) {
+        const message = toDetailUserMessage(error);
         dispatch({
           type: 'load-failed',
           requestId: sequence,
-          reason: result.reason,
-          message: result.message,
+          reason: null,
+          message,
         });
+
+        return { ok: false, reason: null, message };
       }
-    } catch (error) {
-      dispatch({
-        type: 'load-failed',
-        requestId: sequence,
-        reason: null,
-        message: toDetailUserMessage(error),
-      });
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (requestId === null) {
@@ -142,12 +158,16 @@ export function useEngineerRepairRequestDetail(requestId: number | null) {
     void loadDetail(requestId);
   }, [requestId, loadDetail]);
 
-  const reload = useCallback(() => {
+  /**
+   * 重查当前详情（沿用查询状态机推进：重查失败落入既有加载失败/重试状态）。
+   * 返回本次重查结果供编排层决策（requestId 为 null 时不发请求，返回 null）。
+   */
+  const reload = useCallback((): Promise<EngineerRepairRequestDetailLoadOutcome | null> => {
     if (requestId === null) {
-      return;
+      return Promise.resolve(null);
     }
 
-    void loadDetail(requestId);
+    return loadDetail(requestId);
   }, [requestId, loadDetail]);
 
   /**

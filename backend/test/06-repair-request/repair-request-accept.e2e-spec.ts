@@ -1,9 +1,13 @@
 // test/06-repair-request/repair-request-accept.e2e-spec.ts
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { AccountEntity } from '@src/modules/account/base/entities/account.entity';
+import { UserInfoEntity } from '@src/modules/account/base/entities/user-info.entity';
 import { ApiModule } from '@src/bootstraps/api/api.module';
+import { AudienceTypeEnum, IdentityTypeEnum } from '@app-types/models/account.types';
 import { EquipmentModelEntity } from '@src/modules/lithography/entities/equipment-model.entity';
 import { RepairRequestEntity } from '@src/modules/lithography/entities/repair-request.entity';
+import { TokenHelper } from '@src/modules/auth/token.helper';
 import { CreateAccountUsecase } from '@src/usecases/account/create-account.usecase';
 import { App } from 'supertest/types';
 import { DataSource, Repository } from 'typeorm';
@@ -52,10 +56,14 @@ const OFFSET_PAGINATION = { mode: 'OFFSET', page: 1, pageSize: 10, withTotal: tr
  *   数据库三个接单字段（is_accepted / accepted_by_engineer_account_id / accepted_at）
  *   与后端生成口径（接单人与时间均不可由客户端传入）
  * - 权限矩阵：CUSTOMER / SUPER_ADMIN / 未登录（写入口精确 ENGINEER，读继承不等于写继承）
+ * - 混合角色（accessGroup=[SUPER_ADMIN, ENGINEER]）：所有 Token 均经真实登录/JWT 签发链路，
+ *   通过测试造数阶段切换账号 identityHint 分别获得 activeRole=SUPER_ADMIN 与
+ *   activeRole=ENGINEER 两个合法 Token；另有经 TokenHelper（项目真实签发入口）签发、
+ *   合法签名但无 activeRole 的兼容性 Token：仅 activeRole=ENGINEER 的 Token 可接单
  * - 错误分类：不存在/已删除 → NOT_FOUND；已接单（含本人重复接单）→ CONFLICT，文案中性
  * - 并发竞争：两名工程师抢单，以及客户删除与工程师接单竞争，数据库终态只能有一个赢家
  *
- * 造数固定主键（131~136 申请、42 型号），依赖 global-setup-e2e 的全表 TRUNCATE 保证无冲突。
+ * 造数固定主键（131~139 申请、42 型号），依赖 global-setup-e2e 的全表 TRUNCATE 保证无冲突。
  */
 describe('工程师接单写链路 (e2e)', () => {
   let app: INestApplication<App>;
@@ -66,8 +74,12 @@ describe('工程师接单写链路 (e2e)', () => {
   let otherEngineerToken: string;
   let customerToken: string;
   let adminToken: string;
+  let hybridTokenSuperAdmin: string;
+  let hybridTokenEngineer: string;
+  let noActiveRoleToken: string;
   let engineerAccountId: number;
   let otherEngineerAccountId: number;
+  let hybridAccountId: number;
 
   const acceptMutation = (token: string | undefined, id: number) =>
     postGql({ app, query: ACCEPT_MUTATION, variables: { id }, token });
@@ -106,7 +118,7 @@ describe('工程师接单写链路 (e2e)', () => {
     await seedTestAccounts({
       dataSource,
       createAccountUsecase: app.get(CreateAccountUsecase),
-      includeKeys: ['staff', 'staffSecondary', 'guestPrimary', 'admin'],
+      includeKeys: ['staff', 'staffSecondary', 'guestPrimary', 'admin', 'hybridStaff'],
     });
     engineerToken = await login({
       app,
@@ -136,6 +148,44 @@ describe('工程师接单写链路 (e2e)', () => {
       dataSource,
       testAccountsConfig.staffSecondary.loginName,
     );
+
+    // 混合角色账号：先以造数 identityHint=ENGINEER 登录，得到 activeRole=ENGINEER 的 Token B；
+    // 再在测试造数阶段切换 identityHint=SUPER_ADMIN 后重新登录，
+    // 得到 activeRole=SUPER_ADMIN 的 Token A（两条 Token 都经过真实登录/JWT 签发链路）
+    hybridTokenEngineer = await login({
+      app,
+      loginName: testAccountsConfig.hybridStaff.loginName,
+      loginPassword: testAccountsConfig.hybridStaff.loginPassword,
+    });
+    hybridAccountId = await getAccountIdByLoginName(
+      dataSource,
+      testAccountsConfig.hybridStaff.loginName,
+    );
+    await dataSource
+      .getRepository(AccountEntity)
+      .update({ id: hybridAccountId }, { identityHint: IdentityTypeEnum.SUPER_ADMIN });
+    hybridTokenSuperAdmin = await login({
+      app,
+      loginName: testAccountsConfig.hybridStaff.loginName,
+      loginPassword: testAccountsConfig.hybridStaff.loginPassword,
+    });
+
+    // 合法签名但无 activeRole 的兼容性 Token：使用项目真实签发入口 TokenHelper，
+    // 不伪造无签名 Token；当前登录链路仅在 accessGroup 非空时写入 activeRole，
+    // 此处模拟兼容旧 Token 的场景用于验证失败关闭
+    const hybridNickname = (
+      await dataSource.getRepository(UserInfoEntity).findOneByOrFail({ accountId: hybridAccountId })
+    ).nickname;
+    noActiveRoleToken = app.get(TokenHelper).generateAccessToken({
+      payload: {
+        sub: hybridAccountId,
+        username: hybridNickname,
+        email: testAccountsConfig.hybridStaff.loginEmail,
+        accessGroup: [IdentityTypeEnum.SUPER_ADMIN, IdentityTypeEnum.ENGINEER],
+      },
+      audience: AudienceTypeEnum.DESKTOP,
+    });
+
     const customerAccountId = await getAccountIdByLoginName(
       dataSource,
       testAccountsConfig.guestPrimary.loginName,
@@ -215,6 +265,54 @@ describe('工程师接单写链路 (e2e)', () => {
           deprecated: false,
           deletedAt: null,
         },
+        // 137 混合角色 activeRole=SUPER_ADMIN 拒绝目标（全程不产生写入）；
+        // 138 混合角色 activeRole=ENGINEER 接单成功目标；
+        // 139 无 activeRole 兼容性 Token 拒绝目标（全程不产生写入）
+        {
+          id: 137,
+          requestNo: 'E2E-AC-137',
+          customerAccountId,
+          equipmentModelId: 42,
+          errorCode: 'E-3007',
+          faultDescription: '混合角色 activeRole=SUPER_ADMIN 拒绝场景',
+          contentMd: '# E2E-137',
+          createdAt: new Date('2026-08-30T09:00:00.000Z'),
+          isAccepted: false,
+          acceptedByEngineerAccountId: null,
+          acceptedAt: null,
+          deprecated: false,
+          deletedAt: null,
+        },
+        {
+          id: 138,
+          requestNo: 'E2E-AC-138',
+          customerAccountId,
+          equipmentModelId: 42,
+          errorCode: 'E-3008',
+          faultDescription: '混合角色 activeRole=ENGINEER 接单成功场景',
+          contentMd: '# E2E-138',
+          createdAt: new Date('2026-08-30T10:00:00.000Z'),
+          isAccepted: false,
+          acceptedByEngineerAccountId: null,
+          acceptedAt: null,
+          deprecated: false,
+          deletedAt: null,
+        },
+        {
+          id: 139,
+          requestNo: 'E2E-AC-139',
+          customerAccountId,
+          equipmentModelId: 42,
+          errorCode: 'E-3009',
+          faultDescription: '无 activeRole 兼容性 Token 拒绝场景',
+          contentMd: '# E2E-139',
+          createdAt: new Date('2026-08-30T11:00:00.000Z'),
+          isAccepted: false,
+          acceptedByEngineerAccountId: null,
+          acceptedAt: null,
+          deprecated: false,
+          deletedAt: null,
+        },
       ]),
     );
   }, 60000);
@@ -268,6 +366,51 @@ describe('工程师接单写链路 (e2e)', () => {
 
       expect(response.body.errors).toHaveLength(1);
       expectUnauthenticated(response.body.errors[0]);
+    });
+  });
+
+  describe('混合角色 activeRole 精确准入（accessGroup=[SUPER_ADMIN, ENGINEER]）', () => {
+    it('activeRole=SUPER_ADMIN 的合法 Token 被拒绝（守卫准入不等于接单写权限）', async () => {
+      const response = await acceptMutation(hybridTokenSuperAdmin, 137).expect(200);
+
+      expect(response.body.errors).toHaveLength(1);
+      expectForbidden(response.body.errors[0]);
+
+      // 拒绝路径不启动事务，数据库三个接单字段完全未改变
+      const row = await requestRepository.findOneOrFail({ where: { id: 137 } });
+      expect(row.isAccepted).toBe(false);
+      expect(row.acceptedByEngineerAccountId).toBeNull();
+      expect(row.acceptedAt).toBeNull();
+    });
+
+    it('activeRole=ENGINEER 的合法 Token 接单成功：接单人等于该账号，三个接单字段一致', async () => {
+      const response = await acceptMutation(hybridTokenEngineer, 138).expect(200);
+
+      expect(response.body.errors).toBeUndefined();
+      const detail = response.body.data.acceptRepairRequest;
+      expect(detail).toMatchObject({
+        id: 138,
+        requestNo: 'E2E-AC-138',
+        isAccepted: true,
+      });
+      expect(detail.acceptedAt).not.toBeNull();
+
+      const row = await requestRepository.findOneOrFail({ where: { id: 138 } });
+      expect(row.isAccepted).toBe(true);
+      expect(row.acceptedByEngineerAccountId).toBe(hybridAccountId);
+      expect(row.acceptedAt).not.toBeNull();
+    });
+
+    it('合法签名但无 activeRole 的兼容性 Token 被拒绝（失败关闭），数据库不产生写入', async () => {
+      const response = await acceptMutation(noActiveRoleToken, 139).expect(200);
+
+      expect(response.body.errors).toHaveLength(1);
+      expectForbidden(response.body.errors[0]);
+
+      const row = await requestRepository.findOneOrFail({ where: { id: 139 } });
+      expect(row.isAccepted).toBe(false);
+      expect(row.acceptedByEngineerAccountId).toBeNull();
+      expect(row.acceptedAt).toBeNull();
     });
   });
 

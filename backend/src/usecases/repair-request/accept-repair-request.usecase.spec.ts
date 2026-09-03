@@ -24,7 +24,8 @@ type GetEngineerRepairRequestDetailUsecaseMock = {
 
 /**
  * 接单用例单测：只验证 UseCase 自身持有的业务决策
- * （角色兜底、入参校验、事务边界、写入参数来源、未命中裁决、写后读复用），
+ * （roles + activeRole 接单权限、入参校验、事务边界、写入参数来源、
+ * 未命中裁决、写后读复用），
  * 不复制 QueryService 的细粒度读权限规则（读权限归读用例与 E2E 覆盖）。
  */
 describe('AcceptRepairRequestUsecase', () => {
@@ -35,6 +36,7 @@ describe('AcceptRepairRequestUsecase', () => {
   const engineerSession: UsecaseSession = {
     accountId: 5,
     roles: [IdentityTypeEnum.ENGINEER],
+    activeRole: IdentityTypeEnum.ENGINEER,
   };
 
   const detailView: RepairRequestDetailView = {
@@ -161,9 +163,9 @@ describe('AcceptRepairRequestUsecase', () => {
     );
   });
 
-  describe('角色兜底决策', () => {
+  describe('角色准入决策', () => {
     it.each([[[IdentityTypeEnum.CUSTOMER]], [[IdentityTypeEnum.SUPER_ADMIN]], [[] as string[]]])(
-      'roles=%j 被拒绝，不开始事务、不执行写入',
+      'roles=%j 且 activeRole 缺失被拒绝，不开始事务、不执行写入',
       async (roles) => {
         await expect(
           usecase.execute({ requestId, session: { accountId: 5, roles } }),
@@ -175,7 +177,7 @@ describe('AcceptRepairRequestUsecase', () => {
       },
     );
 
-    it('SUPER_ADMIN 只继承读权限：读详情用例不因角色兜底被拒绝', async () => {
+    it('SUPER_ADMIN 只继承读权限：读详情用例不因角色准入被拒绝', async () => {
       // 反向确认「读权限继承不等于接单权限」：SUPER_ADMIN 走读用例不被本用例拦截，
       // 而接单入口被拦截，两者不共享同一判定
       const superAdminSession: UsecaseSession = {
@@ -186,6 +188,113 @@ describe('AcceptRepairRequestUsecase', () => {
         usecase.execute({ requestId, session: superAdminSession }),
       ).rejects.toMatchObject({ code: PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS });
       expect(getEngineerRepairRequestDetailUsecase.execute).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('精确 activeRole 接单权限矩阵', () => {
+    it('roles=[ENGINEER]、activeRole=ENGINEER：允许', async () => {
+      const session: UsecaseSession = {
+        accountId: 5,
+        roles: [IdentityTypeEnum.ENGINEER],
+        activeRole: IdentityTypeEnum.ENGINEER,
+      };
+
+      await expect(usecase.execute({ requestId, session })).resolves.toBe(detailView);
+    });
+
+    it('混合角色 activeRole=SUPER_ADMIN 被拒绝：守卫准入不等于接单写权限', async () => {
+      const hybridSuperAdminSession: UsecaseSession = {
+        accountId: 8,
+        roles: [IdentityTypeEnum.SUPER_ADMIN, IdentityTypeEnum.ENGINEER],
+        activeRole: IdentityTypeEnum.SUPER_ADMIN,
+      };
+
+      await expect(
+        usecase.execute({ requestId, session: hybridSuperAdminSession }),
+      ).rejects.toMatchObject({ code: PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS });
+
+      expect(transactionRunner.run).not.toHaveBeenCalled();
+      expect(repairRequestService.acceptRequest).not.toHaveBeenCalled();
+      expect(getEngineerRepairRequestDetailUsecase.execute).not.toHaveBeenCalled();
+    });
+
+    it('混合角色 activeRole=ENGINEER：允许（同一账号切换当前角色后可接单）', async () => {
+      const hybridEngineerSession: UsecaseSession = {
+        accountId: 8,
+        roles: [IdentityTypeEnum.SUPER_ADMIN, IdentityTypeEnum.ENGINEER],
+        activeRole: IdentityTypeEnum.ENGINEER,
+      };
+
+      await expect(usecase.execute({ requestId, session: hybridEngineerSession })).resolves.toBe(
+        detailView,
+      );
+    });
+
+    it('roles=[ENGINEER]、activeRole 缺失：拒绝（失败关闭）', async () => {
+      const sessionWithoutActiveRole: UsecaseSession = {
+        accountId: 5,
+        roles: [IdentityTypeEnum.ENGINEER],
+      };
+
+      await expect(
+        usecase.execute({ requestId, session: sessionWithoutActiveRole }),
+      ).rejects.toMatchObject({ code: PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS });
+
+      expect(transactionRunner.run).not.toHaveBeenCalled();
+      expect(repairRequestService.acceptRequest).not.toHaveBeenCalled();
+      expect(getEngineerRepairRequestDetailUsecase.execute).not.toHaveBeenCalled();
+    });
+
+    it.each([IdentityTypeEnum.SUPER_ADMIN, IdentityTypeEnum.CUSTOMER] as const)(
+      'roles 不含 ENGINEER、activeRole=%s：拒绝（activeRole 不能越过 roles）',
+      async (activeRole) => {
+        const session: UsecaseSession = { accountId: 9, roles: [activeRole], activeRole };
+
+        await expect(usecase.execute({ requestId, session })).rejects.toMatchObject({
+          code: PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS,
+        });
+
+        expect(transactionRunner.run).not.toHaveBeenCalled();
+        expect(repairRequestService.acceptRequest).not.toHaveBeenCalled();
+        expect(getEngineerRepairRequestDetailUsecase.execute).not.toHaveBeenCalled();
+      },
+    );
+
+    it('roles=[SUPER_ADMIN]、activeRole=ENGINEER：拒绝（矛盾 Token：activeRole ∉ roles，失败关闭）', async () => {
+      // 文档化对抗组合：activeRole 不能脱离 roles 单独授予 ENGINEER
+      // （伪造/异常签发的 Token 即使声称 activeRole=ENGINEER 也被拦截）
+      const contradictorySession: UsecaseSession = {
+        accountId: 9,
+        roles: [IdentityTypeEnum.SUPER_ADMIN],
+        activeRole: IdentityTypeEnum.ENGINEER,
+      };
+
+      await expect(
+        usecase.execute({ requestId, session: contradictorySession }),
+      ).rejects.toMatchObject({ code: PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS });
+
+      expect(transactionRunner.run).not.toHaveBeenCalled();
+      expect(repairRequestService.acceptRequest).not.toHaveBeenCalled();
+      expect(getEngineerRepairRequestDetailUsecase.execute).not.toHaveBeenCalled();
+    });
+
+    it('权限拒绝错误不携带 accessGroup/角色列表等身份信息', async () => {
+      const hybridSuperAdminSession: UsecaseSession = {
+        accountId: 8,
+        roles: [IdentityTypeEnum.SUPER_ADMIN, IdentityTypeEnum.ENGINEER],
+        activeRole: IdentityTypeEnum.SUPER_ADMIN,
+      };
+
+      let caught: unknown;
+      try {
+        await usecase.execute({ requestId, session: hybridSuperAdminSession });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toMatchObject({ code: PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS });
+      expect(JSON.stringify(caught)).not.toContain('SUPER_ADMIN');
+      expect(JSON.stringify(caught)).not.toContain('accessGroup');
     });
   });
 

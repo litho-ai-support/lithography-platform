@@ -9,7 +9,8 @@
  * 重点覆盖接单后的刷新取舍：
  * - 成功 → 用 Mutation 返回值原子注入，不重查（无骨架屏闪现）；
  * - 冲突 / not-accessible → 现状已变，重查收敛，不保留可继续接单的过期状态；
- * - 无权限 / 系统失败 → 申请数据未变，不重查，仅提示。
+ * - accept-failed（接单结果不确定）→ 只重查详情确认，不自动重发接单 Mutation；
+ * - 无权限 → 确定拒绝，申请数据未变，不重查，仅提示。
  */
 
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -200,23 +201,117 @@ describe('useEngineerRepairRequestDetailFlow', () => {
     unmount();
   });
 
-  it.each([
-    ['insufficient-permission', '当前账号无权接单维修申请。'],
-    ['accept-failed', '接单失败，请稍后重试。'],
-  ] as const)('接单失败 reason=%s 不改变申请数据，不错误重查详情', async (reason, message) => {
-    acceptMock.mockResolvedValue({ ok: false, reason, message });
-    const { result, unmount } = await renderReadyFlow();
+  it.each([['insufficient-permission', '当前账号无权接单维修申请。']] as const)(
+    '接单确定拒绝 reason=%s 不改变申请数据，不错误重查详情',
+    async (reason, message) => {
+      acceptMock.mockResolvedValue({ ok: false, reason, message });
+      const { result, unmount } = await renderReadyFlow();
 
-    let acceptResult: AcceptRepairRequestResult | null = null;
-    await act(async () => {
-      acceptResult = await result.current.accept();
+      let acceptResult: AcceptRepairRequestResult | null = null;
+      await act(async () => {
+        acceptResult = await result.current.accept();
+      });
+
+      expect(acceptResult).toEqual({ ok: false, reason, message });
+      expect(fetchDetailMock).toHaveBeenCalledTimes(1);
+      // 原详情保持 ready，UI 展示内联错误提示
+      expect(result.current.state).toMatchObject({
+        status: 'ready',
+        detail: buildDetail(21, false),
+      });
+      unmount();
+    },
+  );
+
+  describe('accept-failed 接单结果不确定（只重查确认，不自动重发 Mutation）', () => {
+    const ACCEPT_FAILED_RESULT: AcceptRepairRequestResult = {
+      ok: false,
+      reason: 'accept-failed',
+      message: '接单失败，请稍后重试。',
+    };
+
+    it('触发一次详情重查，重查发现已接单时最终展示已接单状态', async () => {
+      acceptMock.mockResolvedValue(ACCEPT_FAILED_RESULT);
+      fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, false) });
+      fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
+      const invalidation = trackListInvalidation();
+      const { result, unmount } = await renderReadyFlow();
+
+      await act(async () => {
+        await result.current.accept();
+      });
+
+      await waitFor(() => expect(fetchDetailMock).toHaveBeenCalledTimes(2));
+      expect(fetchDetailMock).toHaveBeenLastCalledWith(21);
+      // 重查收敛为已接单状态，接单按钮随 isAccepted 消失
+      expect(result.current.state).toMatchObject({
+        status: 'ready',
+        detail: buildDetail(21, true),
+      });
+      // 重查确认已接单：失败反馈收敛为成功，不再保留矛盾的“接单失败”提示
+      expect(result.current.lastAcceptResult).toEqual({ ok: true, detail: buildDetail(21, true) });
+      // 结果不确定只重查确认，不自动重发接单 Mutation
+      expect(acceptMock).toHaveBeenCalledTimes(1);
+      // 列表失效仅由接单 command 宣告一次，编排不重复宣告
+      expect(invalidation.calls).toHaveLength(1);
+      invalidation.unsubscribe();
+      unmount();
     });
 
-    expect(acceptResult).toEqual({ ok: false, reason, message });
-    expect(fetchDetailMock).toHaveBeenCalledTimes(1);
-    // 原详情保持 ready，UI 展示内联错误提示
-    expect(result.current.state).toMatchObject({ status: 'ready', detail: buildDetail(21, false) });
-    unmount();
+    it('重查发现仍未接单时保留失败反馈，且可手动重试接单', async () => {
+      acceptMock.mockResolvedValue(ACCEPT_FAILED_RESULT);
+      fetchDetailMock.mockResolvedValue({ ok: true, detail: buildDetail(21, false) });
+      const { result, unmount } = await renderReadyFlow();
+
+      await act(async () => {
+        await result.current.accept();
+      });
+
+      await waitFor(() => expect(fetchDetailMock).toHaveBeenCalledTimes(2));
+      // 重查后仍未接单：详情保持 ready，失败反馈保留供 UI 展示
+      expect(result.current.state).toMatchObject({
+        status: 'ready',
+        detail: buildDetail(21, false),
+      });
+      expect(result.current.lastAcceptResult).toEqual(ACCEPT_FAILED_RESULT);
+
+      // 不自动重发：至此接单 Mutation 只发送过一次
+      expect(acceptMock).toHaveBeenCalledTimes(1);
+
+      // 用户手动重试：ref 锁已释放，可再次发起接单
+      acceptMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
+      await act(async () => {
+        await result.current.accept();
+      });
+      expect(acceptMock).toHaveBeenCalledTimes(2);
+      expect(result.current.state).toMatchObject({ detail: buildDetail(21, true) });
+      unmount();
+    });
+
+    it('重查失败时进入既有加载失败/重试状态，失败反馈保留', async () => {
+      acceptMock.mockResolvedValue(ACCEPT_FAILED_RESULT);
+      fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, false) });
+      fetchDetailMock.mockResolvedValueOnce({
+        ok: false,
+        reason: 'load-failed',
+        message: '维修申请详情加载失败，请稍后重试。',
+      });
+      const { result, unmount } = await renderReadyFlow();
+
+      await act(async () => {
+        await result.current.accept();
+      });
+
+      await waitFor(() => expect(result.current.state.status).toBe('failed'));
+      expect(result.current.state).toMatchObject({
+        status: 'failed',
+        reason: 'load-failed',
+      });
+      expect(result.current.lastAcceptResult).toEqual(ACCEPT_FAILED_RESULT);
+      // 失败路径同样不产生第二次接单 Mutation
+      expect(acceptMock).toHaveBeenCalledTimes(1);
+      unmount();
+    });
   });
 
   it('进行中重复调用 accept 返回 null，不产生并行 Mutation 与重复刷新', async () => {

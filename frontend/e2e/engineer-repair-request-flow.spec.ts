@@ -88,6 +88,28 @@ function fulfillConflict(route: Route) {
   });
 }
 
+function fulfillAcceptSystemFailure(route: Route) {
+  // 与后端 DomainError 真实输出对齐：INTERNAL_SERVER_ERROR + REPAIR_REQUEST_ACCEPT_FAILED
+  // （adapter 主映射仅依赖大类码，本 mock 走真实映射路径收敛为 accept-failed）
+  return route.fulfill({
+    body: JSON.stringify({
+      errors: [
+        {
+          extensions: {
+            code: 'INTERNAL_SERVER_ERROR',
+            errorCode: 'REPAIR_REQUEST_ACCEPT_FAILED',
+            errorMessage: '维修申请接单失败，请稍后重试',
+            details: { requestId: 8802 },
+          },
+          message: 'internal detail',
+        },
+      ],
+    }),
+    contentType: 'application/json',
+    status: 200,
+  });
+}
+
 function fulfillAcceptSuccess(route: Route, id: number) {
   return route.fulfill({
     body: JSON.stringify({
@@ -199,6 +221,49 @@ test('engineer accepts with confirm: exactly one mutation and the panel turns ac
   // 只发送一次 Mutation，详情来自 Mutation 返回值，不重查详情
   expect(getAcceptRequests()).toBe(1);
   expect(getListRequests()).toBe(1);
+});
+
+test('uncertain accept result re-verifies the detail without resending the mutation', async ({
+  page,
+}) => {
+  // 前端浏览器流程测试（GraphQL Mock）：
+  // 接单 Mutation 返回系统失败（结果不确定）后，只重查详情确认，不自动重发 Mutation；
+  // 重查发现已由当前工程师接单时，页面展示已接单状态且接单按钮消失，
+  // 失败反馈同步收敛为成功，不保留矛盾的“接单失败”提示
+  await seedAuthSession(page, 'ENGINEER');
+
+  let detailRequests = 0;
+  let acceptCalled = false;
+  const { getAcceptRequests } = await routeEngineerGraphQL(page, {
+    onAccept: (route) => {
+      acceptCalled = true;
+      return fulfillAcceptSystemFailure(route);
+    },
+    onDetail: (route) => {
+      detailRequests += 1;
+      // 挂钩业务事件：接单 Mutation 已发出后的详情请求（重查）返回已接单，
+      // 不依赖请求序号，避免与环境请求行为（双调/预取/重试）耦合
+      return fulfillDetail(route, 8802, acceptCalled);
+    },
+  });
+
+  await openDetailFromList(page);
+  await expect(page.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toBeVisible();
+  // 详情请求数只作相对断言：接单失败后的重查恰为接单前基线 +1
+  const detailRequestsBeforeAccept = detailRequests;
+
+  await page.getByRole('button', { name: /^(loading\s+)?接\s*单$/ }).click();
+  await page.getByRole('button', { name: '确认接单' }).click();
+
+  // 接单 Mutation 只发送一次；失败后自动重查详情（且只重查一次），收敛为已接单状态，接单按钮消失
+  await expect(page.getByText('已接单', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toHaveCount(0);
+  expect(getAcceptRequests()).toBe(1);
+  expect(detailRequests).toBe(detailRequestsBeforeAccept + 1);
+
+  // 重查确认已接单后：展示成功反馈，不再保留矛盾的“接单失败”提示
+  await expect(page.getByText('你已接单该维修申请，后续请跟进处理。')).toBeVisible();
+  await expect(page.getByText('接单失败，请稍后重试')).toHaveCount(0);
 });
 
 test('accept conflict keeps the backend message and offers a way back to the list', async ({

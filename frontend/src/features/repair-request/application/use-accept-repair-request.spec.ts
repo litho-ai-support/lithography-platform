@@ -147,8 +147,7 @@ describe('useAcceptRepairRequest', () => {
   it.each([
     ['not-accessible', '维修申请不存在或已删除。'],
     ['insufficient-permission', '当前账号无权接单维修申请。'],
-    ['accept-failed', '接单失败，请稍后重试。'],
-  ] as const)('接单失败 reason=%s 不改变列表数据，不宣告失效', async (reason, message) => {
+  ] as const)('接单确定拒绝 reason=%s 不改变列表数据，不宣告失效', async (reason, message) => {
     acceptMock.mockResolvedValue({ ok: false, reason, message });
     const invalidation = trackListInvalidation();
 
@@ -159,6 +158,23 @@ describe('useAcceptRepairRequest', () => {
 
     expect(invalidation.calls).toHaveLength(0);
     expect(result.current.result).toEqual({ ok: false, reason, message });
+    invalidation.unsubscribe();
+  });
+
+  it('accept-failed（接单结果不确定）同样宣告列表失效（仅一次）', async () => {
+    acceptMock.mockResolvedValue({
+      ok: false,
+      reason: 'accept-failed',
+      message: '接单失败，请稍后重试。',
+    });
+    const invalidation = trackListInvalidation();
+
+    const { result } = renderHook(() => useAcceptRepairRequest());
+    await act(async () => {
+      await result.current.accept(21);
+    });
+
+    expect(invalidation.calls).toHaveLength(1);
     invalidation.unsubscribe();
   });
 
@@ -175,14 +191,15 @@ describe('useAcceptRepairRequest', () => {
     });
 
     // 共享链路已完成 Session 失效宣告，本层只把 transport 失败转为提示，
-    // 不得误判为 insufficient-permission / already-accepted
+    // 不得误判为 insufficient-permission / already-accepted；
+    // transport 失败统一视为接单结果不确定（accept-failed），列表一并宣告失效
     expect(acceptResult).toEqual({
       ok: false,
       reason: 'accept-failed',
       message: authError.userMessage,
     });
     expect(authError.userMessage).toBe('登录状态已失效，请重新登录后再试。');
-    expect(invalidation.calls).toHaveLength(0);
+    expect(invalidation.calls).toHaveLength(1);
     expect(result.current.accepting).toBe(false);
     invalidation.unsubscribe();
   });
@@ -210,6 +227,25 @@ describe('useAcceptRepairRequest', () => {
       await result.current.accept(21);
     });
     expect(acceptMock).toHaveBeenCalledTimes(2);
+    expect(result.current.result).toEqual({ ok: true, detail: ACCEPTED_DETAIL });
+  });
+
+  it('convergeToAccepted 把最近一次结果改写为成功（accept-failed 重查确认后的收敛入口）', async () => {
+    acceptMock.mockResolvedValue({
+      ok: false,
+      reason: 'accept-failed',
+      message: '接单失败，请稍后重试。',
+    });
+
+    const { result } = renderHook(() => useAcceptRepairRequest());
+    await act(async () => {
+      await result.current.accept(21);
+    });
+    expect(result.current.result).toMatchObject({ ok: false, reason: 'accept-failed' });
+
+    await act(async () => {
+      result.current.convergeToAccepted(ACCEPTED_DETAIL);
+    });
     expect(result.current.result).toEqual({ ok: true, detail: ACCEPTED_DETAIL });
   });
 });

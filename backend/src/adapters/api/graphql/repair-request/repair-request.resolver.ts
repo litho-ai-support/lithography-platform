@@ -80,7 +80,9 @@ export class RepairRequestResolver {
 
   /**
    * 工程师接单（原子条件更新，竞争时仅一方可成功）
-   * 仅精确 ENGINEER 可调用，SUPER_ADMIN 不准入（读权限继承不等于写权限继承）；
+   * 入口仅做粗粒度准入（@Roles(ENGINEER) 按 accessGroup 判断）；
+   * 接单写权限的精确角色规则（roles 含 ENGINEER 且可信 JWT activeRole=ENGINEER）
+   * 由 AcceptRepairRequestUsecase 作为业务规则执行，读权限继承不等于写权限继承；
    * 接单工程师取自会话，接单时间由后端生成，均不可由客户端传入；
    * 成功输出复用工程师详情读链路与本 Resolver 既有详情 DTO 映射，
    * 业务异常（不存在/已接单/越权/系统失败）不在此捕获，交由全局过滤器映射
