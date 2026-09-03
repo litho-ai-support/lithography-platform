@@ -16,6 +16,7 @@ const GROUPS = {
       'test/06-repair-request/repair-request-delete.e2e-spec.ts',
       'test/06-repair-request/repair-request-flow.e2e-spec.ts',
       'test/06-repair-request/repair-request-read.e2e-spec.ts',
+      'test/06-repair-request/repair-request-accept.e2e-spec.ts',
       'test/07-pagination-sort-search/pagination.e2e-spec.ts',
       'test/07-pagination-sort-search/search.e2e-spec.ts',
       'test/07-pagination-sort-search/sort.e2e-spec.ts',

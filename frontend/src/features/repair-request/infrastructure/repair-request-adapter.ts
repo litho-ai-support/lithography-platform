@@ -81,7 +81,7 @@ type CreateRepairRequestData = {
   createRepairRequest: RepairRequestRecord;
 };
 
-type GraphQLErrorDetail = {
+export type GraphQLErrorDetail = {
   /** GraphQL 大类码（extensions.code），契约保证稳定的生产分支信号 */
   code: string | null;
   /** 业务细节码（extensions.errorCode），仅调试/可观测/可选展示，生产可能隐藏 */
@@ -97,9 +97,9 @@ function normalizeOptionalString(value: unknown): string | null {
 /**
  * 从 ingress error 中读取第一条 GraphQL 错误的业务细节。
  * 生产分支只依赖稳定的 extensions.code；不取顶层通用 message（避免把通用文案当业务消息），
- * 不做任何 Session 读写。
+ * 不做任何 Session 读写。同域其他维修申请 adapter 复用本实现，不复制第二份。
  */
-function readGraphQLErrorDetail(error: unknown): GraphQLErrorDetail | null {
+export function readGraphQLErrorDetail(error: unknown): GraphQLErrorDetail | null {
   if (!isGraphQLIngressError(error) || !error.graphqlErrors?.length) {
     return null;
   }

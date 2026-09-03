@@ -55,6 +55,36 @@ export type RepairRequestSnapshot = {
 };
 
 /**
+ * 维修申请原子接单写入数据。
+ * engineerAccountId 仅来自后端 Session，acceptedAt 仅来自后端系统事件时间，
+ * 两者均不得由客户端传入（由 UseCase 保证）。
+ */
+export type RepairRequestAcceptData = {
+  requestId: number;
+  engineerAccountId: number;
+  acceptedAt: Date;
+};
+
+/**
+ * 维修申请原子接单写入结果：仅表达 UseCase 裁决所需信息，不暴露 ORM Entity。
+ * affected = 1 代表条件更新命中并写入成功；0 代表无可接单行，
+ * 由 UseCase 结合最小状态读取区分“不存在/已删除”与“已接单”。
+ */
+export type RepairRequestAcceptWriteResult = {
+  affected: number;
+};
+
+/**
+ * 接单最小状态快照：仅供接单 UseCase 在条件更新未命中时裁决错误类别，
+ * 不得流入 Adapter 或前端。
+ */
+export type RepairRequestAcceptanceStatusSnapshot = {
+  id: number;
+  isAccepted: boolean;
+  deprecated: boolean;
+};
+
+/**
  * 工程师列表范围枚举（负责人 20260901 裁定：scope = AVAILABLE / MINE）。
  * GraphQL 层以字符串表达，由 Usecase 校验，adapter 不导入本常量。
  */

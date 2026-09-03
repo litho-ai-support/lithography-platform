@@ -17,6 +17,8 @@ import {
   CustomerRepairRequestsPage,
 } from '@/pages/customer';
 import { EngineerPage } from '@/pages/engineer';
+import { EngineerRepairRequestDetailPage } from '@/pages/engineer-repair-request-detail';
+import { EngineerRepairRequestsPage } from '@/pages/engineer-repair-requests';
 import { ErrorPreviewPage } from '@/pages/error-preview';
 import { ProjectStructurePage } from '@/pages/project-structure';
 import { RepairRequestCreatePage } from '@/pages/repair-request-create';
@@ -96,6 +98,16 @@ const router = createBrowserRouter([
         element: <EngineerPage />,
         loader: protectedRouteLoader,
         path: 'engineer',
+      },
+      {
+        element: <EngineerRepairRequestsPage />,
+        loader: protectedRouteLoader,
+        path: 'engineer/repair-requests',
+      },
+      {
+        element: <EngineerRepairRequestDetailPage />,
+        loader: protectedRouteLoader,
+        path: 'engineer/repair-requests/:requestId',
       },
       {
         element: <CustomerPage />,

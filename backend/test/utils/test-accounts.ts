@@ -89,6 +89,15 @@ export const testAccountsConfig = {
     accessGroup: [IdentityTypeEnum.ENGINEER, IdentityTypeEnum.CUSTOMER],
     identityType: IdentityTypeEnum.ENGINEER,
   },
+  /** 混合角色账号：接单 activeRole 精确准入 E2E 用（切换 identityHint 分别签发不同 Token） */
+  hybridStaff: {
+    loginName: 'testhybridstaff',
+    loginEmail: 'hybrid.staff@example.com',
+    loginPassword: 'testHybridStaff@2024',
+    status: AccountStatus.ACTIVE,
+    accessGroup: [IdentityTypeEnum.SUPER_ADMIN, IdentityTypeEnum.ENGINEER],
+    identityType: IdentityTypeEnum.ENGINEER,
+  },
 } satisfies Record<string, TestAccountConfig>;
 
 export type TestAccountKey = keyof typeof testAccountsConfig;

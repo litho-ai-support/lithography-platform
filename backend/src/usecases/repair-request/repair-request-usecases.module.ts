@@ -3,6 +3,7 @@
 import { Module } from '@nestjs/common';
 import { AccountInstallerModule } from '@src/modules/account/account-installer.module';
 import { LithographyModule } from '@src/modules/lithography/lithography.module';
+import { AcceptRepairRequestUsecase } from './accept-repair-request.usecase';
 import { CreateRepairRequestUsecase } from './create-repair-request.usecase';
 import { DeleteMyRepairRequestUsecase } from './delete-my-repair-request.usecase';
 import { GetEngineerRepairRequestDetailUsecase } from './get-engineer-repair-request-detail.usecase';
@@ -14,6 +15,7 @@ import { ListMyRepairRequestsUsecase } from './list-my-repair-requests.usecase';
 @Module({
   imports: [LithographyModule, AccountInstallerModule],
   providers: [
+    AcceptRepairRequestUsecase,
     CreateRepairRequestUsecase,
     DeleteMyRepairRequestUsecase,
     GetEngineerRepairRequestDetailUsecase,
@@ -23,6 +25,7 @@ import { ListMyRepairRequestsUsecase } from './list-my-repair-requests.usecase';
     ListMyRepairRequestsUsecase,
   ],
   exports: [
+    AcceptRepairRequestUsecase,
     CreateRepairRequestUsecase,
     DeleteMyRepairRequestUsecase,
     GetEngineerRepairRequestDetailUsecase,

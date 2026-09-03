@@ -1,0 +1,351 @@
+// src/features/repair-request/infrastructure/engineer-repair-request-adapter.spec.ts
+
+/**
+ * 工程师维修申请读写 adapter（防腐层）单测。
+ *
+ * 只 mock 共享 GraphQL 执行入口，验证：
+ * - Query / Mutation 文档与变量口径（接单入参只有申请 ID）；
+ * - DTO → 内部干净模型的显式映射与可空字段归一；
+ * - 业务拒绝主映射只依赖 extensions.code 大类，errorCode / errorMessage 缺失时安全兜底；
+ * - transport / auth / 未知 GraphQL 错误继续上抛，交共享链路处理。
+ */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import * as sharedGraphql from '@/shared/graphql';
+import { GraphQLIngressError } from '@/shared/graphql';
+
+import type {
+  EngineerRepairListScope,
+  RepairRequestDetailDTO,
+} from './engineer-repair-request.types';
+import {
+  acceptRepairRequest,
+  ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE,
+  fetchEngineerRepairRequestDetail,
+  fetchEngineerRepairRequests,
+} from './engineer-repair-request-adapter';
+
+vi.mock('@/shared/graphql', async (importOriginal) => {
+  const actual = await importOriginal<typeof sharedGraphql>();
+
+  return {
+    ...actual,
+    executeGraphQL: vi.fn(),
+  };
+});
+
+const executeGraphQLMock = vi.mocked(sharedGraphql.executeGraphQL);
+
+const DETAIL_DTO: RepairRequestDetailDTO = {
+  id: 21,
+  requestNo: 'RR20260902100000ABC123',
+  equipmentModel: { id: 3, modelCode: 'LITHO-9000', modelName: '光刻机 9000' },
+  errorCode: 'E-100',
+  faultDescription: '设备无法启动',
+  contentMd: '# 设备维修申请',
+  createdAt: '2026-09-02T08:00:00.000Z',
+  isAccepted: true,
+  acceptedAt: '2026-09-02T08:30:00.000Z',
+  latestResolutionStatus: 'PENDING',
+  responses: [
+    {
+      id: 51,
+      engineerNickname: '陈工',
+      resolutionStatus: 'RESOLVED',
+      responseText: '已更换干涉仪镜片',
+      createdAt: '2026-09-02T09:00:00.000Z',
+    },
+  ],
+};
+
+/** 与 DETAIL_DTO 等价的内部干净模型（逐字段显式映射的期望值） */
+const DETAIL_MODEL = {
+  id: 21,
+  requestNo: 'RR20260902100000ABC123',
+  equipmentModel: { id: 3, modelCode: 'LITHO-9000', modelName: '光刻机 9000' },
+  errorCode: 'E-100',
+  faultDescription: '设备无法启动',
+  contentMd: '# 设备维修申请',
+  createdAt: '2026-09-02T08:00:00.000Z',
+  isAccepted: true,
+  acceptedAt: '2026-09-02T08:30:00.000Z',
+  latestResolutionStatus: 'PENDING',
+  responses: [
+    {
+      id: 51,
+      engineerNickname: '陈工',
+      resolutionStatus: 'RESOLVED',
+      responseText: '已更换干涉仪镜片',
+      createdAt: '2026-09-02T09:00:00.000Z',
+    },
+  ],
+};
+
+function buildDomainIngressError(options: {
+  code: string;
+  errorCode?: string;
+  errorMessage?: string;
+}) {
+  const extensions: Record<string, unknown> = { code: options.code };
+  if (options.errorCode !== undefined) {
+    extensions.errorCode = options.errorCode;
+  }
+  if (options.errorMessage !== undefined) {
+    extensions.errorMessage = options.errorMessage;
+  }
+
+  return new GraphQLIngressError({
+    type: 'graphql',
+    message: options.errorMessage ?? '请求处理失败。',
+    graphqlErrors: [{ message: options.errorMessage ?? '请求处理失败。', extensions }],
+  });
+}
+
+beforeEach(() => {
+  executeGraphQLMock.mockReset();
+});
+
+describe('fetchEngineerRepairRequests', () => {
+  it.each<[EngineerRepairListScope, number]>([
+    ['AVAILABLE', 1],
+    ['MINE', 3],
+  ])('scope=%s 时按该范围与页码发送 OFFSET 分页参数', async (scope, page) => {
+    executeGraphQLMock.mockResolvedValue({
+      engineerRepairRequests: { items: [], total: 0, page, pageSize: 10 },
+    });
+
+    await fetchEngineerRepairRequests({ scope, page, pageSize: 10 });
+
+    expect(executeGraphQLMock).toHaveBeenCalledTimes(1);
+    expect(executeGraphQLMock).toHaveBeenCalledWith(
+      expect.stringContaining('engineerRepairRequests(scope: $scope, pagination: $pagination)'),
+      {
+        scope,
+        pagination: { mode: 'OFFSET', page, pageSize: 10, withTotal: true },
+      },
+    );
+  });
+
+  it('列表 DTO 映射为内部模型，可空字段归一为 null', async () => {
+    executeGraphQLMock.mockResolvedValue({
+      engineerRepairRequests: {
+        items: [
+          {
+            id: 21,
+            requestNo: 'RR20260902100000ABC123',
+            equipmentModel: { id: 3, modelCode: 'LITHO-9000', modelName: '光刻机 9000' },
+            errorCode: 'E-100',
+            createdAt: '2026-09-02T08:00:00.000Z',
+            isAccepted: true,
+            acceptedAt: '2026-09-02T08:30:00.000Z',
+            latestResolutionStatus: 'RESOLVED',
+          },
+          {
+            // 待接单：后端返回 null / 字段缺省两种形态都必须归一为 null
+            id: 22,
+            requestNo: 'RR20260902110000DEF456',
+            equipmentModel: { id: 4, modelCode: 'LITHO-8000', modelName: '光刻机 8000' },
+            errorCode: 'E-200',
+            createdAt: '2026-09-02T08:10:00.000Z',
+            isAccepted: false,
+            acceptedAt: null,
+          },
+        ],
+        total: 2,
+        page: 1,
+        pageSize: 10,
+      },
+    });
+
+    await expect(
+      fetchEngineerRepairRequests({ scope: 'AVAILABLE', page: 1, pageSize: 10 }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: 21,
+          requestNo: 'RR20260902100000ABC123',
+          equipmentModel: { id: 3, modelCode: 'LITHO-9000', modelName: '光刻机 9000' },
+          errorCode: 'E-100',
+          createdAt: '2026-09-02T08:00:00.000Z',
+          isAccepted: true,
+          acceptedAt: '2026-09-02T08:30:00.000Z',
+          latestResolutionStatus: 'RESOLVED',
+        },
+        {
+          id: 22,
+          requestNo: 'RR20260902110000DEF456',
+          equipmentModel: { id: 4, modelCode: 'LITHO-8000', modelName: '光刻机 8000' },
+          errorCode: 'E-200',
+          createdAt: '2026-09-02T08:10:00.000Z',
+          isAccepted: false,
+          acceptedAt: null,
+          latestResolutionStatus: null,
+        },
+      ],
+      total: 2,
+      page: 1,
+      pageSize: 10,
+    });
+  });
+
+  it('分页字段缺省时回落查询参数，不向 application 泄出 undefined', async () => {
+    executeGraphQLMock.mockResolvedValue({ engineerRepairRequests: {} });
+
+    await expect(
+      fetchEngineerRepairRequests({ scope: 'MINE', page: 2, pageSize: 20 }),
+    ).resolves.toEqual({ items: [], total: 0, page: 2, pageSize: 20 });
+  });
+});
+
+describe('fetchEngineerRepairRequestDetail', () => {
+  it('详情与回复时间线映射为内部模型', async () => {
+    executeGraphQLMock.mockResolvedValue({ engineerRepairRequest: DETAIL_DTO });
+
+    await expect(fetchEngineerRepairRequestDetail(21)).resolves.toEqual({
+      ok: true,
+      detail: DETAIL_MODEL,
+    });
+    expect(executeGraphQLMock).toHaveBeenCalledWith(
+      expect.stringContaining('engineerRepairRequest(id: $id)'),
+      { id: 21 },
+    );
+  });
+
+  it('可空字段与缺省 responses 归一（null / 空时间线）', async () => {
+    executeGraphQLMock.mockResolvedValue({
+      engineerRepairRequest: {
+        ...DETAIL_DTO,
+        acceptedAt: null,
+        latestResolutionStatus: null,
+      },
+    });
+
+    const result = await fetchEngineerRepairRequestDetail(21);
+    expect(result).toMatchObject({
+      ok: true,
+      detail: { acceptedAt: null, latestResolutionStatus: null },
+    });
+
+    executeGraphQLMock.mockResolvedValue({
+      engineerRepairRequest: { ...DETAIL_DTO, responses: undefined },
+    });
+    await expect(fetchEngineerRepairRequestDetail(21)).resolves.toMatchObject({
+      ok: true,
+      detail: { responses: [] },
+    });
+  });
+
+  it.each([
+    ['NOT_FOUND', 'not-accessible', ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE],
+    ['FORBIDDEN', 'not-accessible', ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE],
+    ['INTERNAL_SERVER_ERROR', 'load-failed', '维修申请详情加载失败，请稍后重试。'],
+    ['BAD_USER_INPUT', 'load-failed', '维修申请详情加载失败，请稍后重试。'],
+  ])(
+    '业务拒绝大类码 %s 映射为 reason=%s，errorMessage 缺失时走统一安全兜底文案',
+    async (code, reason, message) => {
+      executeGraphQLMock.mockRejectedValue(buildDomainIngressError({ code }));
+
+      await expect(fetchEngineerRepairRequestDetail(21)).resolves.toEqual({
+        ok: false,
+        reason,
+        message,
+      });
+    },
+  );
+
+  it('后端提供 errorMessage 时优先展示后端消息', async () => {
+    executeGraphQLMock.mockRejectedValue(
+      buildDomainIngressError({
+        code: 'NOT_FOUND',
+        errorCode: 'REPAIR_REQUEST_NOT_FOUND',
+        errorMessage: '维修申请不存在或已删除',
+      }),
+    );
+
+    await expect(fetchEngineerRepairRequestDetail(21)).resolves.toEqual({
+      ok: false,
+      reason: 'not-accessible',
+      message: '维修申请不存在或已删除',
+    });
+  });
+
+  it('未收录大类码 / auth / 网络错误继续上抛，交共享 GraphQL 与 auth-session 链路', async () => {
+    const unknownGraphqlError = buildDomainIngressError({ code: 'GRAPHQL_VALIDATION_FAILED' });
+    const authError = new GraphQLIngressError({ type: 'auth', message: 'token invalid' });
+    const networkError = new GraphQLIngressError({ type: 'network', message: 'fetch failed' });
+
+    for (const error of [unknownGraphqlError, authError, networkError]) {
+      executeGraphQLMock.mockRejectedValueOnce(error);
+      await expect(fetchEngineerRepairRequestDetail(21)).rejects.toBe(error);
+    }
+  });
+});
+
+describe('acceptRepairRequest', () => {
+  it('Mutation 变量只有申请 ID，不含工程师账号 ID 与接单时间', async () => {
+    executeGraphQLMock.mockResolvedValue({ acceptRepairRequest: DETAIL_DTO });
+
+    await acceptRepairRequest(21);
+
+    expect(executeGraphQLMock).toHaveBeenCalledTimes(1);
+    const [document, variables] = executeGraphQLMock.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(variables).toEqual({ id: 21 });
+    expect(document).toContain('acceptRepairRequest(id: $id)');
+    // 接单人身份与接单时间由后端 Session / 系统时间决定，前端不得声明这类变量
+    expect(document).not.toContain('engineerAccountId');
+    expect(document).not.toContain('acceptedByEngineerAccountId');
+    expect(document).not.toContain('$acceptedAt');
+  });
+
+  it('接单成功返回后端最新详情（内部干净模型）', async () => {
+    executeGraphQLMock.mockResolvedValue({ acceptRepairRequest: DETAIL_DTO });
+
+    await expect(acceptRepairRequest(21)).resolves.toEqual({ ok: true, detail: DETAIL_MODEL });
+  });
+
+  it.each([
+    ['CONFLICT', 'already-accepted', '该维修申请已被接单，请刷新后查看最新状态'],
+    ['NOT_FOUND', 'not-accessible', '维修申请不存在或已删除。'],
+    ['FORBIDDEN', 'insufficient-permission', '当前账号无权接单维修申请。'],
+    ['INTERNAL_SERVER_ERROR', 'accept-failed', '接单失败，请稍后重试。'],
+    ['BAD_USER_INPUT', 'accept-failed', '接单失败，请稍后重试。'],
+  ])(
+    '业务拒绝大类码 %s 映射为 reason=%s，errorCode / errorMessage 缺失时走安全兜底文案',
+    async (code, reason, message) => {
+      executeGraphQLMock.mockRejectedValue(buildDomainIngressError({ code }));
+
+      await expect(acceptRepairRequest(21)).resolves.toEqual({ ok: false, reason, message });
+    },
+  );
+
+  it('后端暴露细节码与消息时优先使用后端消息（生产隐藏细节码不影响大类映射）', async () => {
+    executeGraphQLMock.mockRejectedValue(
+      buildDomainIngressError({
+        code: 'CONFLICT',
+        errorCode: 'REPAIR_REQUEST_ALREADY_ACCEPTED',
+        errorMessage: '维修申请已被接单，请刷新后查看最新状态',
+      }),
+    );
+
+    await expect(acceptRepairRequest(21)).resolves.toEqual({
+      ok: false,
+      reason: 'already-accepted',
+      message: '维修申请已被接单，请刷新后查看最新状态',
+    });
+  });
+
+  it('未收录大类码 / UNAUTHENTICATED / 网络错误继续上抛', async () => {
+    const unknownGraphqlError = buildDomainIngressError({ code: 'GRAPHQL_VALIDATION_FAILED' });
+    const authError = new GraphQLIngressError({ type: 'auth', message: 'token invalid' });
+    const networkError = new GraphQLIngressError({ type: 'network', message: 'fetch failed' });
+
+    for (const error of [unknownGraphqlError, authError, networkError]) {
+      executeGraphQLMock.mockRejectedValueOnce(error);
+      await expect(acceptRepairRequest(21)).rejects.toBe(error);
+    }
+  });
+});
