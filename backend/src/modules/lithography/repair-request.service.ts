@@ -8,6 +8,7 @@ import { getTypeOrmEntityManager } from '@src/infrastructure/database/transactio
 import { QueryFailedError, Repository } from 'typeorm';
 import { RepairRequestEntity } from './entities/repair-request.entity';
 import {
+  EngineerResponseTargetSnapshot,
   RepairRequestAcceptanceStatusSnapshot,
   RepairRequestAcceptData,
   RepairRequestAcceptWriteResult,
@@ -24,6 +25,7 @@ import {
  * - 维修申请编号存在性读取（供 usecase 做唯一编号冲突检测）
  * - 维修申请原子接单条件更新与接单未命中时的最小状态读取（供 usecase 裁决错误类别）
  * - 维修申请原子条件软删除（供 usecase 做客户侧删除，返回状态事实不表决策）
+ * - 回复目标锁定读取（供回复 usecase 在事务内获取最小状态事实，不表决策）
  *
  * 不包含：
  * - 权限判断、输入规范化、编号生成、contentMd 组装、接单结果裁决等业务决策（归 usecase）
@@ -296,6 +298,55 @@ export class RepairRequestService {
     throw new DomainError(REPAIR_REQUEST_ERROR.DELETION_FAILED, '维修申请删除失败，请稍后重试', {
       id: params.requestId,
     });
+  }
+
+  /**
+   * 回复目标锁定读取：仅供回复 usecase 在事务内获取最小状态事实（pessimistic_write 行锁），
+   * 防止「检查已接单」与「追加回复」之间目标状态被并发改变（接单/软删除竞争）。
+   * 只返回状态事实，不做权限或回复资格判断（归 usecase）。
+   *
+   * 数据库异常包装为 RESPONSE_FAILED：details 仅携带申请标识，不泄漏 SQL/表名/约束，
+   * 底层异常仅以 cause 保留供服务端日志使用（全局 GraphQL Filter 会将 details 原样写入响应）。
+   *
+   * @param requestId 目标申请主键
+   * @param transactionContext 事务上下文（必须与后续回复写入同事务）
+   * @returns 最小状态快照；申请不存在时为 null
+   */
+  async findResponseTargetForUpdate(
+    requestId: number,
+    transactionContext: PersistenceTransactionContext,
+  ): Promise<EngineerResponseTargetSnapshot | null> {
+    const repository = this.getRepository(transactionContext);
+    try {
+      const entity = await repository.findOne({
+        where: { id: requestId },
+        select: {
+          id: true,
+          customerAccountId: true,
+          isAccepted: true,
+          acceptedByEngineerAccountId: true,
+          deprecated: true,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!entity) {
+        return null;
+      }
+      return {
+        id: entity.id,
+        customerAccountId: entity.customerAccountId,
+        isAccepted: entity.isAccepted,
+        acceptedByEngineerAccountId: entity.acceptedByEngineerAccountId,
+        deprecated: entity.deprecated,
+      };
+    } catch (error) {
+      throw new DomainError(
+        REPAIR_REQUEST_ERROR.RESPONSE_FAILED,
+        '处理回复失败，请稍后重试',
+        { requestId },
+        error,
+      );
+    }
   }
 
   private toSnapshot(entity: RepairRequestEntity): RepairRequestSnapshot {

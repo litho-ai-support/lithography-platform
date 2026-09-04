@@ -14,16 +14,19 @@ import { RolesGuard } from '@src/adapters/api/graphql/guards/roles.guard';
 import { mapGqlToCoreParams } from '@src/adapters/api/graphql/pagination.mapper';
 import { PaginationArgs } from '@src/adapters/api/graphql/pagination.args';
 import { AcceptRepairRequestUsecase } from '@src/usecases/repair-request/accept-repair-request.usecase';
+import { CreateEngineerResponseUsecase } from '@src/usecases/repair-request/create-engineer-response.usecase';
 import { CreateRepairRequestUsecase } from '@src/usecases/repair-request/create-repair-request.usecase';
 import { DeleteMyRepairRequestUsecase } from '@src/usecases/repair-request/delete-my-repair-request.usecase';
 import { GetEngineerRepairRequestDetailUsecase } from '@src/usecases/repair-request/get-engineer-repair-request-detail.usecase';
 import { GetMyRepairRequestDetailUsecase } from '@src/usecases/repair-request/get-my-repair-request-detail.usecase';
 import { ListEngineerRepairRequestsUsecase } from '@src/usecases/repair-request/list-engineer-repair-requests.usecase';
 import { ListMyRepairRequestsUsecase } from '@src/usecases/repair-request/list-my-repair-requests.usecase';
+import { CreateEngineerResponseInput } from './dto/create-engineer-response.input';
 import { CreateRepairRequestInput } from './dto/create-repair-request.input';
 import { DeleteMyRepairRequestResultDTO } from './dto/delete-my-repair-request-result.dto';
 import { RepairRequestDTO } from './dto/repair-request.dto';
 import {
+  EngineerResponseDTO,
   RepairRequestDetailDTO,
   RepairRequestListItemDTO,
   RepairRequestPaginatedDTO,
@@ -39,6 +42,7 @@ export class RepairRequestResolver {
   constructor(
     private readonly createRepairRequestUsecase: CreateRepairRequestUsecase,
     private readonly acceptRepairRequestUsecase: AcceptRepairRequestUsecase,
+    private readonly createEngineerResponseUsecase: CreateEngineerResponseUsecase,
     private readonly deleteMyRepairRequestUsecase: DeleteMyRepairRequestUsecase,
     private readonly listMyRepairRequestsUsecase: ListMyRepairRequestsUsecase,
     private readonly listEngineerRepairRequestsUsecase: ListEngineerRepairRequestsUsecase,
@@ -99,6 +103,32 @@ export class RepairRequestResolver {
       session: mapJwtToUsecaseSession(user),
     });
     return this.toDetailDTO(detail);
+  }
+
+  /**
+   * 工程师追加处理回复（追加写入，不更新历史回复）
+   * 入口仅做粗粒度准入（@Roles(ENGINEER) 按 accessGroup 判断）；
+   * 回复写权限的精确角色规则（roles 含 ENGINEER 且可信 JWT activeRole=ENGINEER）
+   * 由 CreateEngineerResponseUsecase 作为业务规则执行；
+   * engineerAccountId 取自可信 Session，customerAccountId 由目标申请派生，
+   * 客户端不可传入；成功只返回本次新建回复，事务提交后不重查整份详情；
+   * 业务异常（不可访问/未接单/越权/输入非法/系统失败）不在此捕获，交由全局过滤器映射
+   */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(IdentityTypeEnum.ENGINEER)
+  @Mutation(() => EngineerResponseDTO, { description: '工程师追加处理回复' })
+  @ValidateInput()
+  async createEngineerResponse(
+    @Args('input') input: CreateEngineerResponseInput,
+    @currentUser() user: JwtPayload,
+  ): Promise<EngineerResponseDTO> {
+    const view = await this.createEngineerResponseUsecase.execute({
+      session: mapJwtToUsecaseSession(user),
+      requestId: input.requestId,
+      responseText: input.responseText,
+      resolutionStatus: input.resolutionStatus,
+    });
+    return this.toResponseDTO(view);
   }
 
   /**
@@ -217,6 +247,26 @@ export class RepairRequestResolver {
   }
 
   /**
+   * 单条回复视图 → DTO（回复 Mutation 成功输出与详情 responses 复用同一映射，
+   * 不各写一份；不返回工程师账号 ID）
+   */
+  private toResponseDTO(response: {
+    id: number;
+    engineerNickname: string;
+    resolutionStatus: EngineerResolutionStatus;
+    responseText: string;
+    createdAt: Date;
+  }): EngineerResponseDTO {
+    return {
+      id: response.id,
+      engineerNickname: response.engineerNickname,
+      resolutionStatus: response.resolutionStatus,
+      responseText: response.responseText,
+      createdAt: response.createdAt,
+    };
+  }
+
+  /**
    * 详情视图 → DTO（回复含工程师安全昵称，不返回工程师账号 ID）
    */
   private toDetailDTO(detail: {
@@ -242,13 +292,7 @@ export class RepairRequestResolver {
       ...this.toListItemDTO(detail),
       faultDescription: detail.faultDescription,
       contentMd: detail.contentMd,
-      responses: detail.responses.map((response) => ({
-        id: response.id,
-        engineerNickname: response.engineerNickname,
-        resolutionStatus: response.resolutionStatus,
-        responseText: response.responseText,
-        createdAt: response.createdAt,
-      })),
+      responses: detail.responses.map((response) => this.toResponseDTO(response)),
     };
   }
 

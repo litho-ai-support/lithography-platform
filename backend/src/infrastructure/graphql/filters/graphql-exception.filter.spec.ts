@@ -38,6 +38,9 @@ describe(GqlAllExceptionsFilter.name, () => {
     [REPAIR_REQUEST_ERROR.ALREADY_ACCEPTED, 'CONFLICT'],
     [REPAIR_REQUEST_ERROR.ACCEPT_FAILED, 'INTERNAL_SERVER_ERROR'],
     [REPAIR_REQUEST_ERROR.DELETION_FAILED, 'INTERNAL_SERVER_ERROR'],
+    // 回复：未接单属业务状态冲突 CONFLICT，回复落库失败属系统侧故障
+    [REPAIR_REQUEST_ERROR.NOT_ACCEPTED, 'CONFLICT'],
+    [REPAIR_REQUEST_ERROR.RESPONSE_FAILED, 'INTERNAL_SERVER_ERROR'],
   ])('maps repair request error %s to GraphQL code %s', (errorCode, gqlCode) => {
     const configService = {
       get: jest.fn().mockReturnValue('production'),

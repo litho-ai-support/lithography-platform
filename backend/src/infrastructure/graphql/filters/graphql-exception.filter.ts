@@ -178,7 +178,8 @@ function mapDomainErrorToGqlCode(errorCode: string): string {
 
     // 维修申请相关错误（设备型号不存在属于目标不存在；停用与非法输入属于输入非法；
     // 落库失败与编号冲突属系统侧故障，不得误报为输入错误；
-    // 软删除：不存在/非本人统一 NOT_FOUND，已接单拒绝 CONFLICT，落库失败属系统侧故障）
+    // 软删除：不存在/非本人统一 NOT_FOUND，已接单拒绝 CONFLICT，落库失败属系统侧故障；
+    // 回复：未接单属业务状态冲突 CONFLICT，回复落库失败属系统侧故障）
     [REPAIR_REQUEST_ERROR.EQUIPMENT_MODEL_NOT_FOUND]: 'NOT_FOUND',
     [REPAIR_REQUEST_ERROR.EQUIPMENT_MODEL_DISABLED]: 'BAD_USER_INPUT',
     [REPAIR_REQUEST_ERROR.INVALID_PARAMS]: 'BAD_USER_INPUT',
@@ -188,6 +189,8 @@ function mapDomainErrorToGqlCode(errorCode: string): string {
     [REPAIR_REQUEST_ERROR.ALREADY_ACCEPTED]: 'CONFLICT',
     [REPAIR_REQUEST_ERROR.ACCEPT_FAILED]: 'INTERNAL_SERVER_ERROR',
     [REPAIR_REQUEST_ERROR.DELETION_FAILED]: 'INTERNAL_SERVER_ERROR',
+    [REPAIR_REQUEST_ERROR.NOT_ACCEPTED]: 'CONFLICT',
+    [REPAIR_REQUEST_ERROR.RESPONSE_FAILED]: 'INTERNAL_SERVER_ERROR',
 
     [CAPABILITY_ERROR.UNAVAILABLE]: 'INTERNAL_SERVER_ERROR',
   };

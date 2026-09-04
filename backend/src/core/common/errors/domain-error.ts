@@ -155,7 +155,7 @@ export const TIME_ERROR = {
 } as const;
 Object.freeze(TIME_ERROR);
 
-// 维修申请相关错误码（客户创建/删除、设备型号校验、工程师接单等）
+// 维修申请相关错误码（客户创建/删除、设备型号校验、工程师接单/回复等）
 export const REPAIR_REQUEST_ERROR = {
   CREATION_FAILED: 'REPAIR_REQUEST_CREATION_FAILED',
   INVALID_PARAMS: 'REPAIR_REQUEST_INVALID_PARAMS',
@@ -171,6 +171,10 @@ export const REPAIR_REQUEST_ERROR = {
   ACCEPT_FAILED: 'REPAIR_REQUEST_ACCEPT_FAILED',
   // 软删除落库失败（系统侧故障，非业务拒绝）
   DELETION_FAILED: 'REPAIR_REQUEST_DELETION_FAILED',
+  // 回复：目标申请存在但尚未接单（业务状态冲突，提示先接单后回复；对外大类 CONFLICT）
+  NOT_ACCEPTED: 'REPAIR_REQUEST_NOT_ACCEPTED',
+  // 回复：系统侧写入失败，不向客户端泄漏数据库细节（对外大类 INTERNAL_SERVER_ERROR）
+  RESPONSE_FAILED: 'REPAIR_REQUEST_RESPONSE_FAILED',
 } as const;
 Object.freeze(REPAIR_REQUEST_ERROR);
 

@@ -18,7 +18,10 @@ import type {
 } from '../infrastructure/engineer-repair-request.types';
 import * as engineerRepairRequestAdapter from '../infrastructure/engineer-repair-request-adapter';
 
-import { useEngineerRepairRequestDetail } from './use-engineer-repair-request-detail';
+import {
+  type EngineerRepairRequestDetailLoadOutcome,
+  useEngineerRepairRequestDetail,
+} from './use-engineer-repair-request-detail';
 
 vi.mock('../infrastructure/engineer-repair-request-adapter', async (importOriginal) => {
   const actual = await importOriginal<typeof engineerRepairRequestAdapter>();
@@ -254,5 +257,332 @@ describe('useEngineerRepairRequestDetail', () => {
     });
 
     expect(result.current.state).toMatchObject({ status: 'failed', reason: 'not-accessible' });
+  });
+});
+
+describe('useEngineerRepairRequestDetail 的 apply-response（回复原子注入）', () => {
+  const BASE = buildDetail(21, true);
+  const EXISTING = {
+    id: 51,
+    engineerNickname: '陈工',
+    resolutionStatus: 'PENDING',
+    responseText: '已初步处理',
+    createdAt: '2026-09-02T09:00:00.000Z',
+  } as const;
+
+  async function renderReadyWithExistingResponse() {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      detail: { ...BASE, responses: [EXISTING], latestResolutionStatus: 'PENDING' },
+    });
+    const rendered = renderHook(() => useEngineerRepairRequestDetail(21));
+    await waitFor(() => expect(rendered.result.current.state.status).toBe('ready'));
+
+    return rendered;
+  }
+
+  it('追加新回复并在同一事件内同步 latestResolutionStatus，不发起新查询', async () => {
+    const { result, unmount } = await renderReadyWithExistingResponse();
+
+    await act(async () => {
+      result.current.applyResponse({
+        id: 61,
+        engineerNickname: '陈工',
+        resolutionStatus: 'RESOLVED',
+        responseText: '已修复',
+        createdAt: '2026-09-02T10:00:00.000Z',
+      });
+    });
+
+    expect(result.current.state).toMatchObject({
+      status: 'ready',
+      // 回复成功注入推进查询版本（1 → 2），使此前在飞的旧查询失效
+      requestSeq: 2,
+      detail: {
+        responses: [
+          EXISTING,
+          {
+            id: 61,
+            engineerNickname: '陈工',
+            resolutionStatus: 'RESOLVED',
+            responseText: '已修复',
+            createdAt: '2026-09-02T10:00:00.000Z',
+          },
+        ],
+        latestResolutionStatus: 'RESOLVED',
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('同一回复 ID 不重复追加（重放/重复返回被去重）', async () => {
+    const { result, unmount } = await renderReadyWithExistingResponse();
+
+    await act(async () => {
+      result.current.applyResponse({ ...EXISTING });
+    });
+
+    expect(result.current.state).toMatchObject({
+      detail: { responses: [EXISTING], latestResolutionStatus: 'PENDING' },
+    });
+    unmount();
+  });
+
+  it('按 createdAt ASC + id ASC 排序（与后端读取契约同口径）', async () => {
+    const { result, unmount } = await renderReadyWithExistingResponse();
+
+    // 服务端 ID 更大但 createdAt 更早（并发窗口内其他工程师刚追加过回复）
+    await act(async () => {
+      result.current.applyResponse({
+        id: 61,
+        engineerNickname: '李工',
+        resolutionStatus: 'PENDING',
+        responseText: '并发回复',
+        createdAt: '2026-09-02T08:30:00.000Z',
+      });
+    });
+
+    const responses =
+      result.current.state.status === 'ready' ? result.current.state.detail.responses : [];
+    expect(responses.map((item) => [item.id, item.createdAt])).toEqual([
+      [61, '2026-09-02T08:30:00.000Z'],
+      [51, '2026-09-02T09:00:00.000Z'],
+    ]);
+    unmount();
+  });
+});
+
+describe('useEngineerRepairRequestDetail 的 recheckSilently（静默重查）', () => {
+  it('成功时不进入 loading，保留 ready 详情并原子更新为最新详情', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, detail: buildDetail(21, false) })
+      .mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetail(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.recheckSilently();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // 不切 loading：状态始终 ready，序号不随静默重查推进（无在飞请求语义）
+    expect(result.current.state).toEqual({
+      status: 'ready',
+      requestSeq: 1,
+      detail: buildDetail(21, true),
+    });
+    expect(outcome).toEqual({ ok: true, detail: buildDetail(21, true) });
+    unmount();
+  });
+
+  it('业务拒绝失败时不改动查询状态机，保留当前详情与既有状态', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) })
+      .mockResolvedValueOnce({
+        ok: false,
+        reason: 'not-accessible',
+        message: NOT_ACCESSIBLE_MESSAGE,
+      });
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetail(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.recheckSilently();
+    });
+
+    expect(outcome).toEqual({
+      ok: false,
+      reason: 'not-accessible',
+      message: NOT_ACCESSIBLE_MESSAGE,
+    });
+    // 详情与 ready 状态保留，失败结果仅交编排层决策
+    expect(result.current.state).toEqual({
+      status: 'ready',
+      requestSeq: 1,
+      detail: buildDetail(21, true),
+    });
+    unmount();
+  });
+
+  it('transport 失败转 reason=null 的显式结果，保留当前详情', async () => {
+    const networkError = new GraphQLIngressError({ type: 'network', message: 'fetch failed' });
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) })
+      .mockRejectedValueOnce(networkError);
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetail(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.recheckSilently();
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: null, message: networkError.userMessage });
+    expect(result.current.state).toMatchObject({
+      status: 'ready',
+      detail: buildDetail(21, true),
+    });
+    unmount();
+  });
+
+  it('在飞期间再次调用只发出一个请求，重入返回 null', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
+    let resolveRecheck: (value: EngineerRepairRequestDetailResult) => void = () => {};
+    const pending = new Promise<EngineerRepairRequestDetailResult>((resolve) => {
+      resolveRecheck = resolve;
+    });
+    fetchMock.mockReturnValueOnce(pending);
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetail(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let first: Promise<EngineerRepairRequestDetailLoadOutcome | null> = Promise.resolve(null);
+    let second: Promise<EngineerRepairRequestDetailLoadOutcome | null> = Promise.resolve(null);
+    await act(async () => {
+      first = result.current.recheckSilently();
+      second = result.current.recheckSilently();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(second).resolves.toBeNull();
+
+    await act(async () => {
+      resolveRecheck({ ok: true, detail: buildDetail(21, false) });
+      await first;
+    });
+
+    await expect(first).resolves.toEqual({ ok: true, detail: buildDetail(21, false) });
+    unmount();
+  });
+
+  it('静默重查开始后序号被其他查询推进时，旧结果不得覆盖新状态', async () => {
+    // 初始加载 + 静默重查在飞；随后 reload 推进序号（1 → 2）
+    fetchMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
+    let resolveRecheck: (value: EngineerRepairRequestDetailResult) => void = () => {};
+    const recheckPending = new Promise<EngineerRepairRequestDetailResult>((resolve) => {
+      resolveRecheck = resolve;
+    });
+    fetchMock.mockReturnValueOnce(recheckPending);
+    fetchMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(22, false) });
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetail(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let recheck: Promise<EngineerRepairRequestDetailLoadOutcome | null> = Promise.resolve(null);
+    await act(async () => {
+      recheck = result.current.recheckSilently();
+    });
+
+    // 静默重查在飞期间，用户点「重试」触发 reload：序号推进、状态切 loading
+    let reloadOutcome: unknown;
+    await act(async () => {
+      reloadOutcome = await result.current.reload();
+    });
+    expect(result.current.state).toMatchObject({
+      status: 'ready',
+      requestSeq: 2,
+      detail: buildDetail(22, false),
+    });
+    expect(reloadOutcome).toEqual({ ok: true, detail: buildDetail(22, false) });
+
+    // 旧静默重查此时才返回：若实现错误地在完成后读取最新序号，
+    // 旧详情会被误贴上序号 2 而覆盖新状态；正确实现按开始时快照序号被守卫丢弃
+    await act(async () => {
+      resolveRecheck({ ok: true, detail: buildDetail(21, true) });
+      await recheck;
+    });
+
+    expect(result.current.state).toMatchObject({
+      status: 'ready',
+      requestSeq: 2,
+      detail: buildDetail(22, false),
+    });
+    unmount();
+  });
+
+  it('旧静默查询晚到：apply-response 已推进序号，旧快照被守卫丢弃，不覆盖新回复', async () => {
+    const BASE = buildDetail(21, true);
+    const EXISTING = {
+      id: 51,
+      engineerNickname: '陈工',
+      resolutionStatus: 'PENDING' as const,
+      responseText: '已初步处理',
+      createdAt: '2026-09-02T09:00:00.000Z',
+    };
+    const NEW_RESPONSE = {
+      id: 61,
+      engineerNickname: '陈工',
+      resolutionStatus: 'RESOLVED' as const,
+      responseText: '已修复',
+      createdAt: '2026-09-02T10:00:00.000Z',
+    };
+    const staleDetail = {
+      ...BASE,
+      responses: [EXISTING],
+      latestResolutionStatus: 'PENDING' as const,
+    };
+
+    // 初始加载：含历史回复，latestResolutionStatus=PENDING
+    fetchMock.mockResolvedValueOnce({ ok: true, detail: staleDetail });
+    // 旧静默查询在飞，稍后返回「提交前」的旧快照（不含新回复）
+    let resolveRecheck: (value: EngineerRepairRequestDetailResult) => void = () => {};
+    const recheckPending = new Promise<EngineerRepairRequestDetailResult>((resolve) => {
+      resolveRecheck = resolve;
+    });
+    fetchMock.mockReturnValueOnce(recheckPending);
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetail(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    // 旧静默查询开始（进入时快照当前序号 1）
+    let recheck: Promise<EngineerRepairRequestDetailLoadOutcome | null> = Promise.resolve(null);
+    await act(async () => {
+      recheck = result.current.recheckSilently();
+    });
+
+    // 旧查询返回前应用一条成功回复：序号推进到 2，新回复注入，状态推进
+    await act(async () => {
+      result.current.applyResponse(NEW_RESPONSE);
+    });
+    expect(result.current.state).toMatchObject({
+      status: 'ready',
+      requestSeq: 2,
+      detail: { responses: [EXISTING, NEW_RESPONSE], latestResolutionStatus: 'RESOLVED' },
+    });
+
+    // 旧查询此时才返回提交前旧详情（携带序号 1）：被 reducer 序号守卫丢弃
+    await act(async () => {
+      resolveRecheck({ ok: true, detail: staleDetail });
+      await recheck;
+    });
+
+    // 最终仍保留新回复与新 latestResolutionStatus，未被旧快照覆盖或倒退
+    expect(result.current.state).toMatchObject({
+      status: 'ready',
+      requestSeq: 2,
+      detail: { responses: [EXISTING, NEW_RESPONSE], latestResolutionStatus: 'RESOLVED' },
+    });
+    unmount();
+  });
+
+  it('requestId 为 null 时静默重查不发请求，直接返回 null', async () => {
+    fetchMock.mockReset();
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetail(null));
+    await waitFor(() => expect(result.current.state.status).toBe('failed'));
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.recheckSilently();
+    });
+
+    expect(outcome).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    unmount();
   });
 });
