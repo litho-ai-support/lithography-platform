@@ -137,3 +137,37 @@ export type AcceptRepairRequestFailureReason =
 export type AcceptRepairRequestResult =
   | { ok: true; detail: EngineerRepairRequestDetail }
   | { ok: false; reason: AcceptRepairRequestFailureReason; message: string };
+
+/**
+ * 工程师追加处理回复命令输入（feature 内部干净输入）。
+ * 归属账号由后端 Session 派生，客户端不可也不需要传入任何归属字段（Plan §7.1）。
+ * responseText 的空白语义与 resolutionStatus 值域语义由后端收敛；
+ * 前端不自行虚构长度上限与默认状态（与后端输入口径一致）。
+ */
+export type CreateEngineerResponseInput = {
+  requestId: number;
+  responseText: string;
+  resolutionStatus: EngineerResolutionStatusValue;
+};
+
+/**
+ * 回复业务拒绝原因（domain failure 显式结果）：
+ * 主映射只依赖契约保证稳定的 GraphQL 大类码 extensions.code；
+ * 生产分支不依赖 extensions.errorCode（Plan §7.5）。
+ * - not-accessible：不存在/已删除/已由其他工程师接单的统一不可访问结果，不泄露归属；
+ * - not-accepted：申请存在但尚未接单（提示先接单后回复）；
+ * - insufficient-permission：已认证但非精确工程师写身份；
+ * - invalid-input：requestId/正文/状态非法（后端结构或语义校验拒绝）；
+ * - response-failed：后端落库失败或 transport/系统故障 —— 结果不确定（可能已写入），
+ *   由编排层只重查确认，绝不自动重发 Mutation（Plan §7.1）。
+ */
+export type CreateEngineerResponseFailureReason =
+  | 'not-accessible'
+  | 'not-accepted'
+  | 'insufficient-permission'
+  | 'invalid-input'
+  | 'response-failed';
+
+export type CreateEngineerResponseResult =
+  | { ok: true; response: EngineerRepairRequestResponseItem }
+  | { ok: false; reason: CreateEngineerResponseFailureReason; message: string };

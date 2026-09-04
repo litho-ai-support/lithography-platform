@@ -21,6 +21,7 @@ import type {
 } from './engineer-repair-request.types';
 import {
   acceptRepairRequest,
+  createEngineerResponse,
   ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE,
   fetchEngineerRepairRequestDetail,
   fetchEngineerRepairRequests,
@@ -346,6 +347,97 @@ describe('acceptRepairRequest', () => {
     for (const error of [unknownGraphqlError, authError, networkError]) {
       executeGraphQLMock.mockRejectedValueOnce(error);
       await expect(acceptRepairRequest(21)).rejects.toBe(error);
+    }
+  });
+});
+
+/* ------------------------------ 回复 ------------------------------ */
+
+/** 与后端公共读模型 DTO 对齐的成功返回样本 */
+const RESPONSE_DTO = {
+  id: 61,
+  engineerNickname: '陈工',
+  resolutionStatus: 'PENDING',
+  responseText: '已更换备件，待观察',
+  createdAt: '2026-09-02T10:00:00.000Z',
+};
+
+const RESPONSE_INPUT = {
+  requestId: 21,
+  responseText: '已更换备件，待观察',
+  resolutionStatus: 'PENDING' as const,
+};
+
+describe('createEngineerResponse', () => {
+  it('Mutation 名称与变量结构正确，入参只有 requestId/responseText/resolutionStatus', async () => {
+    executeGraphQLMock.mockResolvedValue({ createEngineerResponse: RESPONSE_DTO });
+
+    await createEngineerResponse(RESPONSE_INPUT);
+
+    expect(executeGraphQLMock).toHaveBeenCalledTimes(1);
+    const [document, variables] = executeGraphQLMock.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(document).toContain('createEngineerResponse(input: $input)');
+    expect(variables).toEqual({ input: RESPONSE_INPUT });
+    // 归属账号由后端 Session 派生，前端文档不得声明这类变量（Plan §7.1）
+    expect(document).not.toContain('engineerAccountId');
+    expect(document).not.toContain('customerAccountId');
+  });
+
+  it('成功 DTO 经既有 mapResponseDTO 转换为内部干净模型', async () => {
+    executeGraphQLMock.mockResolvedValue({ createEngineerResponse: RESPONSE_DTO });
+
+    await expect(createEngineerResponse(RESPONSE_INPUT)).resolves.toEqual({
+      ok: true,
+      response: RESPONSE_DTO,
+    });
+  });
+
+  it.each([
+    ['CONFLICT', 'not-accepted', '维修申请尚未接单，请先接单后回复'],
+    ['NOT_FOUND', 'not-accessible', '维修申请不存在或不可访问'],
+    ['FORBIDDEN', 'insufficient-permission', '仅工程师账号可以回复维修申请'],
+    ['BAD_USER_INPUT', 'invalid-input', '回复内容无效，请检查后重试。'],
+    ['INTERNAL_SERVER_ERROR', 'response-failed', '处理回复失败，请稍后重试'],
+  ] as const)(
+    '业务拒绝大类码 %s 映射为 reason=%s，errorCode / errorMessage 缺失时走安全兜底文案',
+    async (code, reason, message) => {
+      executeGraphQLMock.mockRejectedValue(buildDomainIngressError({ code }));
+
+      await expect(createEngineerResponse(RESPONSE_INPUT)).resolves.toEqual({
+        ok: false,
+        reason,
+        message,
+      });
+    },
+  );
+
+  it('后端暴露 errorMessage 时优先使用后端消息；errorCode 不参与运行时分支（Plan §7.5）', async () => {
+    executeGraphQLMock.mockRejectedValue(
+      buildDomainIngressError({
+        code: 'CONFLICT',
+        errorCode: 'REPAIR_REQUEST_NOT_ACCEPTED',
+        errorMessage: '维修申请尚未接单，请先接单后回复',
+      }),
+    );
+
+    await expect(createEngineerResponse(RESPONSE_INPUT)).resolves.toEqual({
+      ok: false,
+      reason: 'not-accepted',
+      message: '维修申请尚未接单，请先接单后回复',
+    });
+  });
+
+  it('未收录大类码 / UNAUTHENTICATED / 网络错误继续上抛，交共享 GraphQL 与 auth-session 链路', async () => {
+    const unknownGraphqlError = buildDomainIngressError({ code: 'GRAPHQL_VALIDATION_FAILED' });
+    const authError = new GraphQLIngressError({ type: 'auth', message: 'token invalid' });
+    const networkError = new GraphQLIngressError({ type: 'network', message: 'fetch failed' });
+
+    for (const error of [unknownGraphqlError, authError, networkError]) {
+      executeGraphQLMock.mockRejectedValueOnce(error);
+      await expect(createEngineerResponse(RESPONSE_INPUT)).rejects.toBe(error);
     }
   });
 });

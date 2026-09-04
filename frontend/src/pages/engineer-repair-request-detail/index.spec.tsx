@@ -5,7 +5,7 @@
  * 工程师维修申请详情页「页面接线」测试。
  *
  * 职责划分（依赖规则的公开 API 约束）：
- * - 本文件只验证 page 层装配：会话角色 → canAccept 布尔、
+ * - 本文件只验证 page 层装配：会话角色 → canHandleAsEngineer 布尔、
  *   路由参数解析 → requestId（非法归一 null）、key 随参数隔离重建；
  *   仅 mock 公开 barrel（@/features/repair-request）与 auth-session 边界，
  *   不触碰 feature 内部（infrastructure/application）模块。
@@ -27,7 +27,7 @@ const { navigateMock, useParamsMock, authSessionViewMock, panelMountLog } = vi.h
   navigateMock: vi.fn(),
   useParamsMock: vi.fn(),
   authSessionViewMock: vi.fn(),
-  panelMountLog: [] as Array<{ canAccept: boolean; requestId: number | null }>,
+  panelMountLog: [] as Array<{ canHandleAsEngineer: boolean; requestId: number | null }>,
 }));
 
 vi.mock('react-router', async (importOriginal) => {
@@ -47,12 +47,12 @@ vi.mock('@/features/auth-session', async (importOriginal) => {
 vi.mock('@/features/repair-request', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/repair-request')>();
 
-  function PanelStub(props: { canAccept: boolean; requestId: number | null }) {
-    const { canAccept, requestId } = props;
+  function PanelStub(props: { canHandleAsEngineer: boolean; requestId: number | null }) {
+    const { canHandleAsEngineer, requestId } = props;
     // 仅在挂载时记录：key 变化触发重挂载，log 长度即可区分重建与复用
     useEffect(() => {
-      panelMountLog.push({ canAccept, requestId });
-    }, [canAccept, requestId]);
+      panelMountLog.push({ canHandleAsEngineer, requestId });
+    }, [canHandleAsEngineer, requestId]);
 
     return null;
   }
@@ -80,32 +80,32 @@ beforeEach(() => {
   authSessionViewMock.mockReset();
 });
 
-describe('页面接线：会话角色 → canAccept', () => {
-  it('ENGINEER 可接单：canAccept=true 传入面板', () => {
+describe('页面接线：会话角色 → canHandleAsEngineer', () => {
+  it('ENGINEER 可接单：canHandleAsEngineer=true 传入面板', () => {
     setRole('ENGINEER');
     setRouteParam('21');
 
     render(<EngineerRepairRequestDetailPage />);
 
-    expect(panelMountLog).toEqual([{ canAccept: true, requestId: 21 }]);
+    expect(panelMountLog).toEqual([{ canHandleAsEngineer: true, requestId: 21 }]);
   });
 
-  it('SUPER_ADMIN 只读：面板仍装配，但 canAccept=false（读权限继承不等于接单权限）', () => {
+  it('SUPER_ADMIN 只读：面板仍装配，但 canHandleAsEngineer=false（读权限继承不等于接单权限）', () => {
     setRole('SUPER_ADMIN');
     setRouteParam('21');
 
     render(<EngineerRepairRequestDetailPage />);
 
-    expect(panelMountLog).toEqual([{ canAccept: false, requestId: 21 }]);
+    expect(panelMountLog).toEqual([{ canHandleAsEngineer: false, requestId: 21 }]);
   });
 
-  it('CUSTOMER 同样 canAccept=false，判断由页面生产代码决定', () => {
+  it('CUSTOMER 同样 canHandleAsEngineer=false，判断由页面生产代码决定', () => {
     setRole('CUSTOMER');
     setRouteParam('21');
 
     render(<EngineerRepairRequestDetailPage />);
 
-    expect(panelMountLog).toEqual([{ canAccept: false, requestId: 21 }]);
+    expect(panelMountLog).toEqual([{ canHandleAsEngineer: false, requestId: 21 }]);
   });
 });
 
@@ -121,7 +121,7 @@ describe('页面接线：路由参数解析', () => {
 
     render(<EngineerRepairRequestDetailPage />);
 
-    expect(panelMountLog).toEqual([{ canAccept: true, requestId: expected }]);
+    expect(panelMountLog).toEqual([{ canHandleAsEngineer: true, requestId: expected }]);
   });
 
   it('页面标题来自 PageHeader 装配', () => {
@@ -140,7 +140,7 @@ describe('页面接线：key 随路由参数隔离重建', () => {
     setRouteParam('21');
 
     const { rerender } = render(<EngineerRepairRequestDetailPage />);
-    expect(panelMountLog).toEqual([{ canAccept: true, requestId: 21 }]);
+    expect(panelMountLog).toEqual([{ canHandleAsEngineer: true, requestId: 21 }]);
 
     // 同一路由由 21 直接切到 22（不经返回列表重新挂载）
     setRouteParam('22');
@@ -148,8 +148,8 @@ describe('页面接线：key 随路由参数隔离重建', () => {
 
     // 重挂载产生第二条挂载记录，且新实例拿到新参数
     expect(panelMountLog).toEqual([
-      { canAccept: true, requestId: 21 },
-      { canAccept: true, requestId: 22 },
+      { canHandleAsEngineer: true, requestId: 21 },
+      { canHandleAsEngineer: true, requestId: 22 },
     ]);
   });
 });

@@ -19,6 +19,9 @@ import { executeGraphQL } from '@/shared/graphql';
 import type {
   AcceptRepairRequestFailureReason,
   AcceptRepairRequestResult,
+  CreateEngineerResponseFailureReason,
+  CreateEngineerResponseInput,
+  CreateEngineerResponseResult,
   EngineerRepairListQuery,
   EngineerRepairRequestDetail,
   EngineerRepairRequestDetailFailureReason,
@@ -104,6 +107,18 @@ const ACCEPT_REPAIR_REQUEST_MUTATION = `
   }
 `;
 
+const CREATE_ENGINEER_RESPONSE_MUTATION = `
+  mutation CreateEngineerResponse($input: CreateEngineerResponseInput!) {
+    createEngineerResponse(input: $input) {
+      id
+      engineerNickname
+      resolutionStatus
+      responseText
+      createdAt
+    }
+  }
+`;
+
 /* -------------------------- 业务拒绝映射 -------------------------- */
 
 /**
@@ -162,6 +177,40 @@ const DETAIL_FALLBACK_MESSAGE_BY_REASON: Record<EngineerRepairRequestDetailFailu
     'load-failed': '维修申请详情加载失败，请稍后重试。',
   };
 
+/**
+ * 回复拒绝主映射：仅依赖 extensions.code 大类（契约保证稳定的生产分支信号）。
+ * - CONFLICT：后端 REPAIR_REQUEST_NOT_ACCEPTED（未接单，提示先接单后回复）；
+ * - NOT_FOUND：不存在/已删除/已由其他工程师接单，统一不可访问，不泄露归属；
+ * - INTERNAL_SERVER_ERROR：REPAIR_REQUEST_RESPONSE_FAILED 落库失败 → 结果不确定；
+ * - BAD_USER_INPUT：requestId/正文/状态非法；FORBIDDEN：非精确工程师写身份。
+ * 唯一真源：后端全局 GraphQL Filter 的 mapDomainErrorToGqlCode 与
+ * REPAIR_REQUEST_ERROR / PERMISSION_ERROR 码组（Plan §7.5）。
+ */
+const CREATE_RESPONSE_FAILURE_REASON_BY_CATEGORY_CODE: Record<
+  string,
+  CreateEngineerResponseFailureReason
+> = {
+  CONFLICT: 'not-accepted',
+  NOT_FOUND: 'not-accessible',
+  FORBIDDEN: 'insufficient-permission',
+  BAD_USER_INPUT: 'invalid-input',
+  INTERNAL_SERVER_ERROR: 'response-failed',
+};
+
+const CREATE_RESPONSE_FALLBACK_MESSAGE_BY_REASON: Record<
+  CreateEngineerResponseFailureReason,
+  string
+> = {
+  // 以下兜底文案与后端 DomainError message 逐字一致（无句号）：主展示路径为后端
+  // errorMessage，两条展示路径的用户可见文案保持一致（接单 already-accepted 先例）
+  'not-accepted': '维修申请尚未接单，请先接单后回复',
+  'not-accessible': '维修申请不存在或不可访问',
+  'insufficient-permission': '仅工程师账号可以回复维修申请',
+  'response-failed': '处理回复失败，请稍后重试',
+  // 输入非法的后端 message 逐项不同（ID/正文/状态），兜底用一句中性汇总文案
+  'invalid-input': '回复内容无效，请检查后重试。',
+};
+
 /* ------------------------------ mapper ------------------------------ */
 
 type EngineerRepairRequestsData = {
@@ -174,6 +223,10 @@ type EngineerRepairRequestDetailData = {
 
 type AcceptRepairRequestData = {
   acceptRepairRequest: RepairRequestDetailDTO;
+};
+
+type CreateEngineerResponseData = {
+  createEngineerResponse: EngineerResponseDTO;
 };
 
 function mapEquipmentModelDTO(dto: EquipmentModelDTO): EngineerRepairRequestEquipmentModel {
@@ -320,6 +373,48 @@ export async function acceptRepairRequest(id: number): Promise<AcceptRepairReque
       ok: false,
       reason,
       message: detail.errorMessage ?? ACCEPT_FALLBACK_MESSAGE_BY_REASON[reason],
+    };
+  }
+}
+
+/* ------------------------------ 回复 ------------------------------ */
+
+/**
+ * 工程师追加处理回复（后端只追加写入，事务内裁决回复资格）。
+ *
+ * - 入参只有 requestId/responseText/resolutionStatus；接单工程师与客户归属
+ *   由后端 Session 派生，前端不可传入（Plan §7.1/§7.2）；
+ * - 成功复用既有 mapResponseDTO 单一映射口径，不建第二套回复 mapper；
+ * - 业务拒绝返回显式失败结果：生产分支只依赖 extensions.code 大类，
+ *   extensions.errorCode 不参与运行时分支（Plan §7.5；本链路 CONFLICT 大类
+ *   在回复上下文唯一对应未接单，无需细节码细化）；
+ * - response-failed（落库失败）与 transport/auth 类失败都意味着结果不确定：
+ *   前者由编排层重查确认，后者按共享错误模型上抛后同样只重查，均不自动重发。
+ */
+export async function createEngineerResponse(
+  input: CreateEngineerResponseInput,
+): Promise<CreateEngineerResponseResult> {
+  try {
+    const data = await executeGraphQL<
+      CreateEngineerResponseData,
+      { input: CreateEngineerResponseInput }
+    >(CREATE_ENGINEER_RESPONSE_MUTATION, { input });
+
+    return { ok: true, response: mapResponseDTO(data.createEngineerResponse) };
+  } catch (error) {
+    const detail = readGraphQLErrorDetail(error);
+    const reason = detail?.code
+      ? CREATE_RESPONSE_FAILURE_REASON_BY_CATEGORY_CODE[detail.code]
+      : undefined;
+
+    if (!detail || !reason) {
+      throw error;
+    }
+
+    return {
+      ok: false,
+      reason,
+      message: detail.errorMessage ?? CREATE_RESPONSE_FALLBACK_MESSAGE_BY_REASON[reason],
     };
   }
 }

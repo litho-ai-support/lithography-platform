@@ -5,8 +5,8 @@
  *
  * - 路由参数解析是页面层对 URL 的窄职责：非正整数 ID 归一为 null，
  *   feature 对 null 走静态统一不可访问反馈，不产生 GraphQL 请求；
- * - 接单可见性由页面层基于会话单值业务角色判定后以布尔传入：
- *   读权限继承不等于接单权限，仅精确 ENGINEER 展示接单操作；
+ * - 接单/回复可见性由页面层基于会话单值业务角色判定后以布尔传入：
+ *   读权限继承不等于写权限，仅精确 ENGINEER 展示接单与回复提交入口；
  * - key 随路由参数强制隔离：参数直接变化时重建面板实例，
  *   上一申请的接单反馈/流程状态不带到下一申请；
  * - 详情展示、接单流程与反馈全部来自 feature 公开 barrel；
@@ -35,8 +35,9 @@ export function EngineerRepairRequestDetailPage() {
   const parsedRequestId = parseRequestId(requestId);
 
   // session.role 是后端登录角色决策产出的单值业务角色；
-  // SUPER_ADMIN 继承的是读权限，不展示接单操作（后端守卫 + usecase 双重拦截仍在）。
-  const canAccept = status === 'authenticated' && session.role === 'ENGINEER';
+  // SUPER_ADMIN 继承的是读权限，不展示接单/回复提交入口（后端守卫 + usecase 双重拦截仍在）。
+  // canHandleAsEngineer 表达接单与回复共用的精确 ENGINEER 写身份，同时控制两个提交入口。
+  const canHandleAsEngineer = status === 'authenticated' && session.role === 'ENGINEER';
 
   return (
     <div className="page-stack">
@@ -45,7 +46,7 @@ export function EngineerRepairRequestDetailPage() {
         title="维修申请详情"
       />
       <EngineerRepairRequestDetailPanel
-        canAccept={canAccept}
+        canHandleAsEngineer={canHandleAsEngineer}
         key={parsedRequestId === null ? 'invalid' : parsedRequestId}
         requestId={parsedRequestId}
       />

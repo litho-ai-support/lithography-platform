@@ -1,13 +1,8 @@
 // src/usecases/repair-request/accept-repair-request.usecase.ts
 
 import { UsecaseSession } from '@app-types/auth/session.types';
-import { IdentityTypeEnum } from '@app-types/models/account.types';
 import type { PersistenceTransactionContext } from '@app-types/common/transaction.types';
-import {
-  DomainError,
-  PERMISSION_ERROR,
-  REPAIR_REQUEST_ERROR,
-} from '@core/common/errors/domain-error';
+import { DomainError, REPAIR_REQUEST_ERROR } from '@core/common/errors/domain-error';
 import { Inject, Injectable } from '@nestjs/common';
 import { RepairRequestDetailView } from '@src/modules/lithography/lithography.types';
 import { RepairRequestService } from '@src/modules/lithography/repair-request.service';
@@ -15,7 +10,9 @@ import {
   TRANSACTION_RUNNER,
   type TransactionRunner,
 } from '@src/usecases/common/ports/transaction-runner.contract';
+import { assertRepairRequestId } from './assert-repair-request-id';
 import { GetEngineerRepairRequestDetailUsecase } from './get-engineer-repair-request-detail.usecase';
+import { assertEngineerWritePermission } from './engineer-write-permission';
 
 /**
  * 工程师接单用例
@@ -54,13 +51,9 @@ export class AcceptRepairRequestUsecase {
     requestId: number;
     session: UsecaseSession;
   }): Promise<RepairRequestDetailView> {
-    this.assertEngineerAcceptance(params.session);
-
-    if (!Number.isInteger(params.requestId) || params.requestId <= 0) {
-      throw new DomainError(REPAIR_REQUEST_ERROR.INVALID_PARAMS, '维修申请 ID 无效', {
-        requestId: params.requestId,
-      });
-    }
+    // 工程师精确写权限与 ID 结构校验为接单/回复等写用例共用断言（单一实现）
+    assertEngineerWritePermission(params.session, '接单');
+    assertRepairRequestId(params.requestId);
 
     await this.transactionRunner.run(async (transactionContext) => {
       // acceptedAt 使用后端系统事件时间，客户端不可传入
@@ -83,28 +76,6 @@ export class AcceptRepairRequestUsecase {
       requestId: params.requestId,
       session: params.session,
     });
-  }
-
-  /**
-   * 接单权限业务规则：仅 roles 含 ENGINEER 且可信 JWT activeRole 精确为 ENGINEER 可接单
-   *
-   * 守卫层（RolesGuard）只做入口粗粒度准入（按 accessGroup 判断），
-   * 混合角色账号（如 SUPER_ADMIN + ENGINEER）以任一 activeRole 均可通过入口；
-   * 精确的接单写权限在此裁决，不依赖前端隐藏按钮，也不改变守卫的读权限继承语义。
-   * activeRole 缺失或异常值一律拒绝（失败关闭）；UsecaseSession.roles 已大写归一，
-   * 直接精确匹配，不使用按角色继承展开的 hasRole。
-   * 错误 details 不携带 accessGroup/角色列表等身份信息，避免不必要的身份暴露。
-   */
-  private assertEngineerAcceptance(session: UsecaseSession): void {
-    const hasEngineerRole = session.roles.includes(IdentityTypeEnum.ENGINEER);
-    const isActiveRoleEngineer = session.activeRole === IdentityTypeEnum.ENGINEER;
-
-    if (!hasEngineerRole || !isActiveRoleEngineer) {
-      throw new DomainError(
-        PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS,
-        '仅工程师账号可以接单维修申请',
-      );
-    }
   }
 
   /**

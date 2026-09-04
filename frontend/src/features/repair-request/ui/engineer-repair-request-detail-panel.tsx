@@ -6,7 +6,7 @@
  * - 唯一业务入口是 feature application 的编排 hook；
  *   UI 不触碰 adapter，不解析 Apollo 原始错误；
  * - 展示申请编号、设备型号、错误码、创建/接单时间、接单状态、最新处理状态、
- *   故障描述、contentMd 与已有工程师回复的只读时间线（本阶段无回复输入框）；
+ *   故障描述、contentMd 与已有工程师回复的只读时间线；
  * - 仅在申请仍可接单（未接单）且当前账号为精确 ENGINEER 时显示接单主操作；
  *   非工程师账号（如查看用超管）可阅读详情但不展示接单按钮，仅提示只读；
  *   点击前 Popconfirm 确认，
@@ -18,17 +18,47 @@
  * - 接单冲突后重查若落入 not-accessible（申请已被接走、当前工程师不再可读），
  *   仍优先展示冲突反馈，避免被通用不可访问文案掩盖；
  *   该分支不渲染详情与接单按钮，不泄露申请归属；
+ * - 回复区域（精确 ENGINEER 且已接单时展示）：正文 TextArea、PENDING/RESOLVED
+ *   状态选择与提交按钮；未接单时提示先接单，不提供回复入口；
+ *   提交中（含收敛重查中）禁用输入控件并 loading，连点由 application 锁兜底；
+ *   成功（含不确定结果收敛成功）后清空草稿并重置状态选择，
+ *   失败/不确定未收敛时草稿保留，用户无需重新输入；
+ *   不确定结果的收敛重查是静默重查（不切骨架屏、表单不卸载），
+ *   反馈中的「重新加载详情」入口也走静默重查，避免草稿丢失；
+ *   回复时间线与最新处理状态全部由 application 原子更新，UI 不维护回复数组；
+ * - 回复反馈（成功 / 未接单 / 不可访问 / 无权限 / 输入非法 / 系统失败 /
+ *   结果不确定）用内联 Alert，结果不确定时附重新加载入口，
+ *   不引入全局 toast；
  * - 统一不可访问反馈引导返回工程师列表，不泄露申请归属；
  * - 详情就绪后始终提供「返回维修申请列表」入口（与接单状态、查看者角色无关），
  *   且固定前往列表路径，保证从地址栏直达详情页也能稳定返回；
  * - 本仓库无 markdown 渲染依赖，contentMd 按保留换行的纯文本展示。
  */
 
-import { Alert, Button, Card, Descriptions, Popconfirm, Result, Skeleton, Timeline } from 'antd';
+import { useEffect } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  Descriptions,
+  Form,
+  Input,
+  Popconfirm,
+  Result,
+  Select,
+  Skeleton,
+  Timeline,
+} from 'antd';
 import { useNavigate } from 'react-router';
 
 import { useEngineerRepairRequestDetailFlow } from '../application/use-engineer-repair-request-detail-flow';
-import type { AcceptRepairRequestResult } from '../infrastructure/engineer-repair-request.types';
+import type {
+  AcceptRepairRequestResult,
+  CreateEngineerResponseInput,
+  CreateEngineerResponseResult,
+  EngineerResolutionStatusValue,
+} from '../infrastructure/engineer-repair-request.types';
+import { RESOLUTION_STATUS_LABELS } from '../infrastructure/repair-request-read.types';
 
 import { ENGINEER_REPAIR_REQUEST_LIST_PATH } from './engineer-repair-request-paths';
 import { formatDateTimeText } from './format-date-time';
@@ -50,21 +80,167 @@ function AcceptFeedbackAlert({ result }: { result: AcceptRepairRequestResult | n
   return <Alert showIcon title={result.message} type="error" />;
 }
 
+/** 状态选项：复用公共读模型的状态标签映射（单一展示口径），不新建第三套文案 */
+const RESOLUTION_STATUS_OPTIONS = (
+  Object.entries(RESOLUTION_STATUS_LABELS) as [EngineerResolutionStatusValue, string][]
+).map(([value, label]) => ({ value, label }));
+
 /**
- * canAccept 由页面层基于会话单值业务角色判定（读权限继承不等于接单权限：
- * 非精确 ENGINEER 可查看详情但不可接单），面板只消费布尔结果，
+ * 回复反馈（内联 Alert，与接单反馈先例一致）。
+ * response-failed 是结果不确定态：Mutation 可能已在服务端生效，
+ * 除展示后端失败文案外，附重新加载入口引导用户检查回复时间线，
+ * 绝不自动重发 Mutation。
+ * reloading 为真表示收敛重查进行中：入口按钮禁用，
+ * 避免自动静默重查期间叠加并行手动重查。
+ */
+function CreateResponseFeedbackAlert({
+  result,
+  onReload,
+  reloading,
+}: {
+  result: CreateEngineerResponseResult | null;
+  onReload: () => void;
+  reloading: boolean;
+}) {
+  if (!result) {
+    return null;
+  }
+
+  if (result.ok) {
+    return <Alert showIcon title="回复已提交。" type="success" />;
+  }
+
+  if (result.reason === 'not-accepted') {
+    return <Alert showIcon title={result.message} type="warning" />;
+  }
+
+  if (result.reason === 'response-failed') {
+    return (
+      <Alert
+        action={
+          <Button disabled={reloading} onClick={onReload} size="small">
+            重新加载详情
+          </Button>
+        }
+        description="回复可能已提交成功，请刷新后检查回复时间线，避免重复提交。"
+        showIcon
+        title={result.message}
+        type="error"
+      />
+    );
+  }
+
+  return <Alert showIcon title={result.message} type="error" />;
+}
+
+type EngineerResponseFormValues = {
+  responseText: string;
+  resolutionStatus: EngineerResolutionStatusValue;
+};
+
+/**
+ * 回复表单（纯 UI 草稿，表单状态留在 ui 层，遵循 stable-clean 草稿归属规则）。
+ *
+ * - 正文/状态只做必填交互校验；空白语义与状态值域仍由后端收敛，
+ *   UI 不自行虚构长度上限与默认状态以外的语义；
+ * - PENDING 仅作为 UI 初始选择，提交始终显式传值，不依赖后端默认值；
+ * - submitting 为真表示「提交中或不确定结果收敛重查中」，
+ *   期间禁用输入控件并 loading，保证表单不卸载、无重复提交窗口；
+ * - 成功（含不确定结果收敛成功）后清空草稿并重置状态选择为初始值；
+ *   失败/不确定未收敛时草稿保留，用户无需重新输入。
+ */
+function EngineerResponseForm({
+  requestId,
+  submitting,
+  lastResult,
+  onSubmit,
+  onReload,
+}: {
+  requestId: number;
+  submitting: boolean;
+  lastResult: CreateEngineerResponseResult | null;
+  onSubmit: (input: CreateEngineerResponseInput) => void;
+  onReload: () => void;
+}) {
+  const [form] = Form.useForm<EngineerResponseFormValues>();
+
+  useEffect(() => {
+    if (lastResult?.ok) {
+      form.resetFields();
+    }
+  }, [form, lastResult]);
+
+  return (
+    <Form
+      form={form}
+      initialValues={{ resolutionStatus: 'PENDING' }}
+      layout="vertical"
+      onFinish={(values) =>
+        onSubmit({
+          requestId,
+          resolutionStatus: values.resolutionStatus,
+          responseText: values.responseText,
+        })
+      }
+    >
+      {lastResult !== null && (
+        <div className="mb-4">
+          {/* submitting 含收敛重查中（面板传 submitting || reconciling），
+              自动静默重查期间禁用手动重查入口，不叠加并行请求 */}
+          <CreateResponseFeedbackAlert
+            onReload={onReload}
+            reloading={submitting}
+            result={lastResult}
+          />
+        </div>
+      )}
+      <Form.Item
+        label="回复正文"
+        name="responseText"
+        rules={[{ message: '请输入回复正文。', required: true, whitespace: true }]}
+      >
+        <Input.TextArea disabled={submitting} placeholder="填写本次处理说明…" rows={4} />
+      </Form.Item>
+      <Form.Item
+        label="处理状态"
+        name="resolutionStatus"
+        rules={[{ required: true, message: '请选择处理状态。' }]}
+      >
+        <Select disabled={submitting} options={RESOLUTION_STATUS_OPTIONS} />
+      </Form.Item>
+      <Button htmlType="submit" loading={submitting} type="primary">
+        提交回复
+      </Button>
+    </Form>
+  );
+}
+
+/**
+ * canHandleAsEngineer 由页面层基于会话单值业务角色判定（读权限继承不等于写权限：
+ * 非精确 ENGINEER 可查看详情但不可接单/回复），面板只消费布尔结果，
  * 不自行读取会话或维护第二份角色状态。
+ * 接单与回复共用同一精确 ENGINEER 写身份，本布尔同时控制两个提交入口。
  */
 export function EngineerRepairRequestDetailPanel({
   requestId,
-  canAccept,
+  canHandleAsEngineer,
 }: {
   requestId: number | null;
-  canAccept: boolean;
+  canHandleAsEngineer: boolean;
 }) {
   const navigate = useNavigate();
-  const { state, accepting, lastAcceptResult, accept, reload } =
-    useEngineerRepairRequestDetailFlow(requestId);
+  const {
+    state,
+    accepting,
+    lastAcceptResult,
+    accept,
+    submitting,
+    reconciling,
+    lastCreateResponseResult,
+    createResponse,
+    reload,
+    recheckSilently,
+  } = useEngineerRepairRequestDetailFlow(requestId);
 
   if (state.status === 'loading') {
     return (
@@ -191,24 +367,49 @@ export function EngineerRepairRequestDetailPanel({
           )}
         </div>
 
-        {!detail.isAccepted && canAccept ? (
-          <div>
-            <Popconfirm
-              cancelText="取消"
-              description="接单后该维修申请将由你跟进处理。"
-              okText="确认接单"
-              onConfirm={() => void accept()}
-              title="确认接单该维修申请？"
-            >
-              <Button loading={accepting} type="primary">
-                接单
-              </Button>
-            </Popconfirm>
+        {!detail.isAccepted && canHandleAsEngineer ? (
+          <div className="flex flex-col gap-2">
+            <div>
+              <Popconfirm
+                cancelText="取消"
+                description="接单后该维修申请将由你跟进处理。"
+                okText="确认接单"
+                onConfirm={() => void accept()}
+                title="确认接单该维修申请？"
+              >
+                <Button loading={accepting} type="primary">
+                  接单
+                </Button>
+              </Popconfirm>
+            </div>
+            <div className="text-text-secondary">请先接单后才能回复该申请。</div>
           </div>
         ) : null}
 
-        {!detail.isAccepted && !canAccept ? (
+        {!detail.isAccepted && !canHandleAsEngineer ? (
           <div className="text-text-secondary">当前账号仅可查看详情，接单需使用工程师账号。</div>
+        ) : null}
+
+        {/*
+         * 回复区域：精确 ENGINEER 且已接单时展示表单（Plan P0-7 权限矩阵）。
+         * 提交经 application createResponse；成功/失败/不确定反馈见
+         * CreateResponseFeedbackAlert；时间线由 application 原子更新。
+         */}
+        {detail.isAccepted && canHandleAsEngineer ? (
+          <div className="flex flex-col gap-2">
+            <div className="font-medium">追加处理回复</div>
+            <EngineerResponseForm
+              lastResult={lastCreateResponseResult}
+              onReload={recheckSilently}
+              onSubmit={(input) => void createResponse(input)}
+              requestId={detail.id}
+              submitting={submitting || reconciling}
+            />
+          </div>
+        ) : null}
+
+        {detail.isAccepted && !canHandleAsEngineer ? (
+          <div className="text-text-secondary">当前账号仅可查看详情，回复需使用工程师账号。</div>
         ) : null}
 
         {/*

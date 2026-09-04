@@ -85,6 +85,46 @@ export type RepairRequestAcceptanceStatusSnapshot = {
 };
 
 /**
+ * 回复目标最小状态快照：仅供回复 UseCase 在事务内做回复资格裁决，
+ * 不得流入 Adapter 或前端。
+ * 仅状态事实，不含权限决策；customerAccountId 与 acceptedByEngineerAccountId
+ * 供 UseCase 派生归属与判断接单人身份，不直接对外输出。
+ */
+export type EngineerResponseTargetSnapshot = {
+  id: number;
+  customerAccountId: number;
+  isAccepted: boolean;
+  acceptedByEngineerAccountId: number | null;
+  deprecated: boolean;
+};
+
+/**
+ * 工程师回复追加写入数据（由 UseCase 完成资格裁决后传入）。
+ * engineerAccountId 仅来自可信 Session，customerAccountId 仅来自目标申请快照，
+ * 两者均不得由客户端传入；responseText 已完成业务判定。
+ */
+export type EngineerResponseInsertData = {
+  requestId: number;
+  engineerAccountId: number;
+  customerAccountId: number;
+  resolutionStatus: EngineerResolutionStatus;
+  responseText: string;
+};
+
+/**
+ * 工程师回复写入完成后的稳定快照（不暴露 ORM Entity）。
+ * createdAt 为服务端系统事件时间。
+ */
+export type EngineerResponseWriteSnapshot = {
+  id: number;
+  requestId: number;
+  engineerAccountId: number;
+  resolutionStatus: EngineerResolutionStatus;
+  responseText: string;
+  createdAt: Date;
+};
+
+/**
  * 工程师列表范围枚举（负责人 20260901 裁定：scope = AVAILABLE / MINE）。
  * GraphQL 层以字符串表达，由 Usecase 校验，adapter 不导入本常量。
  */
