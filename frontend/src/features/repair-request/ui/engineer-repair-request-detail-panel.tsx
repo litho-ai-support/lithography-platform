@@ -51,6 +51,10 @@ import {
 } from 'antd';
 import { useNavigate } from 'react-router';
 
+import {
+  ENGINEER_RESPONSE_TEXT_OVER_CAPACITY_MESSAGE,
+  isEngineerResponseTextOverCapacity,
+} from '../application/engineer-response-text-capacity';
 import { useEngineerRepairRequestDetailFlow } from '../application/use-engineer-repair-request-detail-flow';
 import type {
   AcceptRepairRequestResult,
@@ -197,7 +201,17 @@ function EngineerResponseForm({
       <Form.Item
         label="回复正文"
         name="responseText"
-        rules={[{ message: '请输入回复正文。', required: true, whitespace: true }]}
+        rules={[
+          { message: '请输入回复正文。', required: true, whitespace: true },
+          {
+            // 容量策略来自 application（UI 不复制 TextEncoder 实现）：
+            // 超出 MySQL TEXT 的 UTF-8 字节容量时提交前拦截，不发 Mutation、草稿保留。
+            validator: (_rule, value: string) =>
+              !value || !isEngineerResponseTextOverCapacity(value)
+                ? Promise.resolve()
+                : Promise.reject(new Error(ENGINEER_RESPONSE_TEXT_OVER_CAPACITY_MESSAGE)),
+          },
+        ]}
       >
         <Input.TextArea disabled={submitting} placeholder="填写本次处理说明…" rows={4} />
       </Form.Item>
@@ -239,7 +253,7 @@ export function EngineerRepairRequestDetailPanel({
     lastCreateResponseResult,
     createResponse,
     reload,
-    recheckSilently,
+    confirmResponseResult,
   } = useEngineerRepairRequestDetailFlow(requestId);
 
   if (state.status === 'loading') {
@@ -400,7 +414,7 @@ export function EngineerRepairRequestDetailPanel({
             <div className="font-medium">追加处理回复</div>
             <EngineerResponseForm
               lastResult={lastCreateResponseResult}
-              onReload={recheckSilently}
+              onReload={() => void confirmResponseResult()}
               onSubmit={(input) => void createResponse(input)}
               requestId={detail.id}
               submitting={submitting || reconciling}

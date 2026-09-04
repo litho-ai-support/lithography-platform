@@ -10,7 +10,10 @@ import type {
 
 import { useAcceptRepairRequest } from './use-accept-repair-request';
 import { useCreateEngineerResponse } from './use-create-engineer-response';
-import { useEngineerRepairRequestDetail } from './use-engineer-repair-request-detail';
+import {
+  type EngineerRepairRequestDetailLoadOutcome,
+  useEngineerRepairRequestDetail,
+} from './use-engineer-repair-request-detail';
 
 /**
  * 工程师详情 + 接单/回复编排（详情页唯一业务入口，收束在 feature application）。
@@ -197,6 +200,32 @@ export function useEngineerRepairRequestDetailFlow(requestId: number | null) {
     [requestId, state, submit, recheckSilently, applyResponse, convergeToSubmitted],
   );
 
+  /**
+   * 手动确认回复结果（语义明确的“重新加载详情”入口，UI 唯一重查动作）。
+   *
+   * 与回复提交共用同一把 responseBusyRef 锁，保证手动重查、自动收敛重查
+   * 与回复提交三者互斥：
+   * - 重查开始前获取锁，锁已被提交或另一个重查占用时直接返回 null；
+   * - 重查期间置 reconciling=true，UI 据此禁用正文/状态/提交/重新加载；
+   * - 重查完成或失败后在 finally 中释放锁与 reconciling，恢复手动重查入口；
+   * - 只做静默重查（不切 loading、不卸载详情与表单、草稿保留），
+   *   绝不自动重发回复 Mutation；重查失败或未匹配时保留当前详情与不确定提示。
+   */
+  const confirmResponseResult =
+    useCallback(async (): Promise<EngineerRepairRequestDetailLoadOutcome | null> => {
+      if (requestId === null || responseBusyRef.current) {
+        return null;
+      }
+      responseBusyRef.current = true;
+      setReconciling(true);
+      try {
+        return await recheckSilently();
+      } finally {
+        setReconciling(false);
+        responseBusyRef.current = false;
+      }
+    }, [requestId, recheckSilently]);
+
   return {
     state,
     accepting,
@@ -207,6 +236,6 @@ export function useEngineerRepairRequestDetailFlow(requestId: number | null) {
     lastCreateResponseResult,
     createResponse,
     reload,
-    recheckSilently,
+    confirmResponseResult,
   };
 }

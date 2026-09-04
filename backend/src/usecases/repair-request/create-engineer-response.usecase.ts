@@ -23,6 +23,7 @@ import {
 import { resolveEngineerNickname, toEngineerResponseView } from './enrich-repair-request-nicknames';
 import { assertEngineerWritePermission } from './engineer-write-permission';
 import { assertRepairRequestId } from './assert-repair-request-id';
+import { assertEngineerResponseTextCapacity } from './assert-engineer-response-text-capacity';
 
 /** 处理状态唯一值域（单一运行时真源：src/types 正式领域 enum） */
 const ENGINEER_RESOLUTION_STATUSES = Object.values(EngineerResolutionStatus);
@@ -70,6 +71,9 @@ export class CreateEngineerResponseUsecase {
     assertRepairRequestId(command.requestId);
 
     const responseText = normalizeRequiredText(command.responseText, { fieldName: '回复正文' });
+    // 容量保护：MySQL TEXT 上限 65,535 UTF-8 字节，对 trim 后正文计量，
+    // 超限在读昵称/查询申请/开启事务/调用写服务之前拒绝，不产生回复记录
+    assertEngineerResponseTextCapacity(responseText);
     const resolutionStatus = normalizeEnumValue(
       command.resolutionStatus,
       ENGINEER_RESOLUTION_STATUSES,

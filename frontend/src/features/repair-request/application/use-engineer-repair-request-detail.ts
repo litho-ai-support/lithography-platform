@@ -48,13 +48,13 @@ export type EngineerRepairRequestDetailState =
     };
 
 type EngineerRepairRequestDetailAction =
-  | { type: 'load-start'; requestId: number }
-  | { type: 'load-ready'; requestId: number; detail: EngineerRepairRequestDetail }
-  | { type: 'apply-detail'; requestId: number; detail: EngineerRepairRequestDetail }
-  | { type: 'apply-response'; requestId: number; response: EngineerRepairRequestResponseItem }
+  | { type: 'load-start'; requestSeq: number }
+  | { type: 'load-ready'; requestSeq: number; detail: EngineerRepairRequestDetail }
+  | { type: 'apply-detail'; requestSeq: number; detail: EngineerRepairRequestDetail }
+  | { type: 'apply-response'; requestSeq: number; response: EngineerRepairRequestResponseItem }
   | {
       type: 'load-failed';
-      requestId: number;
+      requestSeq: number;
       reason: EngineerRepairRequestDetailFailureReason | null;
       message: string;
     };
@@ -86,50 +86,55 @@ function engineerRepairRequestDetailReducer(
 ): EngineerRepairRequestDetailState {
   switch (action.type) {
     case 'load-start':
-      return { status: 'loading', requestSeq: action.requestId };
+      return { status: 'loading', requestSeq: action.requestSeq };
     case 'load-ready':
-      if (action.requestId !== state.requestSeq) {
+      if (action.requestSeq !== state.requestSeq) {
         return state;
       }
-      return { status: 'ready', requestSeq: action.requestId, detail: action.detail };
+      return { status: 'ready', requestSeq: action.requestSeq, detail: action.detail };
     case 'apply-detail':
       // 接单 Mutation 返回的服务器最新详情原子注入（同一数据源的写后读，
       // 非第二真源）：不发起查询，避免整面板切回骨架屏造成闪现；
       // 序号随当前在飞请求保持，不制造新的在飞请求语义。
-      if (state.status !== 'ready' || action.requestId !== state.requestSeq) {
+      if (state.status !== 'ready' || action.requestSeq !== state.requestSeq) {
         return state;
       }
       return { status: 'ready', requestSeq: state.requestSeq, detail: action.detail };
-    case 'apply-response':
+    case 'apply-response': {
       // 回复 Mutation 返回的新回复原子注入：按服务端回复 ID 去重后追加，
       // 同一事件内同步更新 responses 与 latestResolutionStatus，
       // 不允许 UI 自行拼接并维护第二份详情状态；
       // 排序口径与后端读取契约一致（见 mergeEngineerResponseSorted）。
-      if (state.status !== 'ready' || action.requestId !== state.requestSeq) {
+      //
+      // 版本推进：回复成功注入的同时把查询序号推进到 requestSeq（= 旧序号 + 1），
+      // 使此前已发出、尚在飞行中的旧详情查询（携带旧序号）返回时被序号守卫丢弃，
+      // 不得用旧快照覆盖刚追加的新回复或使 latestResolutionStatus 倒退。
+      // 守卫要求 action.requestSeq 恰为 state.requestSeq + 1（由 applyResponse 回调推进）。
+      if (state.status !== 'ready' || action.requestSeq !== state.requestSeq + 1) {
         return state;
       }
       if (state.detail.responses.some((item) => item.id === action.response.id)) {
-        return state;
+        // 去重命中：不重复追加，但仍推进序号，保持与 sequenceRef 严格同步。
+        return { ...state, requestSeq: action.requestSeq };
       }
-      {
-        const responses = mergeEngineerResponseSorted(state.detail.responses, action.response);
-        return {
-          status: 'ready',
-          requestSeq: state.requestSeq,
-          detail: {
-            ...state.detail,
-            responses,
-            latestResolutionStatus: responses[responses.length - 1].resolutionStatus,
-          },
-        };
-      }
+      const responses = mergeEngineerResponseSorted(state.detail.responses, action.response);
+      return {
+        status: 'ready',
+        requestSeq: action.requestSeq,
+        detail: {
+          ...state.detail,
+          responses,
+          latestResolutionStatus: responses[responses.length - 1].resolutionStatus,
+        },
+      };
+    }
     case 'load-failed':
-      if (action.requestId !== state.requestSeq) {
+      if (action.requestSeq !== state.requestSeq) {
         return state;
       }
       return {
         status: 'failed',
-        requestSeq: action.requestId,
+        requestSeq: action.requestSeq,
         reason: action.reason,
         message: action.message,
       };
@@ -152,17 +157,17 @@ export function useEngineerRepairRequestDetail(requestId: number | null) {
     async (targetId: number): Promise<EngineerRepairRequestDetailLoadOutcome> => {
       sequenceRef.current += 1;
       const sequence = sequenceRef.current;
-      dispatch({ type: 'load-start', requestId: sequence });
+      dispatch({ type: 'load-start', requestSeq: sequence });
 
       try {
         const result = await fetchEngineerRepairRequestDetail(targetId);
 
         if (result.ok) {
-          dispatch({ type: 'load-ready', requestId: sequence, detail: result.detail });
+          dispatch({ type: 'load-ready', requestSeq: sequence, detail: result.detail });
         } else {
           dispatch({
             type: 'load-failed',
-            requestId: sequence,
+            requestSeq: sequence,
             reason: result.reason,
             message: result.message,
           });
@@ -173,7 +178,7 @@ export function useEngineerRepairRequestDetail(requestId: number | null) {
         const message = toDetailUserMessage(error);
         dispatch({
           type: 'load-failed',
-          requestId: sequence,
+          requestSeq: sequence,
           reason: null,
           message,
         });
@@ -192,10 +197,10 @@ export function useEngineerRepairRequestDetail(requestId: number | null) {
       // 两次 dispatch 在同一 effect 内被 React 批处理，不会产生 loading 闪现。
       sequenceRef.current += 1;
       const sequence = sequenceRef.current;
-      dispatch({ type: 'load-start', requestId: sequence });
+      dispatch({ type: 'load-start', requestSeq: sequence });
       dispatch({
         type: 'load-failed',
-        requestId: sequence,
+        requestSeq: sequence,
         reason: 'not-accessible',
         message: ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE,
       });
@@ -244,7 +249,7 @@ export function useEngineerRepairRequestDetail(requestId: number | null) {
           const result = await fetchEngineerRepairRequestDetail(requestId);
 
           if (result.ok) {
-            dispatch({ type: 'apply-detail', requestId: sequence, detail: result.detail });
+            dispatch({ type: 'apply-detail', requestSeq: sequence, detail: result.detail });
           }
 
           return result;
@@ -261,17 +266,29 @@ export function useEngineerRepairRequestDetail(requestId: number | null) {
    * 仅在详情已就绪时生效；其余状态由查询流程自行推进。
    */
   const applyDetail = useCallback((detail: EngineerRepairRequestDetail) => {
-    dispatch({ type: 'apply-detail', requestId: sequenceRef.current, detail });
+    dispatch({ type: 'apply-detail', requestSeq: sequenceRef.current, detail });
   }, []);
 
   /**
    * 用回复 Mutation 返回的新回复原子更新当前展示（不发起查询）。
    * 仅在详情已就绪时生效；按服务端回复 ID 去重，同一事件内同步
    * responses 与 latestResolutionStatus（编排层用，UI 不手工拼装）。
+   *
+   * 版本推进：回复成功注入的同时推进查询序号（sequenceRef 与 state.requestSeq
+   * 同步 +1），使此前已发出、尚在飞行中的旧详情查询（携带旧序号）返回时被
+   * reducer 序号守卫丢弃，不得用旧快照覆盖刚追加的新回复。仅就绪态推进，
+   * 保证 sequenceRef 与 state.requestSeq 的不变式不被破坏。
    */
-  const applyResponse = useCallback((response: EngineerRepairRequestResponseItem) => {
-    dispatch({ type: 'apply-response', requestId: sequenceRef.current, response });
-  }, []);
+  const applyResponse = useCallback(
+    (response: EngineerRepairRequestResponseItem) => {
+      if (state.status !== 'ready') {
+        return;
+      }
+      sequenceRef.current += 1;
+      dispatch({ type: 'apply-response', requestSeq: sequenceRef.current, response });
+    },
+    [state.status],
+  );
 
   return { state, reload, recheckSilently, applyDetail, applyResponse };
 }

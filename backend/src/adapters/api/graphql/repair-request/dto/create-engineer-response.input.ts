@@ -19,9 +19,11 @@ import { IsEnum, IsInt, IsString, Min } from 'class-validator';
  *   （单一运行时真源）；本层不推断默认状态；
  * - engineerAccountId 仅取自可信 Session、customerAccountId 仅从目标申请派生，
  *   输入中不存在任何归属账号 ID；
- * - 回复正文不设装配层 MaxLength 防御：create-repair-request.input.ts 的防御值
- *   是已确认业务上限的镜像，本需求尚未确认业务上限，无值可镜像，避免散写任意数值；
- *   负责人确认上限后须同步更新本层与 usecase 校验
+ * - 回复正文的容量上限已确认为 MySQL TEXT 的 65,535 UTF-8 字节，由 usecase
+ *   通过 Buffer.byteLength 做真实字节校验（assertEngineerResponseTextCapacity）；
+ *   本层故意不使用 @MaxLength：class-validator 的 MaxLength 计量的是 UTF-16 码元数
+ *   （string.length），不是 UTF-8 字节数，用它冒充字节容量会放行超限的中文/emoji 正文，
+ *   因此本层只保留 @IsString 结构校验，最终容量保护由 usecase 单一负责
  */
 @InputType({ description: '工程师追加处理回复输入参数' })
 export class CreateEngineerResponseInput {

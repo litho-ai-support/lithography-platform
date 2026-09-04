@@ -296,7 +296,8 @@ describe('useEngineerRepairRequestDetail 的 apply-response（回复原子注入
 
     expect(result.current.state).toMatchObject({
       status: 'ready',
-      requestSeq: 1,
+      // 回复成功注入推进查询版本（1 → 2），使此前在飞的旧查询失效
+      requestSeq: 2,
       detail: {
         responses: [
           EXISTING,
@@ -501,6 +502,71 @@ describe('useEngineerRepairRequestDetail 的 recheckSilently（静默重查）',
       status: 'ready',
       requestSeq: 2,
       detail: buildDetail(22, false),
+    });
+    unmount();
+  });
+
+  it('旧静默查询晚到：apply-response 已推进序号，旧快照被守卫丢弃，不覆盖新回复', async () => {
+    const BASE = buildDetail(21, true);
+    const EXISTING = {
+      id: 51,
+      engineerNickname: '陈工',
+      resolutionStatus: 'PENDING' as const,
+      responseText: '已初步处理',
+      createdAt: '2026-09-02T09:00:00.000Z',
+    };
+    const NEW_RESPONSE = {
+      id: 61,
+      engineerNickname: '陈工',
+      resolutionStatus: 'RESOLVED' as const,
+      responseText: '已修复',
+      createdAt: '2026-09-02T10:00:00.000Z',
+    };
+    const staleDetail = {
+      ...BASE,
+      responses: [EXISTING],
+      latestResolutionStatus: 'PENDING' as const,
+    };
+
+    // 初始加载：含历史回复，latestResolutionStatus=PENDING
+    fetchMock.mockResolvedValueOnce({ ok: true, detail: staleDetail });
+    // 旧静默查询在飞，稍后返回「提交前」的旧快照（不含新回复）
+    let resolveRecheck: (value: EngineerRepairRequestDetailResult) => void = () => {};
+    const recheckPending = new Promise<EngineerRepairRequestDetailResult>((resolve) => {
+      resolveRecheck = resolve;
+    });
+    fetchMock.mockReturnValueOnce(recheckPending);
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetail(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    // 旧静默查询开始（进入时快照当前序号 1）
+    let recheck: Promise<EngineerRepairRequestDetailLoadOutcome | null> = Promise.resolve(null);
+    await act(async () => {
+      recheck = result.current.recheckSilently();
+    });
+
+    // 旧查询返回前应用一条成功回复：序号推进到 2，新回复注入，状态推进
+    await act(async () => {
+      result.current.applyResponse(NEW_RESPONSE);
+    });
+    expect(result.current.state).toMatchObject({
+      status: 'ready',
+      requestSeq: 2,
+      detail: { responses: [EXISTING, NEW_RESPONSE], latestResolutionStatus: 'RESOLVED' },
+    });
+
+    // 旧查询此时才返回提交前旧详情（携带序号 1）：被 reducer 序号守卫丢弃
+    await act(async () => {
+      resolveRecheck({ ok: true, detail: staleDetail });
+      await recheck;
+    });
+
+    // 最终仍保留新回复与新 latestResolutionStatus，未被旧快照覆盖或倒退
+    expect(result.current.state).toMatchObject({
+      status: 'ready',
+      requestSeq: 2,
+      detail: { responses: [EXISTING, NEW_RESPONSE], latestResolutionStatus: 'RESOLVED' },
     });
     unmount();
   });

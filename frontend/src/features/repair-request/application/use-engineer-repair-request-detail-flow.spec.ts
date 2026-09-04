@@ -696,3 +696,155 @@ describe('useEngineerRepairRequestDetailFlow 的回复编排', () => {
     unmount();
   });
 });
+
+describe('useEngineerRepairRequestDetailFlow 的手动确认回复结果（confirmResponseResult）', () => {
+  const INPUT: CreateEngineerResponseInput = {
+    requestId: 21,
+    responseText: '已更换备件',
+    resolutionStatus: 'PENDING',
+  };
+  const RESPONSE: EngineerRepairRequestResponseItem = {
+    id: 61,
+    engineerNickname: '陈工',
+    resolutionStatus: 'PENDING',
+    responseText: '已更换备件',
+    createdAt: '2026-09-02T10:00:00.000Z',
+  };
+
+  it('手动重查挂起期间回复提交返回 null，不产生 Mutation', async () => {
+    // 初始加载
+    fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
+    // 手动重查在飞（可控 gate，不用固定 sleep）
+    let resolveRecheck: (value: EngineerRepairRequestDetailResult) => void = () => {};
+    const recheckPending = new Promise<EngineerRepairRequestDetailResult>((resolve) => {
+      resolveRecheck = resolve;
+    });
+    fetchDetailMock.mockReturnValueOnce(recheckPending);
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetailFlow(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let confirm: Promise<unknown> = Promise.resolve(null);
+    await act(async () => {
+      confirm = result.current.confirmResponseResult();
+    });
+    // 手动重查期间 reconciling 置位（与回复提交同一把锁）
+    expect(result.current.reconciling).toBe(true);
+    expect(fetchDetailMock).toHaveBeenCalledTimes(2);
+
+    // 重查挂起期间再提交回复：被同一把锁拒绝，不产生 Mutation
+    let submitResult: CreateEngineerResponseResult | null = null;
+    await act(async () => {
+      submitResult = await result.current.createResponse(INPUT);
+    });
+    expect(submitResult).toBeNull();
+    expect(createMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveRecheck({ ok: true, detail: buildDetail(21, true) });
+      await confirm;
+    });
+    expect(result.current.reconciling).toBe(false);
+    unmount();
+  });
+
+  it('手动重查挂起期间再次手动重查只产生一次查询，第二次返回 null', async () => {
+    fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
+    let resolveRecheck: (value: EngineerRepairRequestDetailResult) => void = () => {};
+    const recheckPending = new Promise<EngineerRepairRequestDetailResult>((resolve) => {
+      resolveRecheck = resolve;
+    });
+    fetchDetailMock.mockReturnValueOnce(recheckPending);
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetailFlow(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let first: Promise<unknown> = Promise.resolve(null);
+    let second: Promise<unknown> = Promise.resolve(null);
+    await act(async () => {
+      first = result.current.confirmResponseResult();
+      second = result.current.confirmResponseResult();
+    });
+
+    // 第二次被锁拒绝，不产生第二个详情查询（初始 1 + 手动重查 1）
+    await expect(second).resolves.toBeNull();
+    expect(fetchDetailMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolveRecheck({ ok: true, detail: buildDetail(21, true) });
+      await first;
+    });
+    expect(result.current.reconciling).toBe(false);
+    unmount();
+  });
+
+  it('手动重查结束后锁释放，允许后续正常提交回复', async () => {
+    fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
+    let resolveRecheck: (value: EngineerRepairRequestDetailResult) => void = () => {};
+    const recheckPending = new Promise<EngineerRepairRequestDetailResult>((resolve) => {
+      resolveRecheck = resolve;
+    });
+    fetchDetailMock.mockReturnValueOnce(recheckPending);
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetailFlow(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let confirm: Promise<unknown> = Promise.resolve(null);
+    await act(async () => {
+      confirm = result.current.confirmResponseResult();
+    });
+    await act(async () => {
+      resolveRecheck({ ok: true, detail: buildDetail(21, true) });
+      await confirm;
+    });
+    expect(result.current.reconciling).toBe(false);
+
+    // 锁已释放：后续提交正常进行，产生一次 Mutation
+    createMock.mockResolvedValueOnce({ ok: true, response: RESPONSE });
+    let submitResult: CreateEngineerResponseResult | null = null;
+    await act(async () => {
+      submitResult = await result.current.createResponse(INPUT);
+    });
+    expect(submitResult).toEqual({ ok: true, response: RESPONSE });
+    expect(createMock).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('手动重查失败时保留当前 ready 详情，释放锁，不自动重发 Mutation', async () => {
+    fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
+    let rejectRecheck: (reason?: unknown) => void = () => {};
+    const recheckPending = new Promise<EngineerRepairRequestDetailResult>((_resolve, reject) => {
+      rejectRecheck = reject;
+    });
+    fetchDetailMock.mockReturnValueOnce(recheckPending);
+
+    const { result, unmount } = renderHook(() => useEngineerRepairRequestDetailFlow(21));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let confirm: Promise<unknown> = Promise.resolve(null);
+    await act(async () => {
+      confirm = result.current.confirmResponseResult();
+    });
+    expect(result.current.reconciling).toBe(true);
+
+    // 重查以 transport 失败告终（静默重查失败不切状态机）
+    await act(async () => {
+      rejectRecheck(new Error('network down'));
+      await confirm;
+    });
+
+    // 当前详情保留，锁与 reconciling 释放，全程未发任何 Mutation
+    expect(result.current.state).toMatchObject({ status: 'ready', detail: buildDetail(21, true) });
+    expect(result.current.reconciling).toBe(false);
+    expect(createMock).not.toHaveBeenCalled();
+
+    // 收敛结束后手动重查入口恢复：可再次发起（此次成功）
+    fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
+    await act(async () => {
+      await result.current.confirmResponseResult();
+    });
+    expect(result.current.reconciling).toBe(false);
+    expect(createMock).not.toHaveBeenCalled();
+    unmount();
+  });
+});

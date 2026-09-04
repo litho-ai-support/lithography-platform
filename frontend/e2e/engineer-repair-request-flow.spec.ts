@@ -904,3 +904,89 @@ test('unmatched re-check keeps the draft and the manual re-check never clears it
   expect(recheckRequests).toBe(2);
   expect(getCreateResponseRequests()).toBe(1);
 });
+
+test('manual re-check in flight blocks resubmit and never stacks a second query', async ({
+  page,
+}) => {
+  await seedAuthSession(page, 'ENGINEER');
+
+  let submitted: CreateResponseVariables | null = null;
+  // 业务事件驱动：自动收敛重查已放行（无匹配），手动重查由 gate 挂起
+  let manualRecheckStarted = false;
+  const manualGate = createGate();
+  let recheckRequests = 0;
+
+  const { getCreateResponseRequests } = await routeEngineerGraphQL(page, {
+    onDetail: async (route) => {
+      const submittedVariables = submitted;
+      if (submittedVariables === null) {
+        return fulfillDetail(route, REQUEST_ID, true, [MOCK_EXISTING_RESPONSE]);
+      }
+
+      recheckRequests += 1;
+      // 自动收敛重查：服务端尚无匹配回复，立即返回旧时间线（保留不确定态）
+      if (!manualRecheckStarted) {
+        return fulfillDetail(route, REQUEST_ID, true, [MOCK_EXISTING_RESPONSE]);
+      }
+      // 手动重查：挂起，用于观察挂起期间的互斥禁用态
+      await manualGate.promise;
+      return fulfillDetail(route, REQUEST_ID, true, [MOCK_EXISTING_RESPONSE]);
+    },
+    onCreateResponse: (route, variables) => {
+      submitted = variables;
+      return fulfillResponseSystemFailure(route);
+    },
+  });
+
+  await openResponseDetail(page);
+  await fillResponseDraft(page);
+  await submitResponse(page);
+
+  // 自动收敛无匹配：不确定反馈与草稿保留，手动重查入口恢复可用
+  await expect(page.getByText(RESPONSE_UNCERTAIN_HINT)).toBeVisible();
+  await expect(page.getByRole('button', { name: '重新加载详情' })).toBeEnabled();
+  await expect.poll(() => recheckRequests).toBe(1);
+
+  // 用户点击手动重查：进入挂起（以点击为业务事件，不靠请求序号）
+  manualRecheckStarted = true;
+  await page.getByRole('button', { name: '重新加载详情' }).click();
+  await expect.poll(() => recheckRequests).toBe(2);
+
+  // 手动重查期间 reconciling：正文禁用、重新加载按钮禁用
+  await expect(page.getByLabel('回复正文')).toBeDisabled();
+  await expect(page.getByRole('button', { name: '重新加载详情' })).toBeDisabled();
+
+  // 挂起期间重复点击重新加载不产生第二个查询；提交也不产生新 Mutation
+  await page.getByRole('button', { name: '重新加载详情' }).click({ force: true });
+  await submitResponse(page);
+  await expect.poll(() => recheckRequests).toBe(2);
+  expect(getCreateResponseRequests()).toBe(1);
+
+  manualGate.release();
+
+  // 重查结束后草稿仍保留（表单未卸载），锁释放，重新加载入口恢复可用
+  await expect(page.getByLabel('回复正文')).toHaveValue(RESPONSE_DRAFT);
+  await expect(page.getByRole('button', { name: '重新加载详情' })).toBeEnabled();
+  expect(getCreateResponseRequests()).toBe(1);
+});
+
+test('over-capacity response text is blocked in the frontend without any mutation', async ({
+  page,
+}) => {
+  await seedAuthSession(page, 'ENGINEER');
+
+  const { getCreateResponseRequests } = await routeEngineerGraphQL(page, {
+    onDetail: (route) => fulfillDetail(route, REQUEST_ID, true, [MOCK_EXISTING_RESPONSE]),
+  });
+
+  await openResponseDetail(page);
+  // 65,536 个 ASCII 字符 = 65,536 UTF-8 字节，超出 MySQL TEXT 上限（65,535 bytes）
+  const overCapacity = 'a'.repeat(65536);
+  await fillResponseDraft(page, overCapacity);
+  await submitResponse(page);
+
+  // 前端明确拦截：展示容量超限提示，草稿保留，未发任何回复 Mutation
+  await expect(page.getByText('回复正文不能超过 65,535 字节（按 UTF-8 计算）')).toBeVisible();
+  await expect(page.getByLabel('回复正文')).toHaveValue(overCapacity);
+  expect(getCreateResponseRequests()).toBe(0);
+});

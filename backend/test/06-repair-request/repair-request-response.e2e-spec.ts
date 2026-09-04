@@ -83,6 +83,10 @@ const REQUEST_WHITELIST_TARGET = 151;
 const REQUEST_APPEND_SEMANTIC = 152;
 /** “客户详情与 MINE 列表同步”专用申请（与前两个成功用例隔离） */
 const REQUEST_READ_SYNC = 153;
+/** 容量合法写入专用申请（65,535 bytes 成功落库，与超限拒绝用例隔离） */
+const REQUEST_CAPACITY_OK = 154;
+/** 容量超限拒绝专用申请（三类超限均不落库，count 恒为 0，与执行顺序无关） */
+const REQUEST_CAPACITY_OVER = 155;
 const NON_EXISTENT_REQUEST_ID = 999999;
 
 /**
@@ -315,6 +319,8 @@ describe('工程师追加处理回复写链路 (e2e)', () => {
         buildRequest(REQUEST_WHITELIST_TARGET, '客户端传入归属账号被拒', engineerAccountId),
         buildRequest(REQUEST_APPEND_SEMANTIC, '追加语义专用', engineerAccountId),
         buildRequest(REQUEST_READ_SYNC, '客户详情与 MINE 列表同步专用', engineerAccountId),
+        buildRequest(REQUEST_CAPACITY_OK, '容量合法写入专用', engineerAccountId),
+        buildRequest(REQUEST_CAPACITY_OVER, '容量超限拒绝专用', engineerAccountId),
       ]),
     );
   }, 60000);
@@ -560,6 +566,60 @@ describe('工程师追加处理回复写链路 (e2e)', () => {
       // 值域拦截发生在执行之前，不得误报为系统故障
       expect(response.body.errors[0].extensions.code).not.toBe('INTERNAL_SERVER_ERROR');
       expect(await countResponses(REQUEST_INVALID_INPUT_TARGET)).toBe(0);
+    });
+  });
+
+  describe('回复正文容量（MySQL TEXT UTF-8 字节上限 65,535）', () => {
+    // 成功与超限使用相互隔离的专用 fixture，且超限用例均不写入（count 恒为 0），
+    // 因此不依赖同文件其他 it 的执行结果，支持 -t 单独运行与任意声明顺序。
+    it('65,535 ASCII bytes 成功写入，数据库实际存储正文字节数正确', async () => {
+      const text = 'a'.repeat(65535);
+      const response = await createResponse(
+        engineerToken,
+        validInput(REQUEST_CAPACITY_OK, { responseText: text }),
+      ).expect(200);
+
+      expect(response.body.errors).toBeUndefined();
+      expect(
+        Buffer.byteLength(response.body.data.createEngineerResponse.responseText, 'utf8'),
+      ).toBe(65535);
+
+      const rows = await responseRepository.findBy({ requestId: REQUEST_CAPACITY_OK });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].responseText).toBe(text);
+      // 数据库真实落库的正文字节数恰为 65,535（MySQL TEXT 上限）
+      expect(Buffer.byteLength(rows[0].responseText, 'utf8')).toBe(65535);
+    });
+
+    const expectOverCapacityRejected = async (responseText: string) => {
+      const response = await createResponse(
+        engineerToken,
+        validInput(REQUEST_CAPACITY_OVER, { responseText }),
+      ).expect(200);
+
+      expect(response.body.errors).toHaveLength(1);
+      const error = response.body.errors[0];
+      // 稳定大类必须是 BAD_USER_INPUT，不得映射为 INTERNAL_SERVER_ERROR
+      expect(error.extensions.code).toBe('BAD_USER_INPUT');
+      expect(error.extensions.code).not.toBe('INTERNAL_SERVER_ERROR');
+      // 输入容量错误码，而非系统侧「回复落库失败」的 response-failed 语义
+      expect(error.extensions.errorCode).toBe('INPUT_NORMALIZE_INVALID_TEXT');
+      expect(error.extensions.errorCode).not.toBe('REPAIR_REQUEST_RESPONSE_FAILED');
+      expect(error.extensions.errorMessage).toBe('回复正文不能超过 65,535 字节（按 UTF-8 计算）');
+      // 超限在写服务之前被拒绝：目标申请无任何回复行
+      expect(await countResponses(REQUEST_CAPACITY_OVER)).toBe(0);
+    };
+
+    it('65,536 ASCII bytes 返回 BAD_USER_INPUT 且不产生回复记录', async () => {
+      await expectOverCapacityRejected('a'.repeat(65536));
+    });
+
+    it('中文超限（21,846 字 = 65,538 bytes）返回 BAD_USER_INPUT 且不产生回复记录', async () => {
+      await expectOverCapacityRejected('中'.repeat(21846));
+    });
+
+    it('emoji 超限（16,384 个 = 65,536 bytes）返回 BAD_USER_INPUT 且不产生回复记录', async () => {
+      await expectOverCapacityRejected('😀'.repeat(16384));
     });
   });
 

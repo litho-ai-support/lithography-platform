@@ -6,6 +6,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ENGINEER_RESPONSE_TEXT_OVER_CAPACITY_MESSAGE } from '../application/engineer-response-text-capacity';
 import type { EngineerRepairRequestDetailState } from '../application/use-engineer-repair-request-detail';
 import type {
   AcceptRepairRequestResult,
@@ -63,7 +64,7 @@ function setFlow(
     accepting: false,
     lastAcceptResult,
     reload: vi.fn(),
-    recheckSilently: recheckSilentlyMock,
+    confirmResponseResult: confirmResponseResultMock,
     submitting: false,
     reconciling: false,
     lastCreateResponseResult: null,
@@ -84,7 +85,7 @@ function isControlDisabled(element: HTMLElement): boolean {
  * （每次 setFlow 新建桩会让重渲染后的提交落到另一个桩上）。
  */
 const createResponseMock = vi.fn();
-const recheckSilentlyMock = vi.fn();
+const confirmResponseResultMock = vi.fn();
 
 describe('工程师详情面板的接单冲突反馈', () => {
   beforeEach(() => {
@@ -182,7 +183,7 @@ describe('工程师详情面板的回复区域', () => {
     flowMock.mockReset();
     navigateMock.mockReset();
     createResponseMock.mockReset();
-    recheckSilentlyMock.mockReset();
+    confirmResponseResultMock.mockReset();
   });
 
   const ACCEPTED: EngineerRepairRequestDetailState = {
@@ -213,7 +214,7 @@ describe('工程师详情面板的回复区域', () => {
 
     return {
       createMock: createResponseMock,
-      recheckMock: recheckSilentlyMock,
+      confirmMock: confirmResponseResultMock,
       /** 重新 setFlow 后重渲染面板（模拟编排状态推进，表单不卸载） */
       rerenderPanel: () =>
         view.rerender(
@@ -392,13 +393,73 @@ describe('工程师详情面板的回复区域', () => {
     expect(isControlDisabled(screen.getByRole('button', { name: '重新加载详情' }))).toBe(false);
   });
 
-  it('手动重新加载调用现有 recheckSilently，不调用 Mutation', async () => {
+  it('手动「重新加载详情」调用 confirmResponseResult，不调用 Mutation', async () => {
     setFlow(ACCEPTED, null, { lastCreateResponseResult: RESPONSE_FAILED_RESULT });
-    const { createMock, recheckMock } = renderPanel(true);
+    const { createMock, confirmMock } = renderPanel(true);
 
     fireEvent.click(screen.getByRole('button', { name: '重新加载详情' }));
 
-    expect(recheckMock).toHaveBeenCalledTimes(1);
+    expect(confirmMock).toHaveBeenCalledTimes(1);
     expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('手动重查期间（reconciling）正文、状态、提交与重新加载按钮均禁用', () => {
+    setFlow(ACCEPTED, null, {
+      reconciling: true,
+      lastCreateResponseResult: RESPONSE_FAILED_RESULT,
+    });
+    renderPanel(true);
+
+    expect(isControlDisabled(screen.getByLabelText('回复正文'))).toBe(true);
+    expect(isControlDisabled(screen.getByRole('combobox'))).toBe(true);
+    expect(screen.getByRole('button', { name: /提交回复/ })).toHaveClass('ant-btn-loading');
+    expect(isControlDisabled(screen.getByRole('button', { name: '重新加载详情' }))).toBe(true);
+  });
+
+  it('正文超过 UTF-8 容量：显示明确错误，不调用 Mutation，草稿保留', async () => {
+    setFlow(ACCEPTED, null);
+    const { createMock } = renderPanel(true);
+
+    const overCapacity = 'a'.repeat(65536);
+    fireEvent.change(screen.getByLabelText('回复正文'), { target: { value: overCapacity } });
+    fireEvent.click(screen.getByRole('button', { name: /提交回复/ }));
+
+    expect(await screen.findByText(ENGINEER_RESPONSE_TEXT_OVER_CAPACITY_MESSAGE)).toBeTruthy();
+    expect(createMock).not.toHaveBeenCalled();
+    // 草稿仍在输入框中
+    expect((screen.getByLabelText('回复正文') as HTMLTextAreaElement).value).toBe(overCapacity);
+  });
+
+  it('正文恰为 65,535 UTF-8 字节：校验通过并调用 Mutation', async () => {
+    setFlow(ACCEPTED, null);
+    const { createMock } = renderPanel(true);
+
+    const maxLegal = 'a'.repeat(65535);
+    fireEvent.change(screen.getByLabelText('回复正文'), { target: { value: maxLegal } });
+    fireEvent.click(screen.getByRole('button', { name: /提交回复/ }));
+
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ responseText: maxLegal }));
+  });
+
+  it('后端返回 BAD_USER_INPUT（invalid-input）：展示正文过长提示、保留草稿，不调用静默重查', () => {
+    setFlow(ACCEPTED, null, {
+      lastCreateResponseResult: {
+        ok: false,
+        reason: 'invalid-input',
+        message: ENGINEER_RESPONSE_TEXT_OVER_CAPACITY_MESSAGE,
+      },
+    });
+    const { confirmMock } = renderPanel(true);
+
+    fillDraft();
+
+    expect(screen.getByText(ENGINEER_RESPONSE_TEXT_OVER_CAPACITY_MESSAGE)).toBeTruthy();
+    expect((screen.getByLabelText('回复正文') as HTMLTextAreaElement).value).toBe(
+      '已更换备件，待观察',
+    );
+    // invalid-input 不出现「重新加载详情」入口，也不自动调用静默重查
+    expect(screen.queryByRole('button', { name: '重新加载详情' })).toBeNull();
+    expect(confirmMock).not.toHaveBeenCalled();
   });
 });

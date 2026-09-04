@@ -287,6 +287,79 @@ describe('CreateEngineerResponseUsecase', () => {
     });
   });
 
+  describe('回复正文容量（MySQL TEXT UTF-8 字节上限 65,535）', () => {
+    /**
+     * 超限统一断言：拒绝码/文案正确，且计量发生在读昵称/查询申请/开启事务/
+     * 调用写服务之前——四者均未被触发，不产生任何回复记录。
+     */
+    const expectOverCapacityRejected = async (responseText: string) => {
+      await expect(usecase.execute(command({ responseText }))).rejects.toMatchObject({
+        code: INPUT_NORMALIZE_ERROR.INVALID_TEXT,
+        message: '回复正文不能超过 65,535 字节（按 UTF-8 计算）',
+      });
+
+      expect(accountQueryService.findNicknamesByAccountIds).not.toHaveBeenCalled();
+      expect(repairRequestService.findResponseTargetForUpdate).not.toHaveBeenCalled();
+      expect(transactionRunner.run).not.toHaveBeenCalled();
+      expect(engineerResponseService.insertResponse).not.toHaveBeenCalled();
+    };
+
+    it('ASCII 65,535 bytes 合法并原样写入', async () => {
+      const text = 'a'.repeat(65535);
+      expect(Buffer.byteLength(text, 'utf8')).toBe(65535);
+
+      await usecase.execute(command({ responseText: text }));
+
+      expect(writtenData().responseText).toBe(text);
+    });
+
+    it('中文 21,845 字（65,535 bytes）合法并原样写入', async () => {
+      const text = '中'.repeat(21845);
+      expect(Buffer.byteLength(text, 'utf8')).toBe(65535);
+
+      await usecase.execute(command({ responseText: text }));
+
+      expect(writtenData().responseText).toBe(text);
+    });
+
+    it('emoji 16,383 个 + "abc"（65,535 bytes）合法并原样写入', async () => {
+      const text = '😀'.repeat(16383) + 'abc';
+      expect(Buffer.byteLength(text, 'utf8')).toBe(65535);
+
+      await usecase.execute(command({ responseText: text }));
+
+      expect(writtenData().responseText).toBe(text);
+    });
+
+    it('容量计量发生在 trim 之后：65,535 bytes 正文外加首尾空白仍合法', async () => {
+      const text = `  ${'a'.repeat(65535)}  `;
+      // 未 trim 时 65,539 bytes（超限），trim 后恰为 65,535 bytes（合法）
+      expect(Buffer.byteLength(text, 'utf8')).toBe(65539);
+
+      await usecase.execute(command({ responseText: text }));
+
+      expect(writtenData().responseText).toBe('a'.repeat(65535));
+    });
+
+    it('ASCII 65,536 bytes 拒绝（不开启事务、不写入）', async () => {
+      await expectOverCapacityRejected('a'.repeat(65536));
+    });
+
+    it('中文 21,846 字（65,538 bytes）拒绝（不开启事务、不写入）', async () => {
+      const text = '中'.repeat(21846);
+      expect(Buffer.byteLength(text, 'utf8')).toBe(65538);
+
+      await expectOverCapacityRejected(text);
+    });
+
+    it('emoji 16,384 个（65,536 bytes）拒绝（不开启事务、不写入）', async () => {
+      const text = '😀'.repeat(16384);
+      expect(Buffer.byteLength(text, 'utf8')).toBe(65536);
+
+      await expectOverCapacityRejected(text);
+    });
+  });
+
   describe('目标状态裁决（事务内锁定读取，失败均不插入回复）', () => {
     it('申请不存在返回统一不可访问错误（NOT_FOUND）', async () => {
       repairRequestService.findResponseTargetForUpdate.mockResolvedValue(null);
