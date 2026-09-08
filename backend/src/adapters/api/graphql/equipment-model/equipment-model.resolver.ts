@@ -13,7 +13,7 @@ import { EquipmentModelDTO } from './dto/equipment-model.dto';
 
 /**
  * 设备型号 GraphQL 解析器
- * 提供客户创建维修申请页面的设备型号下拉数据
+ * 提供设备型号下拉数据（当前消费方：客户创建维修申请、AI 参考资料库表单/筛选）
  */
 @Resolver(() => EquipmentModelDTO)
 export class EquipmentModelResolver {
@@ -22,12 +22,13 @@ export class EquipmentModelResolver {
   /**
    * 查询启用设备型号列表（按显示排序值升序）
    *
-   * 角色限制为 CUSTOMER 是当前任务的有意决策（最小权限）：
-   * 本查询仅服务“客户创建维修申请”页面；后续工程师接单/超管管理若需读型号，
-   * 应在那时扩展 @Roles 或新增独立查询，不提前放宽。
+   * 角色演进：初版仅 CUSTOMER（最小权限，仅服务客户创建维修申请页）；
+   * 0907.docx 任务二（AI 参考资料库）起，超管创建/编辑资料表单与工程师列表
+   * 型号筛选也需要本基础数据，故追加 ENGINEER/SUPER_ADMIN（追加式扩展，
+   * 对既有 CUSTOMER 消费方零影响）；usecase 无角色断言，守卫为唯一闸门。
    */
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(IdentityTypeEnum.CUSTOMER)
+  @Roles(IdentityTypeEnum.CUSTOMER, IdentityTypeEnum.ENGINEER, IdentityTypeEnum.SUPER_ADMIN)
   @Query(() => [EquipmentModelDTO], {
     name: 'equipmentModels',
     description: '查询启用设备型号列表',

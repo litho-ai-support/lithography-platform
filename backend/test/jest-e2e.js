@@ -21,6 +21,7 @@ const GROUPS = {
       'test/07-pagination-sort-search/pagination.e2e-spec.ts',
       'test/07-pagination-sort-search/search.e2e-spec.ts',
       'test/07-pagination-sort-search/sort.e2e-spec.ts',
+      'test/09-reference-document/reference-document.e2e-spec.ts',
     ],
     needs: {
       mysql: true,

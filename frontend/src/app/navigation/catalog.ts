@@ -1,5 +1,7 @@
 // src/app/navigation/catalog.ts
 
+import type { AuthSessionRole } from '@/features/auth-session';
+
 import { type AppEnv, getAppEnv } from '@/shared/env';
 
 import type { NavigationItem } from './types';
@@ -12,6 +14,16 @@ const STABLE_NAVIGATION_ITEMS: NavigationItem[] = [
     label: 'Workspace',
     path: '/',
     tags: ['home', 'workbench', 'aigc', 'assistant', 'dashboard', '工作台', '助手'],
+  },
+  {
+    description: '查阅光刻机维护知识库：错误代码手册、维护指南、安全规范与检查表。',
+    id: 'reference-documents',
+    kind: 'stable',
+    label: '参考资料库',
+    // 与 auth-session 角色路径表同口径：工程师/管理员可读，客户禁入不可见
+    path: '/reference-documents',
+    roles: ['ENGINEER', 'SUPER_ADMIN'],
+    tags: ['reference', 'documents', 'knowledge', 'manual', '参考资料', '知识库', '手册'],
   },
 ];
 
@@ -56,11 +68,22 @@ function canExposeSandbox(env: AppEnv) {
   return env === 'dev' || env === 'test';
 }
 
-export function getNavigationItems(env = getAppEnv()): NavigationItem[] {
-  return [
+/**
+ * 导航目录出口：环境暴露 + 角色可见性统一过滤。
+ * activeRole 为会话活动角色；匿名（null）只见无 roles 限制的入口。
+ */
+export function getNavigationItems(
+  env: AppEnv = getAppEnv(),
+  activeRole: AuthSessionRole | null = null,
+): NavigationItem[] {
+  const environmentItems = [
     ...STABLE_NAVIGATION_ITEMS,
     ...(canExposeLabs(env) ? LAB_NAVIGATION_ITEMS : []),
     ...(canExposeSandbox(env) ? SANDBOX_NAVIGATION_ITEMS : []),
     ...SUPPORT_NAVIGATION_ITEMS,
   ];
+
+  return environmentItems.filter(
+    (item) => item.roles === undefined || (activeRole !== null && item.roles.includes(activeRole)),
+  );
 }

@@ -235,3 +235,111 @@ export type RepairRequestDeleteOutcome =
   | { kind: 'ALREADY_DELETED'; id: number; requestNo: string }
   | { kind: 'NOT_FOUND_OR_NOT_OWNER'; id: number }
   | { kind: 'ALREADY_ACCEPTED'; id: number; requestNo: string };
+
+// ---------- AI 参考资料库（0907.docx 任务二） ----------
+
+/** 资料列表分页参数（仅 OFFSET；排序由契约固定：创建时间倒序 + 主键倒序） */
+export type ReferenceDocumentListPagination = {
+  page: number;
+  pageSize: number;
+  withTotal: boolean;
+};
+
+/** 资料列表筛选条件（标题模糊 + 文档类型等值 + 设备型号等值，均可选） */
+export type ReferenceDocumentListFilter = {
+  title?: string;
+  documentType?: string;
+  equipmentModelId?: number;
+};
+
+/**
+ * 资料列表项稳定读视图。
+ * 默认仅返回未软删资料；创建人展示经 creatorNickname（实时关联，缺失回落），
+ * 不返回 createdByAccountId；不返回 storageBackend/storageReference 与服务器路径；
+ * 不携带 contentText 大字段（仅详情返回）。
+ */
+export type ReferenceDocumentListItemView = {
+  id: number;
+  title: string;
+  documentType: string;
+  equipmentModelId: number | null;
+  equipmentModelName: string | null;
+  description: string | null;
+  originalFilename: string | null;
+  creatorNickname: string;
+  createdAt: Date;
+};
+
+/** 列表项 QueryService 内部装配结果：创建人昵称富集前含账号 ID，仅供 usecase 跨域富集，不对外输出 */
+export type ReferenceDocumentListItemQueryResult = Omit<
+  ReferenceDocumentListItemView,
+  'creatorNickname'
+> & { createdByAccountId: number };
+
+/**
+ * 资料详情稳定读视图（元数据 + 文本内容）。
+ * 不返回账号 ID、存储后端/存储引用与服务器路径（0907.docx：不能把服务器本地路径返回给浏览器）。
+ */
+export type ReferenceDocumentDetailView = {
+  id: number;
+  title: string;
+  documentType: string;
+  equipmentModelId: number | null;
+  equipmentModelName: string | null;
+  description: string | null;
+  originalFilename: string | null;
+  mimeType: string | null;
+  contentText: string | null;
+  creatorNickname: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+/** 详情 QueryService 装配结果（昵称富集前） */
+export type ReferenceDocumentDetailQueryResult = Omit<
+  ReferenceDocumentDetailView,
+  'creatorNickname'
+> & { createdByAccountId: number };
+
+/** 资料列表分页结果 */
+export type ReferenceDocumentListPage = {
+  items: ReferenceDocumentListItemView[];
+  total?: number;
+  page: number;
+  pageSize: number;
+};
+
+/**
+ * 资料创建写入数据（由 usecase 完成全部业务判定后传入）。
+ * createdByAccountId 仅来自可信 Session，不得由客户端传入；
+ * 本周仅 contentText 内容来源（无文件上传），storageBackend/storageReference 留空。
+ */
+export type ReferenceDocumentInsertData = {
+  title: string;
+  documentType: string;
+  equipmentModelId: number | null;
+  description: string | null;
+  contentText: string;
+  createdByAccountId: number;
+};
+
+/**
+ * 资料编辑写入数据（由 usecase 完成字段合并与校验后传入，全量覆盖式更新）。
+ * 满足实体 chk_reference_document_content_source：本周无文件来源，contentText 必须非空。
+ */
+export type ReferenceDocumentUpdateData = {
+  documentId: number;
+  title: string;
+  documentType: string;
+  equipmentModelId: number | null;
+  description: string | null;
+  contentText: string;
+};
+
+/**
+ * 资料软删除条件更新结果（仅状态事实，不表决策；错误映射归 usecase）。
+ * - DELETED：条件更新命中，软删除完成
+ * - NOT_FOUND：行不存在或已软删（负责人 docx 口径统一 NOT_FOUND，不泄露删除状态）
+ */
+export type ReferenceDocumentDeleteOutcome =
+  { kind: 'DELETED'; id: number } | { kind: 'NOT_FOUND'; id: number };

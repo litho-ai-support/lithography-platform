@@ -6,6 +6,7 @@ import { AuthUsecasesModule } from '@src/usecases/auth/auth-usecases.module';
 import { AsyncTaskRecordUsecasesModule } from '@src/usecases/async-task-record/async-task-record-usecases.module';
 import { EmailQueueUsecasesModule } from '@src/usecases/email-queue/email-queue-usecases.module';
 import { RegistrationUsecasesModule } from '@src/usecases/registration/registration-usecases.module';
+import { ReferenceDocumentUsecasesModule } from '@src/usecases/reference-document/reference-document-usecases.module';
 import { RepairRequestUsecasesModule } from '@src/usecases/repair-request/repair-request-usecases.module';
 import { ThirdPartyAccountsUsecasesModule } from '@src/usecases/third-party-accounts/third-party-accounts-usecases.module';
 import { VerificationRecordUsecasesModule } from '@src/usecases/verification-record/verification-record-usecases.module';
@@ -22,6 +23,7 @@ import { UserInfoResolver } from './account/user-info.resolver';
 import { AuthResolver } from './auth/auth.resolver';
 import { EmailResolver } from './email/email.resolver';
 import { EquipmentModelResolver } from './equipment-model/equipment-model.resolver';
+import { ReferenceDocumentResolver } from './reference-document/reference-document.resolver';
 import { RegistrationResolver } from './registration/registration.resolver';
 import { RepairRequestResolver } from './repair-request/repair-request.resolver';
 import { ThirdPartyAuthResolver } from './third-party-auth/third-party-auth.resolver';
@@ -51,6 +53,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     AuthUsecasesModule,
     EmailQueueUsecasesModule,
     RegistrationUsecasesModule,
+    ReferenceDocumentUsecasesModule,
     RepairRequestUsecasesModule,
     ThirdPartyAccountsUsecasesModule,
     VerificationRecordUsecasesModule,
@@ -95,6 +98,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     ThirdPartyAuthResolver,
     EmailResolver,
     EquipmentModelResolver,
+    ReferenceDocumentResolver,
     RegistrationResolver,
     RepairRequestResolver,
     VerificationRecordResolver,
@@ -113,6 +117,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     ThirdPartyAuthResolver,
     EmailResolver,
     EquipmentModelResolver,
+    ReferenceDocumentResolver,
     RegistrationResolver,
     RepairRequestResolver,
     VerificationRecordResolver,

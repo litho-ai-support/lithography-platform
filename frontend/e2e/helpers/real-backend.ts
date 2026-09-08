@@ -21,6 +21,7 @@ const BACKEND_ENV_FILE = fileURLToPath(
 const FRONTEND_LOCAL_ENV_FILE = fileURLToPath(
   new URL('../../env/.env.development.local', import.meta.url),
 );
+const FRONTEND_VITE_CONFIG_FILE = fileURLToPath(new URL('../../vite.config.ts', import.meta.url));
 
 // 后端生成的申请编号格式：RR + 14 位时间戳 + 6 位加密随机字符（与后端单测断言一致），
 // 仅白名单匹配的编号才允许进入 SQL 拼接（由受保护 helper 强制，见下方守卫说明）。
@@ -48,11 +49,19 @@ export function readBackendEnvOrNull(): Record<string, string> | null {
   }
 }
 
-// 前端侧真实通道前提：本地 .env.development.local 必须配置 VITE_GRAPHQL_ENDPOINT，
-// 否则 dev server 回退相对路径 /graphql，浏览器侧请求到不了本地后端。
+// 前端侧真实通道前提（两种任一成立即可）：
+// 1. .env.development.local 配置 VITE_GRAPHQL_ENDPOINT（浏览器直连后端，需后端 CORS 放行）；
+// 2. vite dev server 配置了 '/graphql' 同源转发（默认转发到 http://127.0.0.1:3000，
+//    无跨域，端口映射域名亦可用，当前为本机默认模式）。
+// 两者都不成立时浏览器侧请求落到相对路径 /graphql 且无转发，到不了后端。
 export function hasFrontendGraphQLEndpoint(): boolean {
   try {
-    return /VITE_GRAPHQL_ENDPOINT\s*=\s*\S+/.test(readFileSync(FRONTEND_LOCAL_ENV_FILE, 'utf-8'));
+    if (/VITE_GRAPHQL_ENDPOINT\s*=\s*\S+/.test(readFileSync(FRONTEND_LOCAL_ENV_FILE, 'utf-8'))) {
+      return true;
+    }
+
+    // 同源转发通道：vite.config.ts 含 '/graphql' 键的 proxy 配置即视为可用
+    return /['"]\/graphql['"]\s*:/.test(readFileSync(FRONTEND_VITE_CONFIG_FILE, 'utf-8'));
   } catch {
     return false;
   }

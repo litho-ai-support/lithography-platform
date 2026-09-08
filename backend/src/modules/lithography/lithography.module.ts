@@ -8,8 +8,10 @@ import { EquipmentModelEntity } from './entities/equipment-model.entity';
 import { ReferenceDocumentEntity } from './entities/reference-document.entity';
 import { RepairRequestEntity } from './entities/repair-request.entity';
 import { EquipmentModelQueryService } from './queries/equipment-model.query.service';
+import { ReferenceDocumentQueryService } from './queries/reference-document.query.service';
 import { RepairRequestQueryService } from './queries/repair-request.query.service';
 import { EngineerResponseService } from './engineer-response.service';
+import { ReferenceDocumentService } from './reference-document.service';
 import { RepairRequestService } from './repair-request.service';
 
 const LITHOGRAPHY_ENTITIES = [
@@ -26,15 +28,19 @@ const LITHOGRAPHY_ENTITIES = [
   imports: [TypeOrmModule.forFeature([...LITHOGRAPHY_ENTITIES])],
   providers: [
     EquipmentModelQueryService,
+    ReferenceDocumentQueryService,
     RepairRequestQueryService,
     RepairRequestService,
+    ReferenceDocumentService,
     EngineerResponseService,
   ],
   exports: [
     TypeOrmModule,
     EquipmentModelQueryService,
+    ReferenceDocumentQueryService,
     RepairRequestQueryService,
     RepairRequestService,
+    ReferenceDocumentService,
     EngineerResponseService,
   ],
 })

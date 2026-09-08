@@ -21,6 +21,9 @@ import { EngineerRepairRequestDetailPage } from '@/pages/engineer-repair-request
 import { EngineerRepairRequestsPage } from '@/pages/engineer-repair-requests';
 import { ErrorPreviewPage } from '@/pages/error-preview';
 import { ProjectStructurePage } from '@/pages/project-structure';
+import { ReferenceDocumentDetailPage } from '@/pages/reference-document-detail';
+import { ReferenceDocumentNewPage } from '@/pages/reference-document-new';
+import { ReferenceDocumentsPage } from '@/pages/reference-documents';
 import { RepairRequestCreatePage } from '@/pages/repair-request-create';
 import { Error403, Error404, Error500, ErrorRouteCrash } from '@/features/error-feedback';
 
@@ -130,6 +133,24 @@ const router = createBrowserRouter([
         element: <RepairRequestCreatePage />,
         loader: protectedRouteLoader,
         path: 'customer/repair-requests/new',
+      },
+      {
+        // AI 参考资料库（0907 任务二）：角色治理复用 protectedRouteLoader +
+        // auth-session 角色路径表（ENGINEER/SUPER_ADMIN 放行，CUSTOMER 安全跳转）；
+        // 新增页对 ENGINEER 由角色路径拒绝清单拦截（与后端写接口精确口径一致）
+        element: <ReferenceDocumentsPage />,
+        loader: protectedRouteLoader,
+        path: 'reference-documents',
+      },
+      {
+        element: <ReferenceDocumentNewPage />,
+        loader: protectedRouteLoader,
+        path: 'reference-documents/new',
+      },
+      {
+        element: <ReferenceDocumentDetailPage />,
+        loader: protectedRouteLoader,
+        path: 'reference-documents/:documentId',
       },
       {
         element: <ProjectStructurePage />,
