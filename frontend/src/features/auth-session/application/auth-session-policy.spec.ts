@@ -82,6 +82,24 @@ describe('auth session policy', () => {
     expect(isAuthSessionRoleAllowedAt('CUSTOMER', '/customer/repair-requests/new')).toBe(true);
   });
 
+  it('gates the reference-document routes by role (0907 任务二)', () => {
+    // 读：ENGINEER/SUPER_ADMIN 放行（根路径表带边界前缀，详情子路径同规则）；
+    // 写页：ENGINEER 拒绝清单优先于根路径表，避免「能进页但提交必被拒」的残缺态；
+    // CUSTOMER 不在允许表，全部子路径（含详情）均拒，与后端读守卫口径一致。
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/reference-documents')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/reference-documents/new')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/reference-documents/970001')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('ENGINEER', '/reference-documents')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('ENGINEER', '/reference-documents/970001')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('ENGINEER', '/reference-documents/new')).toBe(false);
+    expect(isAuthSessionRoleAllowedAt('ENGINEER', '/reference-documents/new/')).toBe(false);
+    expect(isAuthSessionRoleAllowedAt('CUSTOMER', '/reference-documents')).toBe(false);
+    expect(isAuthSessionRoleAllowedAt('CUSTOMER', '/reference-documents/970001')).toBe(false);
+    expect(isAuthSessionRoleAllowedAt('CUSTOMER', '/reference-documents/new')).toBe(false);
+    // 相似前缀不落入本功能规则（带边界匹配边界依旧成立）。
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/reference-documents-library')).toBe(false);
+  });
+
   it('guards role sub-pages through the shared role path policy', () => {
     const engineerSession = createAuthSessionSnapshot({
       accessToken: 'access-token',
