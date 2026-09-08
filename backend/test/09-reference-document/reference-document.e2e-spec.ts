@@ -567,5 +567,72 @@ describe('AI 参考资料库 (e2e)', () => {
       expect(noHit.ids).toEqual([]);
       expect(noHit.total).toBe(0);
     });
+
+    it('设备型号筛选：指定型号命中，通用资料与未匹配型号被排除', async () => {
+      // 自建指定型号行（自增 ID 回查；971 已在前序用例软删，不依赖固定种子行）
+      const createResponse = await postGql({
+        app,
+        query: CREATE_MUTATION,
+        variables: {
+          input: {
+            title: 'E2E 型号筛选行',
+            documentType: 'CHECKLIST',
+            equipmentModelId: 43,
+            description: null,
+            contentText: '型号筛选链路验证',
+          },
+        },
+        token: adminToken,
+      }).expect(200);
+      expect(createResponse.body.errors).toBeUndefined();
+      const createdId = createResponse.body.data.createReferenceDocument.id as number;
+
+      const listByModel = async (
+        equipmentModelId: number,
+      ): Promise<{ ids: number[]; total: number }> => {
+        const response = await postGql({
+          app,
+          query: LIST_SEARCH_QUERY,
+          variables: {
+            pagination: { ...PAGE, withTotal: true },
+            filter: { equipmentModelId },
+          },
+          token: adminToken,
+        }).expect(200);
+        expect(response.body.errors).toBeUndefined();
+        const payload = response.body.data.referenceDocuments as {
+          items: Array<{ id: number }>;
+          total: number;
+        };
+        return { ids: payload.items.map((item) => item.id), total: payload.total };
+      };
+
+      // 正向：指定型号 43 命中自建行
+      const modelHit = await listByModel(43);
+      expect(modelHit.ids).toContain(createdId);
+      // 通用资料（无型号，972）不被型号筛选命中
+      expect(modelHit.ids).not.toContain(972);
+      // 反向：未匹配型号零结果
+      const noModel = await listByModel(44);
+      expect(noModel.ids).toEqual([]);
+      expect(noModel.total).toBe(0);
+    });
+
+    it('数据库删除一致性约束：绕过应用层的非法软删状态被 DB 两个方向拒绝', async () => {
+      // 方向一：已软删行（971，deprecated=1）不允许把 deleted_at 抹回 NULL
+      await expect(
+        dataSource.query('UPDATE reference_document SET deleted_at = NULL WHERE id = 971'),
+      ).rejects.toThrow(/chk_reference_document_deletion_consistency/);
+
+      // 方向二：未删行（972，deprecated=0）不允许只置 deprecated=1 而不写 deleted_at
+      await expect(
+        dataSource.query('UPDATE reference_document SET deprecated = 1 WHERE id = 972'),
+      ).rejects.toThrow(/chk_reference_document_deletion_consistency/);
+
+      // 约束拒绝为语句级回滚，972 数据不变
+      const saved = await documentRepository.findOne({ where: { id: 972 } });
+      expect(saved).toMatchObject({ deprecated: false });
+      expect(saved?.deletedAt).toBeNull();
+    });
   });
 });
