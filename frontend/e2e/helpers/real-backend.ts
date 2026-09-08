@@ -110,6 +110,21 @@ export function deleteRepairRequestByRequestNo(requestNo: string): void {
   mysqlQuery(`DELETE FROM repair_request WHERE request_no = '${requestNo}'`);
 }
 
+// 参考资料 real spec 自建行的固定标题前缀（与 reference-document-real.spec 内
+// E2E_TITLE_PREFIX 保持一致）。删除条件为代码内静态字面量，不接外部输入。
+const REFERENCE_DOCUMENT_E2E_TITLE_PREFIX = 'E2E 参考资料验收行';
+
+/**
+ * 物理清理参考资料 real spec 自建行（在 API 软删兜底之后调用）。
+ * 软删行仍计入 seed:mock 的 COUNT 校验口径，物理删除才能恢复种子基线；
+ * 对无匹配行是 no-op，幂等成立。
+ */
+export function deleteE2EReferenceDocumentRows(): void {
+  mysqlQuery(
+    `DELETE FROM reference_document WHERE title LIKE '${REFERENCE_DOCUMENT_E2E_TITLE_PREFIX}%'`,
+  );
+}
+
 // 可用性探针：健康检查 + 用真实 Mock 账号登录（同时验证后端已种子且登录链路可用）。
 // CORS 不在 Node 侧预检（fetch 不允许设置 Origin 等受限头），留给浏览器用例自身暴露。
 export async function isRealBackendAvailable(env: Record<string, string>): Promise<boolean> {

@@ -4,12 +4,14 @@
 // 数据基础：backend seed 预置参考资料 970001~970003（未软删，含通用/指定型号/
 // 有 storage 引用三种形态）与 970004（已软删，默认不可见）；seed 行只做只读断言。
 // 创建链路产生的自建行（标题固定 E2E 前缀）在用例结束前经 API 软删兜底清理
-// （列表与详情对已软删行均不可见），不物理删除、不污染共享开发库基线。
+// （列表与详情对已软删行均不可见），再物理删除以恢复 seed:mock 的 COUNT 校验口径，
+// 不污染共享开发库基线。
 // 前提不满足（无本地后端 / 无 env）时用例自动跳过，不会以失败阻塞。
 
 import { expect, test } from '@playwright/test';
 
 import {
+  deleteE2EReferenceDocumentRows,
   hasFrontendGraphQLEndpoint,
   isRealBackendAvailable,
   readBackendEnv,
@@ -65,7 +67,10 @@ async function findE2EDocumentId(env: Record<string, string>): Promise<number | 
   return items?.length ? items[0].id : null;
 }
 
-/** 兜底清理：软删本 spec 自建的行（对不存在/已软删行 NOT_FOUND，忽略即可）。 */
+/**
+ * 兜底清理：先经 API 软删本 spec 自建的未删行（对不存在/已软删行 NOT_FOUND，忽略即可），
+ * 再物理删除自建行——软删行仍计入 seed:mock 的 COUNT 校验口径，物理删除才能恢复种子基线。
+ */
 async function cleanupE2EDocuments(env: Record<string, string>): Promise<void> {
   let id = await findE2EDocumentId(env);
 
@@ -73,6 +78,8 @@ async function cleanupE2EDocuments(env: Record<string, string>): Promise<void> {
     await realGraphqlCall(env, SOFT_DELETE_MUTATION, { id }, 'mock_super_admin');
     id = await findE2EDocumentId(env);
   }
+
+  deleteE2EReferenceDocumentRows();
 }
 
 test.describe('real backend reference document flow', () => {
@@ -110,7 +117,6 @@ test.describe('real backend reference document flow', () => {
     // 导航入口可见（F-09）
     await expect(page.getByText('参考资料库')).toBeVisible();
 
-    let created = false;
     try {
       // 列表：种子资料可见（按创建时间倒序），已软删的 970004 不可见
       await page.goto(LIST_PATH);
@@ -137,7 +143,6 @@ test.describe('real backend reference document flow', () => {
 
       // 成功页 → 查看详情
       await expect(page.getByText('参考资料创建成功')).toBeVisible();
-      created = true;
       await page.getByRole('button', { name: '查看详情' }).click();
       await expect(page).toHaveURL(/\/reference-documents\/\d+$/);
       await expect(page.getByText(`${E2E_TITLE_PREFIX}（光闸维护）`).first()).toBeVisible();
@@ -165,15 +170,13 @@ test.describe('real backend reference document flow', () => {
       await expect(page.getByText(`${E2E_TITLE_PREFIX}（光闸维护·已改）`)).toHaveCount(0);
 
       // 软删不幂等（区别于维修申请裁定 5）：API 重复删除返回统一 NOT_FOUND
-      created = false; // 主链路已软删，finally 清理无需再处理
       const listAfter = await findE2EDocumentId(env);
       expect(listAfter).toBeNull();
     } finally {
-      // 兜底清理：主链路中途失败时行仍在库里（deprecated=0），API 软删即可
-      //（已软删行对列表/详情均不可见，等效基线干净；不物理删除、不动种子数据）。
-      if (created) {
-        await cleanupE2EDocuments(env);
-      }
+      // 兜底清理无条件执行：cleanupE2EDocuments 幂等（无未删行时跳过软删循环，
+      // 物理删除仅匹配 E2E 前缀字面量、对种子行是 no-op），无论主链路中途失败
+      // 还是页面内已软删，都能把自建行清理到 seed:mock COUNT 校验口径。
+      await cleanupE2EDocuments(env);
     }
   });
 
