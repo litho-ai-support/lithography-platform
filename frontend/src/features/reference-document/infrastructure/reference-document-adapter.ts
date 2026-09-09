@@ -1,6 +1,6 @@
 // src/features/reference-document/infrastructure/reference-document-adapter.ts
 
-import { executeGraphQL, isGraphQLIngressError } from '@/shared/graphql';
+import { executeGraphQL, readGraphQLErrorDetail } from '@/shared/graphql';
 
 import type {
   CreateReferenceDocumentInput,
@@ -101,40 +101,6 @@ const SOFT_DELETE_REFERENCE_DOCUMENT_MUTATION = `
     }
   }
 `;
-
-export type GraphQLErrorDetail = {
-  /** GraphQL 大类码（extensions.code），契约保证稳定的生产分支信号 */
-  code: string | null;
-  /** 业务细节码（extensions.errorCode），仅调试/可观测/可选展示，生产可能隐藏 */
-  errorCode: string | null;
-  /** 后端业务消息（extensions.errorMessage），为空时用前端兜底文案 */
-  errorMessage: string | null;
-};
-
-function normalizeOptionalString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-/**
- * 从 ingress error 中读取第一条 GraphQL 错误的业务细节。
- * 生产分支只依赖稳定的 extensions.code；不取顶层通用 message（避免把通用文案当业务消息），
- * 不做任何 Session 读写。repair-request 域内有同形实现但 feature 之间禁止互相依赖，
- * 本 feature 按依赖规则自持一份（见 frontend/docs/dependency-rules.md）。
- */
-export function readGraphQLErrorDetail(error: unknown): GraphQLErrorDetail | null {
-  if (!isGraphQLIngressError(error) || !error.graphqlErrors?.length) {
-    return null;
-  }
-
-  const [firstError] = error.graphqlErrors;
-  const extensions = (firstError.extensions as Record<string, unknown> | undefined) || {};
-
-  return {
-    code: normalizeOptionalString(extensions.code),
-    errorCode: normalizeOptionalString(extensions.errorCode),
-    errorMessage: normalizeOptionalString(extensions.errorMessage),
-  };
-}
 
 // ---- 错误映射（唯一真源：backend/src/core/common/errors/domain-error.ts 的 REFERENCE_DOCUMENT_ERROR 码组
 //      与 backend/src/infrastructure/graphql/filters/graphql-exception.filter.ts 的大类映射） ----

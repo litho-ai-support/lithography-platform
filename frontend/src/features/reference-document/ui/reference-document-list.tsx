@@ -6,6 +6,8 @@ import type { TableColumnsType } from 'antd';
 import { Alert, Button, Card, Empty, Input, Pagination, Select, Skeleton, Table } from 'antd';
 import { useNavigate } from 'react-router';
 
+import { formatDateTimeText } from '@/shared/ui/format-date-time';
+
 import { useReferenceDocumentList } from '../application/use-reference-document-list';
 import { useReferenceEquipmentModels } from '../application/use-reference-equipment-models';
 import type {
@@ -14,7 +16,6 @@ import type {
 } from '../infrastructure/reference-document.types';
 import { REFERENCE_DOCUMENT_TYPE_LABELS } from '../infrastructure/reference-document.types';
 
-import { formatDateTimeText } from './format-date-time';
 import {
   buildReferenceDocumentDetailPath,
   REFERENCE_DOCUMENT_NEW_PATH,

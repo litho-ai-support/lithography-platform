@@ -4,6 +4,8 @@ import { useCallback, useRef, useState } from 'react';
 import { Alert, Button, Card, Descriptions, message, Popconfirm, Skeleton } from 'antd';
 import { useNavigate } from 'react-router';
 
+import { formatDateTimeText } from '@/shared/ui/format-date-time';
+
 import { useReferenceDocumentDetail } from '../application/use-reference-document-detail';
 import type {
   DeleteReferenceDocumentResult,
@@ -16,7 +18,6 @@ import {
   updateReferenceDocument,
 } from '../infrastructure/reference-document-adapter';
 
-import { formatDateTimeText } from './format-date-time';
 import type {
   ReferenceDocumentFormOutput,
   ReferenceDocumentFormSubmitResult,

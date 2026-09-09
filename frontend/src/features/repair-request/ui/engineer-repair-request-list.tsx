@@ -17,6 +17,8 @@ import type { TableColumnsType } from 'antd';
 import { Alert, Button, Card, Empty, Pagination, Segmented, Skeleton, Table } from 'antd';
 import { useNavigate } from 'react-router';
 
+import { formatDateTimeText } from '@/shared/ui/format-date-time';
+
 import { useEngineerRepairRequestList } from '../application/use-engineer-repair-request-list';
 import type {
   EngineerRepairListScope,
@@ -25,7 +27,6 @@ import type {
 } from '../infrastructure/engineer-repair-request.types';
 
 import { ENGINEER_REPAIR_REQUEST_DETAIL_PATH } from './engineer-repair-request-paths';
-import { formatDateTimeText } from './format-date-time';
 import { AcceptanceTag, ResolutionTag } from './repair-request-status-tags';
 
 const SCOPE_OPTIONS: Array<{ label: string; value: EngineerRepairListScope }> = [
