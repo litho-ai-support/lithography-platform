@@ -28,10 +28,11 @@ import { REFERENCE_DOCUMENTS_LIST_PATH } from './reference-document-paths';
 /**
  * 参考资料详情面板（F-05/F-06/F-07）。
  *
- * - documentId 由页面从路由参数解析后注入，本组件保持可独立测试；
+ * - documentId 由页面从路由参数解析后注入（非法参数为 null），本组件保持可独立测试；
  * - 不存在 / 已软删由后端统一 NOT_FOUND（防探测），呈现 warning 态而非数据；
  * - 编辑与软删入口仅 SUPER_ADMIN 可见（canManage 由页面层按角色判定）；
  * - 编辑为页内表单切换（PATCH 全字段），取消丢弃修改，成功后刷新详情；
+ *   documentId 变化时同步退出旧资料的编辑态，避免新资料加载后沿用旧编辑会话；
  * - 软删 Popconfirm 二次确认；删除中禁用；失败给明确原因并刷新数据态，
  *   不得乐观成功（backend e2e 口径：重复软删统一 NOT_FOUND）。
  */
@@ -39,7 +40,7 @@ export function ReferenceDocumentDetailPanel({
   documentId,
   canManage,
 }: {
-  documentId: number;
+  documentId: number | null;
   canManage: boolean;
 }) {
   const navigate = useNavigate();
@@ -48,8 +49,22 @@ export function ReferenceDocumentDetailPanel({
   const [deleting, setDeleting] = useState(false);
   const deletingRef = useRef(false);
 
+  // ID 变化（含从合法变非法）时退出旧资料的编辑态：新资料加载完成后
+  // 不得继续显示由旧资料开启的编辑界面，避免「看到 A 的表单、提交到 B」。
+  // 采用 React 官方「props 变化时渲染期调整 state」模式，避免 effect 内 setState 级联渲染
+  const [editingSessionId, setEditingSessionId] = useState(documentId);
+
+  if (editingSessionId !== documentId) {
+    setEditingSessionId(documentId);
+    setEditing(false);
+  }
+
   const handleUpdate = useCallback(
     async (output: ReferenceDocumentFormOutput): Promise<ReferenceDocumentFormSubmitResult> => {
+      if (documentId === null) {
+        return { ok: false, message: '参考资料不存在或不可编辑。' };
+      }
+
       const patch: UpdateReferenceDocumentPatch = {
         title: output.title,
         documentType: output.documentType,
@@ -76,7 +91,7 @@ export function ReferenceDocumentDetailPanel({
   );
 
   const handleDelete = useCallback(async () => {
-    if (deletingRef.current) {
+    if (documentId === null || deletingRef.current) {
       return;
     }
 
@@ -177,7 +192,7 @@ export function ReferenceDocumentDetailPanel({
               okButtonProps={{ loading: deleting }}
               okText="确认删除"
               onConfirm={() => void handleDelete()}
-              title="确认删除该参考资料？删除后不可恢复。"
+              title="确认删除该参考资料？删除后将不再显示，且当前版本不提供恢复入口。"
             >
               <Button danger disabled={deleting} type="primary">
                 删除

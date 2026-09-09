@@ -222,6 +222,8 @@ export type AiWorkflowContextErrorCode =
 export type TimeErrorCode = (typeof TIME_ERROR)[keyof typeof TIME_ERROR];
 export type RepairRequestErrorCode =
   (typeof REPAIR_REQUEST_ERROR)[keyof typeof REPAIR_REQUEST_ERROR];
+export type ReferenceDocumentErrorCode =
+  (typeof REFERENCE_DOCUMENT_ERROR)[keyof typeof REFERENCE_DOCUMENT_ERROR];
 export type InputNormalizeErrorCode =
   (typeof INPUT_NORMALIZE_ERROR)[keyof typeof INPUT_NORMALIZE_ERROR];
 
@@ -247,6 +249,7 @@ export type DomainErrorCode =
   | AiWorkflowContextErrorCode
   | TimeErrorCode
   | RepairRequestErrorCode
+  | ReferenceDocumentErrorCode
   | InputNormalizeErrorCode
   | PaginationErrorCode;
 

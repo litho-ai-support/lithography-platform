@@ -3,20 +3,22 @@
 //
 // 数据基础：backend seed 预置参考资料 970001~970003（未软删，含通用/指定型号/
 // 有 storage 引用三种形态）与 970004（已软删，默认不可见）；seed 行只做只读断言。
-// 创建链路产生的自建行（标题固定 E2E 前缀）在用例结束前经 API 软删兜底清理
-// （列表与详情对已软删行均不可见），再物理删除以恢复 seed:mock 的 COUNT 校验口径，
-// 不污染共享开发库基线。
+// 创建链路产生的自建行以「运行级唯一标识」命名（标题含 RUN_ID，跨运行/跨开发者
+// 不可能撞名），清理以本次运行创建的精确资料 ID 为边界：先经 API 软删（幂等），
+// 再物理删除精确 ID 列表——物理删除受 helper 安全门约束（显式 opt-in + 测试库命名），
+// 共享开发库未 opt-in 时安全跳过，不污染也不误删他人数据（负责人 0909 阻塞项 1）。
 // 前提不满足（无本地后端 / 无 env）时用例自动跳过，不会以失败阻塞。
 
 import { expect, test } from '@playwright/test';
 
 import {
-  deleteE2EReferenceDocumentRows,
+  deleteE2EReferenceDocumentRowsByIds,
   hasFrontendGraphQLEndpoint,
   isRealBackendAvailable,
   readBackendEnv,
   readBackendEnvOrNull,
   realGraphqlCall,
+  REFERENCE_DOCUMENT_E2E_TITLE_PREFIX,
 } from './helpers/real-backend';
 
 const LIST_PATH = '/reference-documents';
@@ -27,8 +29,10 @@ const SEED_MAINTENANCE_GUIDE_TITLE = 'NXE:3400C 光源维护指南（Mock）';
 const SEED_SAFETY_STANDARD_TITLE = '光刻机故障诊断安全规范（Mock）';
 const SEED_DEPRECATED_TITLE = '旧版 XT 系列检查表（已停用 Mock）';
 
-/** 自建行标题前缀：清理查询与列表断言都用它定位，避免误伤种子/他人数据 */
-const E2E_TITLE_PREFIX = 'E2E 参考资料验收行';
+/** 本次运行唯一标识：并入自建行标题，保证跨运行/并行执行永不撞名 */
+const RUN_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+/** 自建行标题筛选关键字：仅匹配本次运行创建的行（其他运行有自己的 RUN_ID） */
+const RUN_TITLE_KEYWORD = `${REFERENCE_DOCUMENT_E2E_TITLE_PREFIX}·${RUN_ID}`;
 
 const LIST_DOCUMENTS_QUERY = `
   query ReferenceDocuments($pagination: PaginationArgs!, $filter: ReferenceDocumentFilterInput) {
@@ -47,14 +51,14 @@ const SOFT_DELETE_MUTATION = `
   }
 `;
 
-/** 按自建行标题前缀查询未软删的行 ID（Node 侧真实登录后调用；找不到返回 null） */
-async function findE2EDocumentId(env: Record<string, string>): Promise<number | null> {
+/** 按本次运行唯一标题关键字查询未软删行 ID 列表（Node 侧真实登录后调用） */
+async function findE2EDocumentIds(env: Record<string, string>): Promise<number[]> {
   const { body } = await realGraphqlCall(
     env,
     LIST_DOCUMENTS_QUERY,
     {
       pagination: { mode: 'OFFSET', page: 1, pageSize: 50, withTotal: true },
-      filter: { title: E2E_TITLE_PREFIX },
+      filter: { title: RUN_TITLE_KEYWORD },
     },
     'mock_super_admin',
   );
@@ -64,22 +68,38 @@ async function findE2EDocumentId(env: Record<string, string>): Promise<number | 
     }
   ).data?.referenceDocuments?.items;
 
-  return items?.length ? items[0].id : null;
+  return (items ?? []).map((item) => item.id);
 }
 
 /**
- * 兜底清理：先经 API 软删本 spec 自建的未删行（对不存在/已软删行 NOT_FOUND，忽略即可），
- * 再物理删除自建行——软删行仍计入 seed:mock 的 COUNT 校验口径，物理删除才能恢复种子基线。
+ * 兑底清理（仅以本次运行的精确 ID 为边界，负责人 0909 修复要求）：
+ * 1. 合并「页面创建时从详情 URL 捕获的精确 ID」与「按运行唯一标题反查的 ID」；
+ * 2. 逐个经 API 软删（幂等：已删/不存在返回 NOT_FOUND，忽略即可）；
+ * 3. 物理删除精确 ID 列表（helper 安全门：显式 opt-in + 测试库命名，
+ *    共享开发库未 opt-in 时安全跳过，软删行由库策略另行清理）。
+ * 只操作本次运行创建的行：其他运行/开发者的同前缀数据不会被触碰。
  */
-async function cleanupE2EDocuments(env: Record<string, string>): Promise<void> {
-  let id = await findE2EDocumentId(env);
+async function cleanupE2EDocuments(
+  env: Record<string, string>,
+  createdIdsFromUi: readonly number[],
+): Promise<void> {
+  const targetIds = new Set<number>(createdIdsFromUi);
 
-  while (id !== null) {
-    await realGraphqlCall(env, SOFT_DELETE_MUTATION, { id }, 'mock_super_admin');
-    id = await findE2EDocumentId(env);
+  for (const id of await findE2EDocumentIds(env)) {
+    targetIds.add(id);
   }
 
-  deleteE2EReferenceDocumentRows();
+  for (const id of targetIds) {
+    await realGraphqlCall(env, SOFT_DELETE_MUTATION, { id }, 'mock_super_admin');
+  }
+
+  try {
+    deleteE2EReferenceDocumentRowsByIds([...targetIds]);
+  } catch (error) {
+    // 安全门拒绝（未 opt-in 或非测试库命名）：物理清理安全跳过，
+    // 软删兑底已保证列表/详情不可见；残留软删行需按库策略另行清理。
+    console.warn(`[e2e] 物理清理跳过：${(error as Error).message}`);
+  }
 }
 
 test.describe('real backend reference document flow', () => {
@@ -117,6 +137,10 @@ test.describe('real backend reference document flow', () => {
     // 导航入口可见（F-09）
     await expect(page.getByText('参考资料库')).toBeVisible();
 
+    // 本次运行创建的资料精确 ID（页面创建后从详情 URL 捕获，供 finally 按精确 ID 清理；
+    // 作用域须覆盖 try/finally，主链路在任何一步失败都能兑底清理）
+    const createdIdsFromUi: number[] = [];
+
     try {
       // 列表：种子资料可见（按创建时间倒序），已软删的 970004 不可见
       await page.goto(LIST_PATH);
@@ -126,10 +150,10 @@ test.describe('real backend reference document flow', () => {
       await expect(page.getByText(SEED_SAFETY_STANDARD_TITLE)).toBeVisible();
       await expect(page.getByText(SEED_DEPRECATED_TITLE)).toHaveCount(0);
 
-      // 新增指定型号资料
+      // 新增指定型号资料（标题含运行唯一标识，跨运行/并行执行永不撞名）
       await page.getByRole('button', { name: '新增资料' }).click();
       await expect(page).toHaveURL(new RegExp(NEW_PAGE_PATH));
-      await page.getByLabel('文档标题').fill(`${E2E_TITLE_PREFIX}（光闸维护）`);
+      await page.getByLabel('文档标题').fill(`${RUN_TITLE_KEYWORD}（光闸维护）`);
       // AntD Select 交互按维修申请先例：点击 combobox 打开下拉后点 option（label 点击不展开下拉）
       await page.getByRole('combobox').nth(0).click();
       await page.locator('.ant-select-item-option', { hasText: '检查表' }).click();
@@ -141,42 +165,49 @@ test.describe('real backend reference document flow', () => {
       await page.getByLabel('文本内容').fill('# 光闸维护检查表\n\n每周检查光闸联锁与急停按钮。');
       await page.getByRole('button', { name: /创建资料/ }).click();
 
-      // 成功页 → 查看详情
+      // 成功页 → 查看详情（从详情 URL 捕获本次创建的精确资料 ID）
       await expect(page.getByText('参考资料创建成功')).toBeVisible();
       await page.getByRole('button', { name: '查看详情' }).click();
       await expect(page).toHaveURL(/\/reference-documents\/\d+$/);
-      await expect(page.getByText(`${E2E_TITLE_PREFIX}（光闸维护）`).first()).toBeVisible();
+      const createdIdMatch = page.url().match(/\/reference-documents\/(\d+)$/);
+
+      if (createdIdMatch) {
+        createdIdsFromUi.push(Number(createdIdMatch[1]));
+      }
+
+      await expect(page.getByText(`${RUN_TITLE_KEYWORD}（光闸维护）`).first()).toBeVisible();
       // 精确匹配：正文「光闸维护检查表」含同文子串，避免 strict mode violation（memory 先例）
       await expect(page.getByText('检查表', { exact: true })).toBeVisible();
       await expect(page.getByText('ASML TWINSCAN NXT:1980Di')).toBeVisible();
       await expect(page.getByText(/每周检查光闸联锁/)).toBeVisible();
 
-      // 编辑：改标题 → 保存后详情刷新
+      // 编辑：改标题 → 保存后详情刷新（仍含运行唯一标识，清理反查不变）
       await page.getByRole('button', { name: /编\s*辑/ }).click();
-      await page.getByLabel('文档标题').fill(`${E2E_TITLE_PREFIX}（光闸维护·已改）`);
+      await page.getByLabel('文档标题').fill(`${RUN_TITLE_KEYWORD}（光闸维护·已改）`);
       await page.getByRole('button', { name: /保存修改/ }).click();
       await expect(page.getByText('参考资料已保存。')).toBeVisible();
-      await expect(page.getByText(`${E2E_TITLE_PREFIX}（光闸维护·已改）`).first()).toBeVisible();
+      await expect(page.getByText(`${RUN_TITLE_KEYWORD}（光闸维护·已改）`).first()).toBeVisible();
 
       // 刷新持久（T-03：刷新仍在）
       await page.reload();
-      await expect(page.getByText(`${E2E_TITLE_PREFIX}（光闸维护·已改）`).first()).toBeVisible();
+      await expect(page.getByText(`${RUN_TITLE_KEYWORD}（光闸维护·已改）`).first()).toBeVisible();
 
       // 软删：二次确认 → 回列表且该行消失
       await page.getByRole('button', { name: '删 除' }).click();
       await page.getByRole('button', { name: '确认删除' }).click();
       await expect(page.getByText('参考资料已删除。')).toBeVisible();
       await expect(page).toHaveURL(new RegExp(`${LIST_PATH}$`));
-      await expect(page.getByText(`${E2E_TITLE_PREFIX}（光闸维护·已改）`)).toHaveCount(0);
+      await expect(page.getByText(`${RUN_TITLE_KEYWORD}（光闸维护·已改）`)).toHaveCount(0);
 
-      // 软删不幂等（区别于维修申请裁定 5）：API 重复删除返回统一 NOT_FOUND
-      const listAfter = await findE2EDocumentId(env);
-      expect(listAfter).toBeNull();
+      // 软删不幂等（区别于维修申请裁定 5）：API 重复删除返回统一 NOT_FOUND，
+      // 本次运行的行已全部不可见
+      const remainingIds = await findE2EDocumentIds(env);
+      expect(remainingIds).toEqual([]);
     } finally {
-      // 兜底清理无条件执行：cleanupE2EDocuments 幂等（无未删行时跳过软删循环，
-      // 物理删除仅匹配 E2E 前缀字面量、对种子行是 no-op），无论主链路中途失败
-      // 还是页面内已软删，都能把自建行清理到 seed:mock COUNT 校验口径。
-      await cleanupE2EDocuments(env);
+      // 兑底清理无条件执行：以本次运行的精确 ID 为边界（页面捕获 + 唯一标题反查），
+      // 无论主链路中途失败还是页面内已软删，都能清理本次创建的行；
+      // 安全门未 opt-in 时物理清理安全跳过（console.warn），不误删他人数据。
+      await cleanupE2EDocuments(env, createdIdsFromUi);
     }
   });
 
@@ -273,7 +304,7 @@ test.describe('real backend reference document flow', () => {
       }`,
       {
         input: {
-          title: `${E2E_TITLE_PREFIX}（客户越权探测）`,
+          title: `${RUN_TITLE_KEYWORD}（客户越权探测）`,
           documentType: 'CHECKLIST',
           equipmentModelId: null,
           description: null,
@@ -286,7 +317,7 @@ test.describe('real backend reference document flow', () => {
       .errors;
     expect(writeErrors?.[0]?.extensions?.code).toBe('FORBIDDEN');
 
-    // 越权写确实未落库（列表中无该行）
-    expect(await findE2EDocumentId(env)).toBeNull();
+    // 越权写确实未落库（列表中无本次运行创建的行）
+    expect(await findE2EDocumentIds(env)).toEqual([]);
   });
 });

@@ -54,12 +54,19 @@ export function readBackendEnvOrNull(): Record<string, string> | null {
 // 2. vite dev server 配置了 '/graphql' 同源转发（默认转发到 http://127.0.0.1:3000，
 //    无跨域，端口映射域名亦可用，当前为本机默认模式）。
 // 两者都不成立时浏览器侧请求落到相对路径 /graphql 且无转发，到不了后端。
+// 两个通道必须独立探测：可选的本地 env 文件缺失只表示直连通道不存在，
+// 不能短路 proxy 通道的判断（负责人 0909 修复要求；否则全新 clone 的
+// 默认环境里真实后端用例会被错误跳过，报告绿但没有执行真实链路）。
 export function hasFrontendGraphQLEndpoint(): boolean {
   try {
     if (/VITE_GRAPHQL_ENDPOINT\s*=\s*\S+/.test(readFileSync(FRONTEND_LOCAL_ENV_FILE, 'utf-8'))) {
       return true;
     }
+  } catch {
+    // 直连通道不存在（本地文件可缺失），继续探测 proxy 通道
+  }
 
+  try {
     // 同源转发通道：vite.config.ts 含 '/graphql' 键的 proxy 配置即视为可用
     return /['"]\/graphql['"]\s*:/.test(readFileSync(FRONTEND_VITE_CONFIG_FILE, 'utf-8'));
   } catch {
@@ -110,19 +117,56 @@ export function deleteRepairRequestByRequestNo(requestNo: string): void {
   mysqlQuery(`DELETE FROM repair_request WHERE request_no = '${requestNo}'`);
 }
 
-// 参考资料 real spec 自建行的固定标题前缀（与 reference-document-real.spec 内
-// E2E_TITLE_PREFIX 保持一致）。删除条件为代码内静态字面量，不接外部输入。
-const REFERENCE_DOCUMENT_E2E_TITLE_PREFIX = 'E2E 参考资料验收行';
+// 参考资料 real spec 自建行标题前缀（与 reference-document-real.spec 创建标题共用）。
+// 仅用于创建标题与列表定位断言；清理一律以本次运行记录的精确 ID 为边界，
+// 禁止按标题前缀批量删除——固定前缀不是数据身份，共享库中他人数据可能碰巧同前缀，
+// 并行运行也可能互删（负责人 0909 阻塞项 1）。
+export const REFERENCE_DOCUMENT_E2E_TITLE_PREFIX = 'E2E 参考资料验收行';
+
+// 物理清理安全门：物理 DELETE 只允许发生在「显式 opt-in + 库名属测试库」的配置上。
+// 共享开发库（DB_NAME 不含 e2e/test 标记）一律在启动 mysql 进程前拒绝；
+// 宁可残留软删行（对列表/详情不可见，由库策略另行清理），也不按前缀物理删除。
+const PHYSICAL_CLEANUP_OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
+const TEST_DATABASE_NAME_PATTERN = /(^|[_-])(e2e|test)([_-]|\d|$)/i;
+
+export function assertPhysicalCleanupAllowed(env: Record<string, string>): void {
+  if (process.env[PHYSICAL_CLEANUP_OPT_IN_ENV] !== '1') {
+    throw new Error(
+      `物理清理被拒绝：缺少 ${PHYSICAL_CLEANUP_OPT_IN_ENV}=1 显式 opt-in，共享开发库禁止物理删除`,
+    );
+  }
+
+  const dbName = env.DB_NAME ?? '';
+
+  if (!TEST_DATABASE_NAME_PATTERN.test(dbName)) {
+    throw new Error(
+      `物理清理被拒绝：DB_NAME=${JSON.stringify(dbName)} 不属于测试库命名（需含 e2e/test 段），拒绝物理删除`,
+    );
+  }
+}
 
 /**
- * 物理清理参考资料 real spec 自建行（在 API 软删兜底之后调用）。
- * 软删行仍计入 seed:mock 的 COUNT 校验口径，物理删除才能恢复种子基线；
- * 对无匹配行是 no-op，幂等成立。
+ * 按本次运行记录的精确 ID 物理清理参考资料行（负责人 0909 修复要求）。
+ *
+ * - ID 列表为空时 no-op，不启动 mysql 进程；
+ * - 每个 ID 必须是安全正整数（白名单校验先于任何 SQL 组装）；
+ * - SQL 仅包含传入的精确 ID（IN 列表），绝不按标题前缀批量匹配；
+ * - 安全门不通过时抛错，mysql 进程绝不启动（含 finally 兜底路径）。
  */
-export function deleteE2EReferenceDocumentRows(): void {
-  mysqlQuery(
-    `DELETE FROM reference_document WHERE title LIKE '${REFERENCE_DOCUMENT_E2E_TITLE_PREFIX}%'`,
-  );
+export function deleteE2EReferenceDocumentRowsByIds(ids: readonly number[]): void {
+  if (ids.length === 0) {
+    return;
+  }
+
+  for (const id of ids) {
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error(`物理清理目标 ID 未通过正整数校验，拒绝执行：${JSON.stringify(id)}`);
+    }
+  }
+
+  assertPhysicalCleanupAllowed(readBackendEnv());
+
+  mysqlQuery(`DELETE FROM reference_document WHERE id IN (${ids.join(',')})`);
 }
 
 // 可用性探针：健康检查 + 用真实 Mock 账号登录（同时验证后端已种子且登录链路可用）。

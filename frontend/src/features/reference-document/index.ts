@@ -42,6 +42,7 @@ export {
 export { ReferenceDocumentList } from './ui/reference-document-list';
 export {
   buildReferenceDocumentDetailPath,
+  parseReferenceDocumentIdParam,
   REFERENCE_DOCUMENT_NEW_PATH,
   REFERENCE_DOCUMENTS_LIST_PATH,
 } from './ui/reference-document-paths';

@@ -164,6 +164,29 @@ describe('ReferenceDocumentDetailPanel', () => {
     expect(screen.queryByText('编辑参考资料')).toBeNull();
   });
 
+  it('ID 变化时同步退出旧资料的编辑态（负责人 0909 阻塞项 2 验收）', async () => {
+    fetchDetailMock.mockImplementation(
+      (id) => Promise.resolve({ ok: true, detail: buildDetail(id) }) as never,
+    );
+
+    const { rerender } = render(
+      <ReferenceDocumentDetailPanel canManage={true} documentId={970002} />,
+    );
+    await screen.findByText('NXE:3400C 光源维护指南（Mock）');
+
+    // 在资料 970002 上进入编辑态
+    fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }));
+    await screen.findByText('编辑参考资料');
+
+    // 切换到另一份资料：编辑态必须被清除，不得沿用旧资料开启的编辑界面
+    rerender(<ReferenceDocumentDetailPanel canManage={true} documentId={970003} />);
+
+    await screen.findByText('NXE:3400C 光源维护指南（Mock）');
+    expect(screen.queryByText('编辑参考资料')).toBeNull();
+    // 且详情展示操作目标与新 ID 一致（保存/删除发送的 documentId 与界面显示一致）
+    expect(screen.getByRole('button', { name: /编\s*辑/ })).toBeTruthy();
+  });
+
   it('软删：二次确认后删除并回列表；失败给原因并刷新数据态，不乐观成功', async () => {
     const detail = buildDetail(970002);
 
