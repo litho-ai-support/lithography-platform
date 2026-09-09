@@ -89,6 +89,21 @@ function readMultipartString(body: Record<string, unknown>, key: string): string
 }
 
 /**
+ * 还原 multer/busboy 对 multipart filename 的 latin1 误码：浏览器发送的 UTF-8 文件名字节
+ * 会被逐字节映射为 U+0080..U+00FF（中文文件名在此处已是乱码）。当且仅当全部字符落在
+ * latin1 范围时做一次 latin1→UTF-8 还原：纯 ASCII 恒等；已正确解码的高码位字符（含中文）
+ * 不受影响。还原结果含 U+FFFD（非 UTF-8 字节）时放弃还原保持原值。
+ */
+function decodeUtf8FileName(raw: string): string {
+  // eslint-disable-next-line no-control-regex -- latin1 范围检测是本函数的既定职责（识别 multer 误码字节），与 sanitizeOriginalFilename 同理
+  if (!/^[\u0000-\u00ff]+$/.test(raw)) {
+    return raw;
+  }
+  const decoded = Buffer.from(raw, 'latin1').toString('utf8');
+  return decoded.includes('\uFFFD') ? raw : decoded;
+}
+
+/**
  * 清洗客户端文件名：只取 basename、剔除控制字符与首尾空白；
  * 仅作展示用途存入 original_filename，不参与存储命名与路径组装。
  */
@@ -162,7 +177,7 @@ export class ReferenceDocumentRestController {
     }
 
     // 类型以扩展名为主判定（不信任客户端 MIME 头），MIME 白名单来自配置
-    const originalFilename = sanitizeOriginalFilename(uploaded.originalname);
+    const originalFilename = sanitizeOriginalFilename(decodeUtf8FileName(uploaded.originalname));
     const extension = path.extname(originalFilename).slice(1).toLowerCase();
     const mimeType = EXTENSION_TO_MIME[extension];
 
@@ -231,12 +246,14 @@ export class ReferenceDocumentRestController {
       throw error;
     }
 
-    // MIME 取自 DB（上传时由扩展名映射写入），文件名按 RFC 5987 编码防乱码与头注入
-    response.setHeader('Content-Type', payload.mimeType);
-    response.setHeader(
-      'Content-Disposition',
-      `attachment; filename*=UTF-8''${encodeURIComponent(payload.originalFilename)}`,
+    // MIME 取自 DB（上传时由扩展名映射写入），文件名按 RFC 5987 编码防乱码与头注入；
+    // encodeURIComponent 不转义 ' * ( )，它们均不在 RFC 5987 attr-char 内（' 还是 ext-value 分隔符），需补编码
+    const encodedFilename = encodeURIComponent(payload.originalFilename).replace(
+      /['*()]/g,
+      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
     );
+    response.setHeader('Content-Type', payload.mimeType);
+    response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodedFilename}`);
 
     return new StreamableFile(createReadStream(payload.absolutePath));
   }

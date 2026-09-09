@@ -420,13 +420,14 @@ test.describe('real backend reference document flow', () => {
       await expect(page.getByText('参考资料已删除。')).toBeVisible();
       await expect(page.getByText(uploadFilename)).toHaveCount(0);
     } finally {
-      await cleanupE2EDocuments(env, createdIdsFromUi);
-      // 存储物理文件按本次运行记录的精确引用路径清理（不扫描批量删）
+      // 存储物理文件按本次运行记录的精确引用路径清理（不扫描批量删）；
+      // 必须先于 cleanupE2EDocuments：文件清理靠 SELECT 反查引用，物理删行后反查将空转留孤儿文件
       try {
         deleteE2EReferenceDocumentStorageFilesByIds(createdIdsFromUi);
       } catch (error) {
         console.warn(`[e2e] 存储文件清理跳过：${(error as Error).message}`);
       }
+      await cleanupE2EDocuments(env, createdIdsFromUi);
     }
   });
 });

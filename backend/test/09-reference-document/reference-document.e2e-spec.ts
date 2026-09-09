@@ -728,6 +728,26 @@ describe('AI 参考资料库 (e2e)', () => {
       });
     });
 
+    it('中文文件名上传：latin1 误码还原落库，下载文件名按 RFC 5987 正确编码', async () => {
+      // supertest 以 UTF-8 字节写入 multipart filename，multer 按 latin1 解码——与浏览器行为一致；
+      // 修复前此处落库即乱码，本用例端到端钉住还原链路
+      const response = await upload(adminToken, 'E2E 中文报告.md', Buffer.from('中文内容'), {
+        title: 'E2E 中文文件名行',
+        documentType: 'MANUAL',
+      }).expect(201);
+      const chineseFilenameDocumentId = response.body.data.id as number;
+
+      const row = await documentRepository.findOne({ where: { id: chineseFilenameDocumentId } });
+      expect(row?.originalFilename).toBe('E2E 中文报告.md');
+      expect(row?.mimeType).toBe('text/markdown');
+
+      const downloaded = await download(adminToken, chineseFilenameDocumentId).expect(200);
+      expect(downloaded.headers['content-disposition']).toContain(
+        `filename*=UTF-8''${encodeURIComponent('E2E 中文报告.md')}`,
+      );
+      expect(downloaded.text).toBe('中文内容');
+    });
+
     it('工程师/客户上传 403；匿名 401（REST 统一错误体）', async () => {
       const engineerRes = await upload(engineerToken, 'a.pdf', Buffer.from('x')).expect(403);
       expect(engineerRes.body.data).toMatchObject({
@@ -811,7 +831,7 @@ describe('AI 参考资料库 (e2e)', () => {
     });
 
     it('三角色下载成功：Content-Type 取 DB MIME、RFC 5987 文件名、字节一致', async () => {
-      // multer 对中文文件名按 latin1 解码不可靠，落库后改写展示名以验证 RFC 5987 编码链路
+      // 落库名为 ASCII；改写为中文名以钉住含空格与 CJK 的 ext-value 编码链路
       await documentRepository.update(fileOnlyDocumentId, { originalFilename: 'E2E 报告.txt' });
 
       for (const token of [adminToken, engineerToken, customerToken]) {

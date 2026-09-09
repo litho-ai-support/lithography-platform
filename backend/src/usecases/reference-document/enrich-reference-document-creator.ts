@@ -11,12 +11,18 @@ import {
 /** 创建人昵称缺失时的安全回落展示（与维修申请 engineerNickname 回落同思路） */
 const CREATOR_NICKNAME_FALLBACK = '未知用户';
 
-/** 剥离创建人账号 ID（账号 ID 不进入任何对外视图，见 D 系列边界规则） */
-function stripCreatorAccountId<T extends { createdByAccountId: number }>(
+/** 内部字段不进入任何对外视图：账号 ID（D 系列边界规则）与存储引用（无路径语义但不对外暴露） */
+type ReferenceDocumentInternalFields = {
+  createdByAccountId: number;
+  storageReference?: string | null;
+};
+
+function stripInternalFields<T extends ReferenceDocumentInternalFields>(
   view: T,
-): Omit<T, 'createdByAccountId'> {
+): Omit<T, 'createdByAccountId' | 'storageReference'> {
   const clone = { ...view };
   delete (clone as Partial<T>).createdByAccountId;
+  delete (clone as Partial<T>).storageReference;
   return clone;
 }
 
@@ -37,7 +43,7 @@ export async function enrichReferenceDocumentListCreators(
   const creatorAccountIds = items.map((item) => item.createdByAccountId);
   const nicknames = await accountQueryService.findNicknamesByAccountIds(creatorAccountIds);
   return items.map((item) => ({
-    ...stripCreatorAccountId(item),
+    ...stripInternalFields(item),
     creatorNickname: nicknames.get(item.createdByAccountId) ?? CREATOR_NICKNAME_FALLBACK,
   }));
 }
@@ -51,7 +57,7 @@ export async function enrichReferenceDocumentCreator(
     result.createdByAccountId,
   ]);
   return {
-    ...stripCreatorAccountId(result),
+    ...stripInternalFields(result),
     creatorNickname: nicknames.get(result.createdByAccountId) ?? CREATOR_NICKNAME_FALLBACK,
   };
 }

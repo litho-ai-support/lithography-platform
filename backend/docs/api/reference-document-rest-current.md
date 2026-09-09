@@ -32,8 +32,8 @@ multipart/form-data；权限：仅 `SUPER_ADMIN`（精确判定，不继承）�
 ### 文件校验（不信任客户端）
 
 - 大小上限：`REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES`（默认 20 MiB；multer 硬上限 64MB 先行拦截为 413）。超限 → `UPLOAD_FILE_TOO_LARGE`（HTTP 413）。
-- 类型判定以**扩展名**为主（不信任客户端 MIME 头），扩展名与 `REFERENCE_DOCUMENT_ALLOWED_MIME_TYPES` 白名单双重校验。白名单外 → `UPLOAD_FILE_TYPE_NOT_ALLOWED`（HTTP 415）。默认白名单：pdf / doc / docx / xls / xlsx / ppt / pptx / png / jpg / jpeg / txt / md / csv。
-- 文件名仅取 `basename` 并剔除控制字符与首尾空白后存 `originalFilename`（≤255，空值回落「未命名文件」），不含路径成分。
+- 类型判定以**扩展名**为主（不信任客户端 MIME 头），扩展名与 `REFERENCE_DOCUMENT_ALLOWED_MIME_TYPES` 白名单双重校验。白名单外 → `UPLOAD_FILE_TYPE_NOT_ALLOWED`（HTTP 415）。默认白名单：pdf / doc / docx / xls / xlsx / ppt / pptx / png / jpg / jpeg / txt / md / csv。env 白名单只能**收窄**内置扩展名→MIME 映射，新增映射中不存在的 MIME 无效（需同步扩展映射代码）。
+- 文件名仅取 `basename` 并剔除控制字符与首尾空白后存 `originalFilename`（≤255，空值回落「未命名文件」），不含路径成分；multipart filename 经 multer latin1 误码时先做 UTF-8 还原（中文文件名不乱码）。
 
 ### 原子性
 
