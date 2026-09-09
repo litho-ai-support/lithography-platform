@@ -13,8 +13,10 @@ import { fetchReferenceDocument } from '../infrastructure/reference-document-ada
  * - 不存在 / 已软删由 adapter 归并 not-found（统一口径，不区分原因）；
  * - transport / auth / network 失败进入 failed 态（含重试），不混入 not-found；
  * - id 变化时重载；auth 错误由共享 GraphQL + auth-session 全局链路负责；
- * - id 为 null（路由参数非法）时不发起请求，直接进入统一 not-found 口径；
- * - 请求序号随状态原子更新（与列表同级竞态保护）：快速切换 A→B 后，
+ * - id 为 null（路由参数非法）时不发请求，直接进入统一 not-found 口径；
+ *   进入 null 分支前同样递增请求序号，使在途旧请求（有效 ID 发出的）的任何
+ *   后续返回都被 reducer 丢弃——「有效 A → 无效路由」与「A → B」是同级竞态。
+ * - 请求序号随状态原子更新（与列表同级竞态保护）：快速切换后，
  *   旧请求的成功、not-found、失败结果都不会覆盖当前 ID 的状态，
  *   杜绝「界面显示 A、保存/删除却发送 B」的目标错位。
  */
@@ -30,8 +32,9 @@ type ReferenceDocumentDetailAction =
   | { type: 'load-ready'; requestSeq: number; detail: ReferenceDocumentDetail }
   | { type: 'load-not-found'; requestSeq: number; message: string }
   | { type: 'load-failed'; requestSeq: number; message: string }
-  // 路由参数非法（id=null）：不产生请求序号，保持当前序号直接进入 not-found
-  | { type: 'load-invalid-id' };
+  // 路由参数非法（id=null）：切换到新序号并原子进入 not-found；
+  // 递增序号使在途旧请求（有效 ID 发出的）的成功/未找到/失败结果全部过期被丢弃
+  | { type: 'load-invalid-id'; requestSeq: number };
 
 function toDetailUserMessage(error: unknown): string {
   return isGraphQLIngressError(error) ? error.userMessage : '参考资料详情加载失败，请稍后重试。';
@@ -70,7 +73,7 @@ function referenceDocumentDetailReducer(
     case 'load-invalid-id':
       return {
         status: 'not-found',
-        requestSeq: state.requestSeq,
+        requestSeq: action.requestSeq,
         message: INVALID_ID_NOT_FOUND_MESSAGE,
       };
   }
@@ -103,7 +106,10 @@ export function useReferenceDocumentDetail(id: number | null) {
 
   useEffect(() => {
     if (id === null) {
-      dispatch({ type: 'load-invalid-id' });
+      // 竞态防护：null 分支同样先递增序号再切换状态，
+      // 使有效 ID 发出的在途请求后续返回时因序号不匹配被丢弃
+      requestSeqRef.current += 1;
+      dispatch({ type: 'load-invalid-id', requestSeq: requestSeqRef.current });
 
       return;
     }

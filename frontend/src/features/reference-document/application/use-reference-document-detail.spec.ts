@@ -166,4 +166,89 @@ describe('useReferenceDocumentDetail 竞态保护', () => {
     await waitFor(() => expect(fetchDetailMock).toHaveBeenCalledTimes(2));
     expect(fetchDetailMock).toHaveBeenLastCalledWith(970002);
   });
+
+  // 负责人 0909 第二轮阻塞项 2：有效 ID → null（无效路由）时旧请求不得覆盖。
+  // null 分支同样递增序号使在途 A 请求过期；以下三例分别钉住 success / not-found / failure。
+  describe('A 在途时切换到 null（无效路由）', () => {
+    function arrangeInFlightToNull() {
+      const promiseA = deferred<{ ok: true; detail: ReferenceDocumentDetail }>();
+
+      fetchDetailMock.mockImplementation((id) =>
+        id === 970001 ? (promiseA.promise as never) : (Promise.resolve() as never),
+      );
+
+      const rendered = renderHook(({ id }) => useReferenceDocumentDetail(id), {
+        initialProps: { id: 970001 as number | null },
+      });
+
+      return { promiseA, rendered };
+    }
+
+    async function switchToNullAndWait(
+      rendered: ReturnType<
+        typeof renderHook<{ id: number | null }, { state: { status: string; message?: string } }>
+      >,
+    ) {
+      rendered.rerender({ id: null });
+      await waitFor(() => expect(rendered.result.current.state.status).toBe('not-found'));
+    }
+
+    it('A 后返回成功：不得覆盖当前无效路由的 not-found', async () => {
+      const { promiseA, rendered } = arrangeInFlightToNull();
+
+      await waitFor(() => expect(fetchDetailMock).toHaveBeenCalledWith(970001));
+      await switchToNullAndWait(rendered);
+
+      await act(async () => {
+        promiseA.resolve({ ok: true, detail: buildDetail(970001) });
+      });
+
+      expect(rendered.result.current.state.status).toBe('not-found');
+      expect(
+        rendered.result.current.state.status === 'not-found'
+          ? rendered.result.current.state.message
+          : null,
+      ).toBe('参考资料不存在或不可查看。');
+    });
+
+    it('A 后返回 not-found：不重复覆盖（状态与文案保持稳定）', async () => {
+      const { promiseA, rendered } = arrangeInFlightToNull();
+
+      await waitFor(() => expect(fetchDetailMock).toHaveBeenCalledWith(970001));
+      await switchToNullAndWait(rendered);
+
+      await act(async () => {
+        promiseA.resolve({
+          ok: false,
+          reason: 'not-found',
+          message: 'A 请求的未找到结果。',
+        });
+      });
+
+      expect(rendered.result.current.state.status).toBe('not-found');
+      expect(
+        rendered.result.current.state.status === 'not-found'
+          ? rendered.result.current.state.message
+          : null,
+      ).toBe('参考资料不存在或不可查看。');
+    });
+
+    it('A 后返回失败（抛错）：不得覆盖当前无效路由的 not-found', async () => {
+      const { promiseA, rendered } = arrangeInFlightToNull();
+
+      await waitFor(() => expect(fetchDetailMock).toHaveBeenCalledWith(970001));
+      await switchToNullAndWait(rendered);
+
+      await act(async () => {
+        promiseA.reject(new Error('A 请求失败'));
+      });
+
+      expect(rendered.result.current.state.status).toBe('not-found');
+      expect(
+        rendered.result.current.state.status === 'not-found'
+          ? rendered.result.current.state.message
+          : null,
+      ).toBe('参考资料不存在或不可查看。');
+    });
+  });
 });
