@@ -1,6 +1,10 @@
 // src/usecases/reference-document/reference-document.usecases.spec.ts
 
 /// <reference types="jest" />
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 import type { UsecaseSession } from '@app-types/auth/session.types';
 import {
   DomainError,
@@ -15,6 +19,7 @@ import type { ReferenceDocumentService } from '@src/modules/lithography/referenc
 import type { TransactionRunner } from '@src/usecases/common/ports/transaction-runner.contract';
 import { CreateReferenceDocumentUsecase } from './create-reference-document.usecase';
 import { GetReferenceDocumentDetailUsecase } from './get-reference-document-detail.usecase';
+import { GetReferenceDocumentFileUsecase } from './get-reference-document-file.usecase';
 import { ListReferenceDocumentsUsecase } from './list-reference-documents.usecase';
 import { SoftDeleteReferenceDocumentUsecase } from './soft-delete-reference-document.usecase';
 import { UpdateReferenceDocumentUsecase } from './update-reference-document.usecase';
@@ -46,6 +51,13 @@ const makeTransactionRunner = () =>
 const session = (roles: string[]): UsecaseSession =>
   ({ accountId: 900001, roles, activeRole: roles[0] }) as UsecaseSession;
 
+/** 下载用例成功路径需要真实存在文件（fsp.access 实盘校验）：运行级临时目录，精确清理 */
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'refdoc-file-usecase-'));
+
+afterAll(() => {
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
+
 const detailQueryResult = (overrides: Record<string, unknown> = {}) => ({
   id: 970001,
   title: '错误码手册',
@@ -56,6 +68,8 @@ const detailQueryResult = (overrides: Record<string, unknown> = {}) => ({
   originalFilename: null,
   mimeType: null,
   contentText: '内容',
+  // 内部装配字段（QueryService 返回、DTO 视图剥离）：供下载/编辑防御判定使用
+  storageReference: null,
   createdByAccountId: 900001,
   createdAt: new Date('2026-01-02T10:00:00.000Z'),
   updatedAt: new Date('2026-01-02T10:00:00.000Z'),
@@ -291,7 +305,7 @@ describe('CreateReferenceDocumentUsecase', () => {
     expect(writeService.insertDocument).not.toHaveBeenCalled();
   });
 
-  it('contentText 空白拒绝（本周仅文本来源，双空创建必须失败）', async () => {
+  it('contentText 空白拒绝（提供了正文但空白才在此拒绝，双空判定归 usecase 层）', async () => {
     const { usecase, writeService } = makeUsecase();
 
     await expect(
@@ -302,6 +316,68 @@ describe('CreateReferenceDocumentUsecase', () => {
       }),
     ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.INVALID_PARAMS });
     expect(writeService.insertDocument).not.toHaveBeenCalled();
+  });
+
+  it('仅文件创建成功：contentText null 合法，四列存储元数据与 local 后端标识透传落库', async () => {
+    const { usecase, writeService } = makeUsecase();
+
+    await expect(
+      usecase.execute({
+        session: session(['SUPER_ADMIN']),
+        ...baseCommand,
+        contentText: null,
+        file: {
+          originalFilename: '说明书.pdf',
+          mimeType: 'application/pdf',
+          storageReference: 'a1b2c3d4e5f60718293a4b5c6d7e8f90.pdf',
+        },
+      }),
+    ).resolves.toEqual({ id: 970101 });
+    expect(writeService.insertDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentText: null,
+        originalFilename: '说明书.pdf',
+        mimeType: 'application/pdf',
+        storageBackend: 'local',
+        storageReference: 'a1b2c3d4e5f60718293a4b5c6d7e8f90.pdf',
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('双空拒绝（CONTENT_SOURCE_EMPTY）：正文与文件同时缺失不进入写路径', async () => {
+    const { usecase, writeService } = makeUsecase();
+
+    await expect(
+      usecase.execute({
+        session: session(['SUPER_ADMIN']),
+        ...baseCommand,
+        contentText: null,
+      }),
+    ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.CONTENT_SOURCE_EMPTY });
+    expect(writeService.insertDocument).not.toHaveBeenCalled();
+  });
+
+  it('正文与文件并存创建：两者同时透传（存储引用仍由服务端契约生成）', async () => {
+    const { usecase, writeService } = makeUsecase();
+
+    await usecase.execute({
+      session: session(['SUPER_ADMIN']),
+      ...baseCommand,
+      file: {
+        originalFilename: 'a.txt',
+        mimeType: 'text/plain',
+        storageReference: 'b1b2c3d4e5f60718293a4b5c6d7e8f90.txt',
+      },
+    });
+    expect(writeService.insertDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentText: '内容',
+        originalFilename: 'a.txt',
+        storageReference: 'b1b2c3d4e5f60718293a4b5c6d7e8f90.txt',
+      }),
+      expect.anything(),
+    );
   });
 
   it('标题/类型空白与超长拒绝（标题 255、类型 100）', async () => {
@@ -411,16 +487,38 @@ describe('UpdateReferenceDocumentUsecase', () => {
     ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.INVALID_PARAMS });
   });
 
-  it('contentText 显式 null 拒绝清空（无文件来源兑底）；必填字段显式 null 给本模块业务码；空补丁拒绝；ENGINEER 写被拒', async () => {
+  it('contentText 显式 null 清空：纯文本资料拒绝（CONTENT_SOURCE_EMPTY）；文件资料放行；必填字段显式 null 给本模块业务码；空补丁拒绝；ENGINEER 写被拒', async () => {
     const { usecase, writeService } = makeUsecase();
 
+    // 纯文本资料（无存储引用）：清空正文 → 双空拒绝
     await expect(
       usecase.execute({
         session: session(['SUPER_ADMIN']),
         documentId: 970001,
         patch: { contentText: null },
       }),
-    ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.INVALID_PARAMS });
+    ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.CONTENT_SOURCE_EMPTY });
+    // 文件资料（已有存储引用）：清空正文合法（仅文件来源）
+    const fileBacked = makeQueryService();
+    fileBacked.findDetail.mockResolvedValue(
+      detailQueryResult({
+        contentText: null,
+        storageReference: 'a1b2c3d4e5f60718293a4b5c6d7e8f90.pdf',
+      }),
+    );
+    const fileBackedUsecase = new UpdateReferenceDocumentUsecase(
+      makeWriteService() as unknown as ReferenceDocumentService,
+      fileBacked as unknown as ReferenceDocumentQueryService,
+      makeModelQueryService() as unknown as EquipmentModelQueryService,
+      makeTransactionRunner(),
+    );
+    await expect(
+      fileBackedUsecase.execute({
+        session: session(['SUPER_ADMIN']),
+        documentId: 970001,
+        patch: { title: '改标题' },
+      }),
+    ).resolves.toEqual({ id: 970001 });
     // 补丁语义：null 仅允许出现在可清空字段，必填字段置空直接拒绝且不进入读/写路径
     await expect(
       usecase.execute({
@@ -515,5 +613,105 @@ describe('SoftDeleteReferenceDocumentUsecase', () => {
     await expect(
       usecase.execute({ session: session(['SUPER_ADMIN']), documentId: -1 }),
     ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.INVALID_PARAMS });
+  });
+});
+
+describe('GetReferenceDocumentFileUsecase', () => {
+  const makeStorage = () => ({
+    save: jest.fn(),
+    resolve: jest.fn(),
+    delete: jest.fn(),
+  });
+  const makeUsecase = (
+    overrides: {
+      queryService?: ReturnType<typeof makeQueryService>;
+      storage?: ReturnType<typeof makeStorage>;
+    } = {},
+  ) => {
+    const queryService = overrides.queryService ?? makeQueryService();
+    const storage = overrides.storage ?? makeStorage();
+    return {
+      queryService,
+      storage,
+      usecase: new GetReferenceDocumentFileUsecase(
+        queryService as unknown as ReferenceDocumentQueryService,
+        storage,
+      ),
+    };
+  };
+
+  const fileDetail = detailQueryResult({
+    contentText: null,
+    originalFilename: '说明书.pdf',
+    mimeType: 'application/pdf',
+    storageReference: 'a1b2c3d4e5f60718293a4b5c6d7e8f90.pdf',
+  });
+
+  it('三角色均可下载（含 CUSTOMER）：返回展示文件名/MIME 与绝对路径载荷', async () => {
+    const queryService = makeQueryService();
+    queryService.findDetail.mockResolvedValue(fileDetail);
+    const storage = makeStorage();
+    const existingPath = path.join(tmpRoot, 'downloadable.pdf');
+    fs.writeFileSync(existingPath, 'pdf-bytes');
+    storage.resolve.mockReturnValue(existingPath);
+    const { usecase } = makeUsecase({ queryService, storage });
+
+    for (const roles of [['SUPER_ADMIN'], ['ENGINEER'], ['CUSTOMER']]) {
+      await expect(
+        usecase.execute({ session: session(roles), documentId: 970001 }),
+      ).resolves.toMatchObject({
+        documentId: 970001,
+        originalFilename: '说明书.pdf',
+        mimeType: 'application/pdf',
+        absolutePath: existingPath,
+      });
+    }
+    expect(storage.resolve).toHaveBeenCalledWith(fileDetail.storageReference);
+  });
+
+  it('空角色会话拒绝（匿名会话不允许下载）', async () => {
+    const { usecase } = makeUsecase();
+
+    await expect(
+      usecase.execute({ session: session([]), documentId: 970001 }),
+    ).rejects.toMatchObject({ code: PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS });
+  });
+
+  it('纯文本资料（无存储引用）FILE_NOT_AVAILABLE；不触达存储层', async () => {
+    const queryService = makeQueryService();
+    queryService.findDetail.mockResolvedValue(detailQueryResult());
+    const storage = makeStorage();
+    const { usecase } = makeUsecase({ queryService, storage });
+
+    await expect(
+      usecase.execute({ session: session(['CUSTOMER']), documentId: 970001 }),
+    ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.FILE_NOT_AVAILABLE });
+    expect(storage.resolve).not.toHaveBeenCalled();
+  });
+
+  it('存储引用非法（resolve 抛错）收敛为 FILE_NOT_AVAILABLE，不返回路径', async () => {
+    const queryService = makeQueryService();
+    queryService.findDetail.mockResolvedValue(fileDetail);
+    const storage = makeStorage();
+    storage.resolve.mockImplementation(() => {
+      throw new Error('Rejected invalid storage reference format');
+    });
+    const { usecase } = makeUsecase({ queryService, storage });
+
+    await expect(
+      usecase.execute({ session: session(['ENGINEER']), documentId: 970001 }),
+    ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.FILE_NOT_AVAILABLE });
+  });
+
+  it('存储对象缺失（文件不存在）收敛为 FILE_NOT_AVAILABLE（受控错误，不泄漏路径）', async () => {
+    const queryService = makeQueryService();
+    queryService.findDetail.mockResolvedValue(fileDetail);
+    const storage = makeStorage();
+    storage.resolve.mockReturnValue(path.join(tmpRoot, 'missing-file.pdf'));
+    const { usecase } = makeUsecase({ queryService, storage });
+
+    await expect(
+      usecase.execute({ session: session(['ENGINEER']), documentId: 970001 }),
+    ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.FILE_NOT_AVAILABLE });
   });
 });

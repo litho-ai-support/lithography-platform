@@ -21,6 +21,10 @@ describe('ReferenceDocumentService', () => {
       equipmentModelId: null,
       description: null,
       contentText: '内容',
+      originalFilename: null,
+      mimeType: null,
+      storageBackend: null,
+      storageReference: null,
       createdByAccountId: 900001,
     });
 
@@ -30,6 +34,10 @@ describe('ReferenceDocumentService', () => {
         title: '新资料',
         createdByAccountId: 900001,
         deprecated: false,
+        originalFilename: null,
+        mimeType: null,
+        storageBackend: null,
+        storageReference: null,
       }),
     );
   });
@@ -46,6 +54,10 @@ describe('ReferenceDocumentService', () => {
         equipmentModelId: null,
         description: null,
         contentText: '内容',
+        originalFilename: null,
+        mimeType: null,
+        storageBackend: null,
+        storageReference: null,
         createdByAccountId: 900001,
       }),
     ).rejects.toMatchObject({

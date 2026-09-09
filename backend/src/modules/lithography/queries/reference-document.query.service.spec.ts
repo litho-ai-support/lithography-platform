@@ -177,7 +177,7 @@ describe('ReferenceDocumentQueryService', () => {
     expect(modelRepo.find).not.toHaveBeenCalled();
   });
 
-  it('详情返回完整元数据与文本内容；不含存储引用与服务器路径', async () => {
+  it('详情返回完整元数据与文本内容；含内部装配字段 storageReference（DTO 视图由 usecase 剥离）、不含存储后端与服务器路径', async () => {
     const documentRepo = makeDocumentRepo();
     documentRepo.findOne.mockResolvedValue(
       documentEntity({ storageBackend: 'LOCAL', storageReference: 'mock/reference/a.pdf' }),
@@ -196,7 +196,8 @@ describe('ReferenceDocumentQueryService', () => {
       createdByAccountId: 900001,
     });
     expect(detail).not.toHaveProperty('storageBackend');
-    expect(detail).not.toHaveProperty('storageReference');
+    // storageReference 为内部装配字段，仅供下载用例定位文件；对外 DTO 视图由 usecase 层剥离
+    expect(detail).toHaveProperty('storageReference', 'mock/reference/a.pdf');
   });
 
   it('不存在与已软删详情统一 NOT_FOUND，不区分错误表述（防删除状态探测）', async () => {

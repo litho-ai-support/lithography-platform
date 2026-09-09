@@ -4,7 +4,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ApiModule } from '@src/bootstraps/api/api.module';
 import { EquipmentModelEntity } from '@src/modules/lithography/entities/equipment-model.entity';
 import { ReferenceDocumentEntity } from '@src/modules/lithography/entities/reference-document.entity';
+import { REFERENCE_DOCUMENT_STORAGE } from '@src/usecases/reference-document/reference-document-storage.contract';
 import { CreateAccountUsecase } from '@src/usecases/account/create-account.usecase';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource, Repository } from 'typeorm';
 import { getAccountIdByLoginName, login, postGql } from '../utils/e2e-graphql-utils';
@@ -52,6 +57,11 @@ const LIST_SEARCH_QUERY = `
     }
   }
 `;
+
+// REST 上传/下载用运行级临时存储目录：先于 beforeAll 设置 env，使 config 加载时读到
+// 本规格专属目录（不污染默认 var/）；finally 按精确路径清理（呼应 0909 阻塞 1 边界纪律）
+const e2eStorageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'refdoc-e2e-storage-'));
+process.env.REFERENCE_DOCUMENT_STORAGE_DIR = e2eStorageRoot;
 
 /**
  * AI 参考资料库端点级回归（core 组）
@@ -201,6 +211,9 @@ describe('AI 参考资料库 (e2e)', () => {
     } catch (error) {
       console.error('afterAll 清理失败:', error);
     } finally {
+      // 临时存储目录按精确路径清理，并还原环境变量避免泄漏到后续规格
+      fs.rmSync(e2eStorageRoot, { recursive: true, force: true });
+      delete process.env.REFERENCE_DOCUMENT_STORAGE_DIR;
       if (app) {
         try {
           await app.close();
@@ -633,6 +646,275 @@ describe('AI 参考资料库 (e2e)', () => {
       const saved = await documentRepository.findOne({ where: { id: 972 } });
       expect(saved).toMatchObject({ deprecated: false });
       expect(saved?.deletedAt).toBeNull();
+    });
+  });
+
+  /**
+   * REST 文件上传/下载（0909 第二轮阻塞项 1）
+   *
+   * 用例顺序依赖：上传成功用例产生的行供后续下载/软删用例复用（
+   * jest 默认按声明顺序串行执行）；存储目录为本规格专属临时目录，
+   * finally 按精确路径清理。
+   */
+  describe('REST 文件上传/下载', () => {
+    let uploadedDocumentId: number;
+    let fileOnlyDocumentId: number;
+
+    const upload = (
+      token: string | null,
+      fileName: string,
+      buffer: Buffer,
+      fields: Record<string, string> = {},
+    ) => {
+      const req = request(app.getHttpServer()).post('/api/reference-documents/upload');
+      if (token) {
+        req.set('Authorization', `Bearer ${token}`);
+      }
+      for (const [key, value] of Object.entries(fields)) {
+        req.field(key, value);
+      }
+      return req.attach('file', buffer, fileName);
+    };
+
+    const download = (token: string | null, id: number) => {
+      const req = request(app.getHttpServer()).get(`/api/reference-documents/${id}/download`);
+      if (token) {
+        req.set('Authorization', `Bearer ${token}`);
+      }
+      return req;
+    };
+
+    const storageFiles = (): string[] => fs.readdirSync(e2eStorageRoot).sort();
+
+    it('SUPER_ADMIN 上传成功：引用格式/四列落库/物理文件字节一致', async () => {
+      const response = await upload(adminToken, 'e2e-upload.pdf', Buffer.from('e2e-pdf-content'), {
+        title: 'E2E REST 上传行',
+        documentType: 'MANUAL',
+        equipmentModelId: '43',
+        description: 'REST 上传',
+        contentText: '附带正文',
+      }).expect(201);
+      uploadedDocumentId = response.body.data.id as number;
+
+      const row = await documentRepository.findOne({ where: { id: uploadedDocumentId } });
+      expect(row).toMatchObject({
+        title: 'E2E REST 上传行',
+        originalFilename: 'e2e-upload.pdf',
+        mimeType: 'application/pdf',
+        storageBackend: 'local',
+        contentText: '附带正文',
+      });
+      expect(row?.storageReference).toMatch(/^[0-9a-f]{32}\.pdf$/);
+      expect(
+        fs.readFileSync(path.join(e2eStorageRoot, row?.storageReference ?? '')).toString(),
+      ).toBe('e2e-pdf-content');
+    });
+
+    it('仅文件创建（contentText 缺省）：落库 contentText 为 NULL，双空判定不误拦', async () => {
+      const response = await upload(
+        adminToken,
+        'e2e-file-only.txt',
+        Buffer.from('file-only-bytes'),
+        { title: 'E2E 仅文件行', documentType: 'MANUAL' },
+      ).expect(201);
+      fileOnlyDocumentId = response.body.data.id as number;
+
+      const row = await documentRepository.findOne({ where: { id: fileOnlyDocumentId } });
+      expect(row).toMatchObject({
+        contentText: null,
+        originalFilename: 'e2e-file-only.txt',
+        mimeType: 'text/plain',
+        storageBackend: 'local',
+      });
+    });
+
+    it('工程师/客户上传 403；匿名 401（REST 统一错误体）', async () => {
+      const engineerRes = await upload(engineerToken, 'a.pdf', Buffer.from('x')).expect(403);
+      expect(engineerRes.body.data).toMatchObject({
+        statusCode: 403,
+        code: 'INSUFFICIENT_PERMISSIONS',
+      });
+      const customerRes = await upload(customerToken, 'a.pdf', Buffer.from('x')).expect(403);
+      expect(customerRes.body.data).toMatchObject({
+        statusCode: 403,
+        code: 'INSUFFICIENT_PERMISSIONS',
+      });
+      const anonRes = await upload(null, 'a.pdf', Buffer.from('x')).expect(401);
+      expect(anonRes.body.data).toMatchObject({
+        statusCode: 401,
+        code: 'JWT_AUTHENTICATION_FAILED',
+      });
+    });
+
+    it('白名单外扩展名 415（以扩展名为主判定，不信任客户端 MIME）', async () => {
+      const response = await upload(adminToken, 'e2e-evil.exe', Buffer.from('MZ'), {
+        title: 'E2E 非法类型行',
+        documentType: 'MANUAL',
+      }).expect(415);
+      expect(response.body.data).toMatchObject({
+        statusCode: 415,
+        code: 'REFERENCE_DOCUMENT_UPLOAD_FILE_TYPE_NOT_ALLOWED',
+      });
+      // 不留 DB 记录
+      const rows = await documentRepository.find({ where: { title: 'E2E 非法类型行' } });
+      expect(rows).toHaveLength(0);
+    });
+
+    it('超过业务大小上限 413（multer 硬上限以下仍被业务校验拦截）', async () => {
+      const oversized = Buffer.alloc(21 * 1024 * 1024);
+      const response = await upload(adminToken, 'e2e-big.pdf', oversized, {
+        title: 'E2E 超限行',
+        documentType: 'MANUAL',
+      }).expect(413);
+      expect(response.body.data).toMatchObject({
+        statusCode: 413,
+        code: 'REFERENCE_DOCUMENT_UPLOAD_FILE_TOO_LARGE',
+      });
+      const rows = await documentRepository.find({ where: { title: 'E2E 超限行' } });
+      expect(rows).toHaveLength(0);
+    }, 60000);
+
+    it('原子性（落库失败）：不存在型号 → 400，补偿删除不留孤儿文件、不留 DB 记录', async () => {
+      const before = storageFiles();
+      const response = await upload(adminToken, 'e2e-orphan.pdf', Buffer.from('orphan'), {
+        title: 'E2E 原子性落库失败行',
+        documentType: 'MANUAL',
+        equipmentModelId: '999999',
+      }).expect(400);
+      expect(response.body.data).toMatchObject({
+        statusCode: 400,
+        code: 'REFERENCE_DOCUMENT_EQUIPMENT_MODEL_NOT_FOUND',
+      });
+      expect(storageFiles()).toEqual(before);
+      const rows = await documentRepository.find({ where: { title: 'E2E 原子性落库失败行' } });
+      expect(rows).toHaveLength(0);
+    });
+
+    it('原子性（存储失败）：save 抛错 → 500 CREATION_FAILED，不留 DB 记录', async () => {
+      const storage = app.get(REFERENCE_DOCUMENT_STORAGE);
+      const saveSpy = jest.spyOn(storage, 'save').mockRejectedValueOnce(new Error('disk failure'));
+
+      try {
+        const response = await upload(adminToken, 'e2e-disk-fail.pdf', Buffer.from('x'), {
+          title: 'E2E 存储失败行',
+          documentType: 'MANUAL',
+        }).expect(500);
+        expect(response.body.data).toMatchObject({
+          statusCode: 500,
+          code: 'REFERENCE_DOCUMENT_CREATION_FAILED',
+        });
+      } finally {
+        saveSpy.mockRestore();
+      }
+      const rows = await documentRepository.find({ where: { title: 'E2E 存储失败行' } });
+      expect(rows).toHaveLength(0);
+    });
+
+    it('三角色下载成功：Content-Type 取 DB MIME、RFC 5987 文件名、字节一致', async () => {
+      // multer 对中文文件名按 latin1 解码不可靠，落库后改写展示名以验证 RFC 5987 编码链路
+      await documentRepository.update(fileOnlyDocumentId, { originalFilename: 'E2E 报告.txt' });
+
+      for (const token of [adminToken, engineerToken, customerToken]) {
+        const response = await download(token, fileOnlyDocumentId).expect(200);
+        expect(response.headers['content-type']).toContain('text/plain');
+        expect(response.headers['content-disposition']).toContain(
+          `filename*=UTF-8''${encodeURIComponent('E2E 报告.txt')}`,
+        );
+        expect(response.text).toBe('file-only-bytes');
+      }
+    });
+
+    it('匿名下载 401', async () => {
+      const response = await download(null, fileOnlyDocumentId).expect(401);
+      expect(response.body.data).toMatchObject({
+        statusCode: 401,
+        code: 'JWT_AUTHENTICATION_FAILED',
+      });
+    });
+
+    it('已软删统一 404 NOT_FOUND（防删除状态探测，不物理删文件但拒绝下载）', async () => {
+      await postGql({
+        app,
+        query: SOFT_DELETE_MUTATION,
+        variables: { id: uploadedDocumentId },
+        token: adminToken,
+      }).expect(200);
+
+      const response = await download(engineerToken, uploadedDocumentId).expect(404);
+      expect(response.body.data).toMatchObject({
+        statusCode: 404,
+        code: 'REFERENCE_DOCUMENT_NOT_FOUND',
+      });
+    });
+
+    it('伪格式/越界引用行不能读任意文件（404 FILE_NOT_AVAILABLE，不泄漏路径）', async () => {
+      // 绕过应用层直接插入非法引用行（DB 层无引用格式约束，防线在存储实现 resolve）
+      await documentRepository.save(
+        documentRepository.create({
+          title: 'E2E 伪引用行',
+          documentType: 'MANUAL',
+          contentText: null,
+          originalFilename: 'evil.pdf',
+          mimeType: 'application/pdf',
+          storageBackend: 'LOCAL',
+          storageReference: '../evil.pdf',
+          createdByAccountId: adminAccountId,
+          deprecated: false,
+          deletedAt: null,
+        }),
+      );
+      const row = await documentRepository.findOne({ where: { title: 'E2E 伪引用行' } });
+      expect(row).toBeTruthy();
+
+      const response = await download(engineerToken, row!.id).expect(404);
+      expect(response.body.data).toMatchObject({
+        statusCode: 404,
+        code: 'REFERENCE_DOCUMENT_FILE_NOT_AVAILABLE',
+        message: '该资料没有可下载的文件',
+      });
+      expect(JSON.stringify(response.body)).not.toContain('evil');
+    });
+
+    it('有效格式引用但存储对象缺失 → 404 FILE_NOT_AVAILABLE', async () => {
+      await documentRepository.save(
+        documentRepository.create({
+          title: 'E2E 缺失文件行',
+          documentType: 'MANUAL',
+          contentText: null,
+          originalFilename: 'missing.pdf',
+          mimeType: 'application/pdf',
+          storageBackend: 'LOCAL',
+          storageReference: `${'0'.repeat(32)}.pdf`,
+          createdByAccountId: adminAccountId,
+          deprecated: false,
+          deletedAt: null,
+        }),
+      );
+      const row = await documentRepository.findOne({ where: { title: 'E2E 缺失文件行' } });
+
+      const response = await download(customerToken, row!.id).expect(404);
+      expect(response.body.data).toMatchObject({
+        statusCode: 404,
+        code: 'REFERENCE_DOCUMENT_FILE_NOT_AVAILABLE',
+      });
+    });
+
+    it('存储文件被删后下载返回受控错误（404 FILE_NOT_AVAILABLE）', async () => {
+      const response = await upload(adminToken, 'e2e-vanish.txt', Buffer.from('vanish-bytes'), {
+        title: 'E2E 文件被删行',
+        documentType: 'MANUAL',
+      }).expect(201);
+      const row = await documentRepository.findOne({
+        where: { id: response.body.data.id as number },
+      });
+      // 按精确路径删除物理文件（模拟存储侧丢失，不批量扫描）
+      fs.unlinkSync(path.join(e2eStorageRoot, row?.storageReference ?? ''));
+
+      const gone = await download(engineerToken, row!.id).expect(404);
+      expect(gone.body.data).toMatchObject({
+        statusCode: 404,
+        code: 'REFERENCE_DOCUMENT_FILE_NOT_AVAILABLE',
+      });
     });
   });
 });
