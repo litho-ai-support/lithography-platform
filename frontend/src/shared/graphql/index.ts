@@ -1,6 +1,11 @@
 // src/shared/graphql/index.ts
 
-export { clearGraphQLClientCache, configureGraphQLRuntime, getGraphQLClient } from './client';
+export {
+  clearGraphQLClientCache,
+  configureGraphQLRuntime,
+  getGraphQLClient,
+  getGraphQLRuntimeConfig,
+} from './client';
 export type { GraphQLErrorDetail, GraphQLIngressErrorType } from './errors';
 export {
   GraphQLIngressError,

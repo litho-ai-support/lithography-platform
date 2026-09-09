@@ -17,6 +17,7 @@ import {
   deleteReferenceDocument,
   updateReferenceDocument,
 } from '../infrastructure/reference-document-adapter';
+import { downloadReferenceDocumentFile } from '../infrastructure/reference-document-http-adapter';
 
 import type {
   ReferenceDocumentFormOutput,
@@ -33,8 +34,12 @@ import { REFERENCE_DOCUMENTS_LIST_PATH } from './reference-document-paths';
  * - 编辑与软删入口仅 SUPER_ADMIN 可见（canManage 由页面层按角色判定）；
  * - 编辑为页内表单切换（PATCH 全字段），取消丢弃修改，成功后刷新详情；
  *   documentId 变化时同步退出旧资料的编辑态，避免新资料加载后沿用旧编辑会话；
+ *   已有文件的资料允许清空正文（与后端防御放宽同口径，经 hasExistingFile 传给表单）；
  * - 软删 Popconfirm 二次确认；删除中禁用；失败给明确原因并刷新数据态，
- *   不得乐观成功（backend e2e 口径：重复软删统一 NOT_FOUND）。
+ *   不得乐观成功（backend e2e 口径：重复软删统一 NOT_FOUND）；
+ * - 带文件的资料恒显「下载文件」按钮（三角色可见）：fetch blob 后经
+ *   createObjectURL + a[download] 触发浏览器保存（Authorization 头鉴权，
+ *   不用 window.open / 直链），失败 message 反馈。
  */
 export function ReferenceDocumentDetailPanel({
   documentId,
@@ -48,6 +53,8 @@ export function ReferenceDocumentDetailPanel({
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const deletingRef = useRef(false);
+  const [downloading, setDownloading] = useState(false);
+  const downloadingRef = useRef(false);
 
   // ID 变化（含从合法变非法）时退出旧资料的编辑态：新资料加载完成后
   // 不得继续显示由旧资料开启的编辑界面，避免「看到 A 的表单、提交到 B」。
@@ -70,7 +77,9 @@ export function ReferenceDocumentDetailPanel({
         documentType: output.documentType,
         equipmentModelId: output.equipmentModelId,
         description: output.description,
-        contentText: output.contentText,
+        // 空白正文传空字符串：后端编辑路径归一为 null，仅当资料已有文件时放行
+        // （双空拦截已由表单预检承担，此处不做二次判定）
+        contentText: output.contentText ?? '',
       };
       const result: UpdateReferenceDocumentResult = await updateReferenceDocument(
         documentId,
@@ -117,6 +126,41 @@ export function ReferenceDocumentDetailPanel({
       setDeleting(false);
     }
   }, [documentId, navigate, reload]);
+
+  /** 下载资料文件：blob → 临时 URL → a[download] 触发浏览器保存 */
+  const handleDownload = useCallback(async () => {
+    if (documentId === null || downloadingRef.current) {
+      return;
+    }
+
+    downloadingRef.current = true;
+    setDownloading(true);
+
+    try {
+      const result = await downloadReferenceDocumentFile(documentId);
+
+      if (!result.ok) {
+        message.error(result.message);
+
+        return;
+      }
+
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement('a');
+
+      anchor.href = url;
+      anchor.download = result.filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      message.error('下载失败，请稍后重试。');
+    } finally {
+      downloadingRef.current = false;
+      setDownloading(false);
+    }
+  }, [documentId]);
 
   if (state.status === 'loading') {
     return <Skeleton active paragraph={{ rows: 8 }} />;
@@ -165,6 +209,7 @@ export function ReferenceDocumentDetailPanel({
         title="编辑参考资料"
       >
         <ReferenceDocumentForm
+          hasExistingFile={detail.originalFilename !== null}
           initial={{
             title: detail.title,
             documentType: detail.documentType,
@@ -237,7 +282,14 @@ export function ReferenceDocumentDetailPanel({
         </div>
 
         <div>
-          <Button onClick={() => navigate(REFERENCE_DOCUMENTS_LIST_PATH)}>返回列表</Button>
+          <div className="flex gap-2">
+            <Button onClick={() => navigate(REFERENCE_DOCUMENTS_LIST_PATH)}>返回列表</Button>
+            {detail.originalFilename !== null ? (
+              <Button loading={downloading} onClick={() => void handleDownload()} type="primary">
+                下载文件
+              </Button>
+            ) : null}
+          </div>
         </div>
       </div>
     </Card>

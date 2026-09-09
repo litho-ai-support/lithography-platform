@@ -9,6 +9,7 @@ import {
   createReferenceDocument,
   type CreateReferenceDocumentInput,
   type CreateReferenceDocumentResult,
+  createReferenceDocumentWithFile,
   REFERENCE_DOCUMENTS_LIST_PATH,
   ReferenceDocumentForm,
   type ReferenceDocumentFormOutput,
@@ -24,7 +25,8 @@ import { PageHeader } from '@/shared/ui/page-header';
  * ENGINEER 被角色路径拒绝清单拦截（对应后端写接口仅 SUPER_ADMIN 的精确口径，
  * 避免出现「能进页面但提交必被拒」的残缺中间态）。
  * 页面只装配 feature 公开表单组件并处理成功后的跳转，不持有另一份校验规则；
- * 创建成功后进入新资料详情页。
+ * 创建通道按表单输出分流：带文件走 REST multipart 上传（contentText 可空），
+ * 纯文本走 GraphQL mutation（双空拦截已由表单预检承担）。创建成功后进入新资料详情页。
  */
 export function ReferenceDocumentNewPage() {
   const navigate = useNavigate();
@@ -40,12 +42,32 @@ export function ReferenceDocumentNewPage() {
       creatingRef.current = true;
 
       try {
+        if (output.file !== null) {
+          const result = await createReferenceDocumentWithFile({
+            title: output.title,
+            documentType: output.documentType,
+            equipmentModelId: output.equipmentModelId,
+            description: output.description,
+            contentText: output.contentText,
+            file: output.file,
+          });
+
+          if (result.ok) {
+            setCreatedId(result.id);
+
+            return { ok: true };
+          }
+
+          return { ok: false, message: result.message };
+        }
+
+        // 纯文本通道：双空预检保证 contentText 非空，类型上仍需收窄为 string
         const input: CreateReferenceDocumentInput = {
           title: output.title,
           documentType: output.documentType,
           equipmentModelId: output.equipmentModelId,
           description: output.description,
-          contentText: output.contentText,
+          contentText: output.contentText ?? '',
         };
         const result: CreateReferenceDocumentResult = await createReferenceDocument(input);
 
@@ -90,7 +112,7 @@ export function ReferenceDocumentNewPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        description="录入维护知识文本资料；适用设备型号留空表示通用资料。"
+        description="录入维护知识文本资料或上传文件（文本与文件至少提供一个）；适用设备型号留空表示通用资料。"
         title="新增参考资料"
       />
       <div className="surface-panel">

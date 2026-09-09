@@ -95,7 +95,8 @@ export type CreateReferenceDocumentInput = {
  * 形状与后端 UpdateReferenceDocumentInput 对齐：title/documentType 在 GraphQL 层可传
  * null，但语义上属必填字段，显式 null 会被后端直接拒绝（前端 adapter 同口径）。
  * - equipmentModelId / description 允许显式 null 清空；
- * - contentText 不允许清空（无文件来源兜底）。
+ * - contentText 空白视为清空：后端编辑防御已放宽，仅当资料已有文件时放行
+ *   （双空拦截由表单预检承担，adapter 不做二次判定）。
  */
 export type UpdateReferenceDocumentPatch = {
   title?: string | null;
@@ -125,6 +126,50 @@ export type CreateReferenceDocumentResult =
   | {
       ok: false;
       reason: 'model-not-found' | 'invalid-input' | 'creation-failed';
+      message: string;
+    };
+
+/**
+ * REST multipart 创建输入（文件来源路径；0909 第二轮阻塞项 1）。
+ * contentText 可空（仅文件创建），但与文件双空时后端拒绝（CONTENT_SOURCE_EMPTY）。
+ */
+export type CreateReferenceDocumentWithFileInput = {
+  title: string;
+  documentType: string;
+  equipmentModelId: number | null;
+  description: string | null;
+  contentText: string | null;
+  file: File;
+};
+
+/**
+ * REST multipart 创建结果（domain failure 显式结果）。
+ * 文件边界专属失败：file-too-large（超大小上限）、file-type-not-allowed（白名单外类型）。
+ */
+export type CreateReferenceDocumentWithFileResult =
+  | { ok: true; id: number }
+  | {
+      ok: false;
+      reason:
+        | 'model-not-found'
+        | 'invalid-input'
+        | 'file-too-large'
+        | 'file-type-not-allowed'
+        | 'creation-failed';
+      message: string;
+    };
+
+/**
+ * REST 下载结果（domain failure 显式结果）。
+ * - not-found：资料不存在 / 已软删（统一防探测口径）
+ * - file-not-available：纯文本资料无文件，或存储对象缺失（受控错误）
+ * - download-failed：其余失败（transport / auth / 服务器错误）
+ */
+export type ReferenceDocumentFileDownloadResult =
+  | { ok: true; blob: Blob; filename: string }
+  | {
+      ok: false;
+      reason: 'not-found' | 'file-not-available' | 'download-failed';
       message: string;
     };
 

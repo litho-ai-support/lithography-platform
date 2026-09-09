@@ -3,9 +3,12 @@
 import type {
   CreateReferenceDocumentInput,
   CreateReferenceDocumentResult,
+  CreateReferenceDocumentWithFileInput,
+  CreateReferenceDocumentWithFileResult,
   DeleteReferenceDocumentResult,
   ReferenceDocumentDetailResult,
   ReferenceDocumentEquipmentModelOption,
+  ReferenceDocumentFileDownloadResult,
   ReferenceDocumentListFilter,
   ReferenceDocumentListPage,
   ReferenceDocumentListPagination,
@@ -37,6 +40,23 @@ const DOCUMENT_TYPE_MAX_LENGTH = 100;
 
 /** Mock 创建人昵称：阶段三由后端按 Session 实时富集，Mock 固定为管理员语义 */
 const MOCK_CREATOR_NICKNAME = '系统管理员';
+
+/** Mock 扩展名 → MIME（与后端 EXTENSION_TO_MIME 同口径的最小子集，仅用于文件元数据模拟） */
+const MOCK_EXTENSION_MIME: Record<string, string> = {
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+};
 
 let repository: MockReferenceDocumentRecord[] = buildMockReferenceDocumentRecords();
 let nextId = 970007 + 1000;
@@ -244,11 +264,16 @@ export async function updateReferenceDocument(
     };
   }
 
-  if (patch.contentText !== undefined && isNormalizedBlank(patch.contentText)) {
+  // 内容来源双空防御与后端同口径：仅文件资料（已有存储元数据）允许清空正文
+  if (
+    patch.contentText !== undefined &&
+    isNormalizedBlank(patch.contentText) &&
+    record.originalFilename === null
+  ) {
     return {
       ok: false,
       reason: 'invalid-input',
-      message: '文本内容不允许清空（无文件来源兜底）。',
+      message: '文本内容与文件至少需要一个。',
     };
   }
 
@@ -305,7 +330,7 @@ export async function updateReferenceDocument(
   }
 
   if (patch.contentText !== undefined) {
-    record.contentText = patch.contentText.trim();
+    record.contentText = isNormalizedBlank(patch.contentText) ? null : patch.contentText.trim();
   }
 
   record.updatedAt = new Date().toISOString();
@@ -329,4 +354,121 @@ export async function deleteReferenceDocument(id: number): Promise<DeleteReferen
   record.updatedAt = new Date().toISOString();
 
   return { ok: true };
+}
+
+/** 从文件名提取小写扩展名（无扩展名返回空串） */
+function extractFileExtension(fileName: string): string {
+  const lastDot = fileName.lastIndexOf('.');
+
+  return lastDot === -1 ? '' : fileName.slice(lastDot + 1).toLowerCase();
+}
+
+/**
+ * REST multipart 上传创建（Mock 同签名模拟，行为对齐后端 REST 边界）：
+ * - 必填校验与纯文本创建一致；contentText 可空（仅文件创建），与文件双空才拒绝；
+ * - 扩展名白名单外拒绝（file-type-not-allowed，与后端以扩展名为主判定同口径）；
+ * - 成功记录 originalFilename / mimeType 存储元数据（无物理文件，下载时合成字节）。
+ */
+export async function createReferenceDocumentWithFile(
+  input: CreateReferenceDocumentWithFileInput,
+): Promise<CreateReferenceDocumentWithFileResult> {
+  const title = requireNormalizedText(input.title, TITLE_MAX_LENGTH);
+  const documentType = requireNormalizedText(input.documentType, DOCUMENT_TYPE_MAX_LENGTH);
+
+  if (title === null || documentType === null) {
+    return {
+      ok: false,
+      reason: 'invalid-input',
+      message:
+        title === null
+          ? '标题为必填项，且不能超过 255 个字符。'
+          : '文档类型为必填项，且不能超过 100 个字符。',
+    };
+  }
+
+  const extension = extractFileExtension(input.file.name);
+  const mimeType = MOCK_EXTENSION_MIME[extension];
+
+  if (mimeType === undefined) {
+    return {
+      ok: false,
+      reason: 'file-type-not-allowed',
+      message: '不允许上传该类型的文件。',
+    };
+  }
+
+  if (input.equipmentModelId !== null) {
+    const modelExists = MOCK_REFERENCE_EQUIPMENT_MODELS.some(
+      (model) => model.id === input.equipmentModelId,
+    );
+
+    if (!modelExists) {
+      return {
+        ok: false,
+        reason: 'model-not-found',
+        message: '所选设备型号不存在，请重新选择。',
+      };
+    }
+  }
+
+  const model = MOCK_REFERENCE_EQUIPMENT_MODELS.find(
+    (option) => option.id === input.equipmentModelId,
+  );
+  const now = new Date().toISOString();
+
+  const record: MockReferenceDocumentRecord = {
+    id: nextId,
+    title,
+    documentType,
+    equipmentModelId: model?.id ?? null,
+    equipmentModelName: model?.modelName ?? null,
+    description: input.description?.trim() ? input.description.trim() : null,
+    originalFilename: input.file.name,
+    mimeType,
+    contentText: input.contentText?.trim() ? input.contentText.trim() : null,
+    creatorNickname: MOCK_CREATOR_NICKNAME,
+    createdAt: now,
+    updatedAt: now,
+    deprecated: false,
+  };
+
+  repository = [record, ...repository];
+  nextId += 1;
+
+  return { ok: true, id: record.id };
+}
+
+/**
+ * 下载资料文件（Mock 同签名模拟，行为对齐后端 REST 边界）：
+ * - 不存在 / 已软删统一 not-found（防探测口径）；
+ * - 纯文本资料 file-not-available；文件资料返回合成字节 Blob（内容为 Mock 占位，非真实文件）。
+ */
+export async function downloadReferenceDocumentFile(
+  id: number,
+): Promise<ReferenceDocumentFileDownloadResult> {
+  const record = findVisibleById(id);
+
+  if (!record) {
+    return {
+      ok: false,
+      reason: 'not-found',
+      message: '参考资料不存在或不可查看。',
+    };
+  }
+
+  if (record.originalFilename === null) {
+    return {
+      ok: false,
+      reason: 'file-not-available',
+      message: '该资料没有可下载的文件。',
+    };
+  }
+
+  const bytes = new TextEncoder().encode(`mock-file-bytes:${record.originalFilename}`);
+
+  return {
+    ok: true,
+    blob: new Blob([bytes]),
+    filename: record.originalFilename,
+  };
 }
