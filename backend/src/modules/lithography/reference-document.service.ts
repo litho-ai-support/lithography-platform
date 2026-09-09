@@ -37,8 +37,9 @@ export class ReferenceDocumentService {
    * 插入参考资料记录
    *
    * 初始状态由本方法统一保证：
-   * - deprecated = false，deletedAt 为 NULL
-   * - 本周无文件上传路径：storageBackend / storageReference / originalFilename / mimeType 均为 NULL
+   * - deprecated = false，deletedAt 为 NULL；
+   * - 内容来源为正文或存储引用至少一个（chk_reference_document_content_source 兜底）；
+   * - 存储引用由 usecase 层经存储契约生成（服务端随机、无路径语义），本方法不参与命名。
    *
    * @param data 已完成业务判定的写入数据
    * @param transactionContext 可选的事务上下文
@@ -56,6 +57,10 @@ export class ReferenceDocumentService {
         equipmentModelId: data.equipmentModelId,
         description: data.description,
         contentText: data.contentText,
+        originalFilename: data.originalFilename,
+        mimeType: data.mimeType,
+        storageBackend: data.storageBackend,
+        storageReference: data.storageReference,
         createdByAccountId: data.createdByAccountId,
         deprecated: false,
       });

@@ -129,6 +129,8 @@ export class ReferenceDocumentQueryService {
       mimeType: entity.mimeType,
       contentText: entity.contentText,
       createdByAccountId: entity.createdByAccountId,
+      // 内部装配字段：仅供下载用例定位存储对象，不进入对外 DTO
+      storageReference: entity.storageReference,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
     };

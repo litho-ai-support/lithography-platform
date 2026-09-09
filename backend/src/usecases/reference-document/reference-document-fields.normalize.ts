@@ -70,24 +70,40 @@ export function normalizeDescription(value: string | null | undefined): string |
 
 /**
  * 文本内容规范化：
- * - 创建路径（required=true）：必填（本周仅 contentText 内容来源，无文件兜底，双空创建必须失败）
- * - 编辑路径（required=false）：undefined 保持原值；null/空白拒绝（不允许清空成无内容来源）
+ * - 创建路径（required=true）：必填（正文为 null/undefined 的双空判定由 usecase 层完成，
+ *   提供了正文但空白才在此拒绝）
+ * - 编辑路径（required=false）：undefined 保持原值；null/空白返回 null（清空），
+ *   是否允许清空由 usecase 的「正文/存储引用双空」防御判定（文件资料允许正文为空）
  * - 超长拒绝
  */
 export function normalizeContentText(value: unknown, required: true): string;
 export function normalizeContentText(
   value: string | null | undefined,
   required: false,
-): string | undefined;
-export function normalizeContentText(value: unknown, required: boolean): string | undefined {
-  if (!required && value === undefined) {
+): string | null | undefined;
+export function normalizeContentText(value: unknown, required: boolean): string | null | undefined {
+  if (value === undefined) {
     return undefined;
   }
+  if (value === null) {
+    if (required) {
+      throw new DomainError(
+        REFERENCE_DOCUMENT_ERROR.INVALID_PARAMS,
+        '文本内容不能为空（正文与文件至少提供一个）',
+      );
+    }
+
+    return null;
+  }
   if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new DomainError(
-      REFERENCE_DOCUMENT_ERROR.INVALID_PARAMS,
-      '文本内容不能为空（本周仅支持文本内容来源，暂无文件上传兜底）',
-    );
+    if (required) {
+      throw new DomainError(
+        REFERENCE_DOCUMENT_ERROR.INVALID_PARAMS,
+        '文本内容不能为空（正文与文件至少提供一个）',
+      );
+    }
+
+    return null;
   }
   const normalized = value.trim();
   if (normalized.length > REFERENCE_DOCUMENT_CONTENT_MAX_LENGTH) {

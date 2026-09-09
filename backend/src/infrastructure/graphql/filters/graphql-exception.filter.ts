@@ -17,7 +17,9 @@ import { ArgumentsHost, Catch, HttpException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BaseExceptionFilter } from '@nestjs/core';
 import { GqlArgumentsHost } from '@nestjs/graphql';
+import type { Response } from 'express';
 import { GraphQLError, GraphQLResolveInfo } from 'graphql';
+import { resolveRestStatus } from '@core/common/errors/rest-error-status';
 
 /** 将 HTTP 状态码映射为 GraphQL 标准错误类别代码（extensions.code）
  *  注意：这是 GraphQL/Apollo 通用的大类，不是业务 errorCode（业务码放在 extensions.errorCode）
@@ -201,6 +203,12 @@ function mapDomainErrorToGqlCode(errorCode: string): string {
     [REFERENCE_DOCUMENT_ERROR.CREATION_FAILED]: 'INTERNAL_SERVER_ERROR',
     [REFERENCE_DOCUMENT_ERROR.UPDATE_FAILED]: 'INTERNAL_SERVER_ERROR',
     [REFERENCE_DOCUMENT_ERROR.DELETION_FAILED]: 'INTERNAL_SERVER_ERROR',
+    [REFERENCE_DOCUMENT_ERROR.UPLOAD_FILE_MISSING]: 'BAD_USER_INPUT',
+    [REFERENCE_DOCUMENT_ERROR.UPLOAD_FILE_TOO_LARGE]: 'BAD_USER_INPUT',
+    [REFERENCE_DOCUMENT_ERROR.UPLOAD_FILE_TYPE_NOT_ALLOWED]: 'BAD_USER_INPUT',
+    [REFERENCE_DOCUMENT_ERROR.CONTENT_SOURCE_EMPTY]: 'BAD_USER_INPUT',
+    // 存储对象缺失/不可读：统一按资源不存在归大类，不泄漏存储侧细节
+    [REFERENCE_DOCUMENT_ERROR.FILE_NOT_AVAILABLE]: 'NOT_FOUND',
 
     [CAPABILITY_ERROR.UNAVAILABLE]: 'INTERNAL_SERVER_ERROR',
   };
@@ -234,8 +242,20 @@ export class GqlAllExceptionsFilter extends BaseExceptionFilter {
   override catch(exception: unknown, host: ArgumentsHost) {
     const isProdEnv = this.configService.get<string>('NODE_ENV') === 'production';
 
-    // HTTP 请求仍用默认处理；其余（GraphQL/RPC/WS）走下方分支
+    // HTTP（REST）请求：DomainError 按统一 REST 错误体渲染（状态码 + code + message），
+    // 其余保持默认处理；防止守卫/REST 端点抛出的业务错误兜底成 500 丢失语义
     if (host.getType() === 'http') {
+      if (isDomainError(exception)) {
+        const response = host.switchToHttp().getResponse<Response>();
+        const status = resolveRestStatus(exception.code);
+        response.status(status).json({
+          statusCode: status,
+          code: exception.code,
+          message: exception.message,
+        });
+        return;
+      }
+
       return super.catch(exception, host);
     }
 

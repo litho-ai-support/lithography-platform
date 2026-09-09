@@ -5,6 +5,7 @@ import { AccountInstallerModule } from '@src/modules/account/account-installer.m
 import { LithographyModule } from '@src/modules/lithography/lithography.module';
 import { CreateReferenceDocumentUsecase } from './create-reference-document.usecase';
 import { GetReferenceDocumentDetailUsecase } from './get-reference-document-detail.usecase';
+import { GetReferenceDocumentFileUsecase } from './get-reference-document-file.usecase';
 import { ListReferenceDocumentsUsecase } from './list-reference-documents.usecase';
 import { SoftDeleteReferenceDocumentUsecase } from './soft-delete-reference-document.usecase';
 import { UpdateReferenceDocumentUsecase } from './update-reference-document.usecase';
@@ -14,6 +15,7 @@ import { UpdateReferenceDocumentUsecase } from './update-reference-document.usec
   providers: [
     CreateReferenceDocumentUsecase,
     GetReferenceDocumentDetailUsecase,
+    GetReferenceDocumentFileUsecase,
     ListReferenceDocumentsUsecase,
     SoftDeleteReferenceDocumentUsecase,
     UpdateReferenceDocumentUsecase,
@@ -21,6 +23,7 @@ import { UpdateReferenceDocumentUsecase } from './update-reference-document.usec
   exports: [
     CreateReferenceDocumentUsecase,
     GetReferenceDocumentDetailUsecase,
+    GetReferenceDocumentFileUsecase,
     ListReferenceDocumentsUsecase,
     SoftDeleteReferenceDocumentUsecase,
     UpdateReferenceDocumentUsecase,

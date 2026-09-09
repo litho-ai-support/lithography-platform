@@ -295,11 +295,14 @@ export type ReferenceDocumentDetailView = {
   updatedAt: Date;
 };
 
-/** 详情 QueryService 装配结果（昵称富集前） */
+/**
+ * 资料详情 QueryService 装配结果：含 storageReference 内部字段。
+ * storageReference 仅供下载用例定位存储对象，不进入对外 DTO（DetailView 保持剥离）。
+ */
 export type ReferenceDocumentDetailQueryResult = Omit<
   ReferenceDocumentDetailView,
   'creatorNickname'
-> & { createdByAccountId: number };
+> & { createdByAccountId: number; storageReference: string | null };
 
 /** 资料列表分页结果 */
 export type ReferenceDocumentListPage = {
@@ -312,20 +315,26 @@ export type ReferenceDocumentListPage = {
 /**
  * 资料创建写入数据（由 usecase 完成全部业务判定后传入）。
  * createdByAccountId 仅来自可信 Session，不得由客户端传入；
- * 本周仅 contentText 内容来源（无文件上传），storageBackend/storageReference 留空。
+ * 内容来源为正文或文件至少一个（chk_reference_document_content_source 兜底）：
+ * 纯文本创建时存储四字段为 null；文件创建时存储引用由服务端生成（不可猜测、无路径语义）。
  */
 export type ReferenceDocumentInsertData = {
   title: string;
   documentType: string;
   equipmentModelId: number | null;
   description: string | null;
-  contentText: string;
+  contentText: string | null;
+  originalFilename: string | null;
+  mimeType: string | null;
+  storageBackend: string | null;
+  storageReference: string | null;
   createdByAccountId: number;
 };
 
 /**
  * 资料编辑写入数据（由 usecase 完成字段合并与校验后传入，全量覆盖式更新）。
- * 满足实体 chk_reference_document_content_source：本周无文件来源，contentText 必须非空。
+ * 满足实体 chk_reference_document_content_source：正文与已有存储引用至少存在一个；
+ * 编辑不支持替换/移除文件，存储四列维持原值。
  */
 export type ReferenceDocumentUpdateData = {
   documentId: number;
@@ -333,7 +342,7 @@ export type ReferenceDocumentUpdateData = {
   documentType: string;
   equipmentModelId: number | null;
   description: string | null;
-  contentText: string;
+  contentText: string | null;
 };
 
 /**

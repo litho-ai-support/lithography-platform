@@ -1,10 +1,12 @@
 // src/bootstraps/api/api.module.ts
 import { GraphQLAdapterModule } from '@src/adapters/api/graphql/graphql-adapter.module';
+import { RestAdapterModule } from '@src/adapters/api/rest/rest-adapter.module';
 import { CapabilityModule } from '@src/infrastructure/capability/capability.module';
 import { AppConfigModule } from '@src/infrastructure/config/config.module';
 import { DatabaseModule } from '@src/infrastructure/database/database.module';
 import { TypeOrmTransactionModule } from '@src/infrastructure/database/transaction/typeorm-transaction.module';
 import { FieldEncryptionModule } from '@src/infrastructure/field-encryption/field-encryption.module';
+import { LocalReferenceDocumentStorageModule } from '@src/infrastructure/file-storage/local-reference-document-storage.module';
 import { GqlAllExceptionsFilter } from '@src/infrastructure/graphql/filters/graphql-exception.filter';
 import { AppGraphQLModule } from '@src/infrastructure/graphql/graphql.module';
 import { LoggerModule } from '@src/infrastructure/logger/logger.module';
@@ -26,8 +28,10 @@ import { ApiService } from './api.service';
     MiddlewareModule,
     DatabaseModule,
     TypeOrmTransactionModule,
+    LocalReferenceDocumentStorageModule,
     AppGraphQLModule,
     GraphQLAdapterModule,
+    RestAdapterModule,
     FieldEncryptionModule,
     PasswordModule,
     AccountModule,

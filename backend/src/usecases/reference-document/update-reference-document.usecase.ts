@@ -33,8 +33,8 @@ import {
  * 业务流程：
  * 1. 角色决策：仅真实 SUPER_ADMIN 可编辑（精确匹配，工程师一律拒绝）
  * 2. 输入决策：补丁至少一个可编辑字段；undefined=保持原值，
- *    equipmentModelId/description 显式 null=清空，contentText 不允许清空
- *    （本周无文件来源兜底，清空会违反 chk_reference_document_content_source）
+ *    equipmentModelId/description 显式 null=清空；contentText null/空白=清空，
+ *    仅当目标资料已有存储引用时放行（双空防御，chk_reference_document_content_source 兜底）
  * 3. 读取当前值合并补丁后全量校验（必填字段合并后仍必须满足）
  * 4. 事务内校验新设备型号存在 → 条件更新（deprecated=0 才可编辑，已软删不可编辑穿透）
  *
@@ -96,13 +96,14 @@ export class UpdateReferenceDocumentUsecase {
         : current.description;
     const contentText =
       patch.contentText !== undefined
-        ? normalizeContentText(patch.contentText, false)
+        ? (normalizeContentText(patch.contentText, false) ?? null)
         : current.contentText;
-    if (contentText === undefined || contentText === null) {
-      // 理论不可达（种子/写入路径保证 contentText 非空），防御性拒绝避免落入无内容来源状态
+    if (contentText === null && (current.storageReference ?? null) === null) {
+      // 内容来源双空拒绝（正文 + 已有存储引用至少一个）；仅文件资料编辑时
+      // contentText 保持 null 合法，不得误拦（chk_reference_document_content_source 兜底）
       throw new DomainError(
-        REFERENCE_DOCUMENT_ERROR.INVALID_PARAMS,
-        '文本内容不能为空（本周仅支持文本内容来源，暂无文件上传兜底）',
+        REFERENCE_DOCUMENT_ERROR.CONTENT_SOURCE_EMPTY,
+        '文本内容与文件至少需要一个',
       );
     }
 
