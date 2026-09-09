@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { resetReferenceDocumentMockState } from './reference-document-mock-adapter';
 import {
   createReferenceDocument,
+  createReferenceDocumentWithFile,
   deleteReferenceDocument,
+  downloadReferenceDocumentFile,
   fetchReferenceDocument,
   fetchReferenceDocuments,
   updateReferenceDocument,
@@ -174,7 +176,7 @@ describe('updateReferenceDocument', () => {
     }
   });
 
-  it('必填字段显式 null / 文本内容空白 / 型号不存在均拒绝', async () => {
+  it('必填字段显式 null / 型号不存在拒绝；纯文本资料清空正文拒绝', async () => {
     await expect(updateReferenceDocument(970001, { title: null })).resolves.toMatchObject({
       ok: false,
       reason: 'invalid-input',
@@ -183,13 +185,30 @@ describe('updateReferenceDocument', () => {
       ok: false,
       reason: 'invalid-input',
     });
-    await expect(updateReferenceDocument(970001, { contentText: '  ' })).resolves.toMatchObject({
+    // 纯文本资料（无存储元数据）清空正文仍拒绝，与后端双空防御同口径
+    await expect(updateReferenceDocument(970005, { contentText: '  ' })).resolves.toMatchObject({
       ok: false,
       reason: 'invalid-input',
     });
     await expect(
       updateReferenceDocument(970001, { equipmentModelId: 999999 }),
     ).resolves.toMatchObject({ ok: false, reason: 'model-not-found' });
+  });
+
+  it('已有文件的资料允许清空正文（编辑防御放宽，与后端同口径）', async () => {
+    await expect(updateReferenceDocument(970001, { contentText: '  ' })).resolves.toMatchObject({
+      ok: true,
+      id: 970001,
+    });
+
+    const detail = await fetchReferenceDocument(970001);
+
+    expect(detail.ok).toBe(true);
+
+    if (detail.ok) {
+      expect(detail.detail.contentText).toBeNull();
+      expect(detail.detail.originalFilename).not.toBeNull();
+    }
   });
 
   it('不存在 / 已软删统一 not-found', async () => {
@@ -227,6 +246,96 @@ describe('deleteReferenceDocument', () => {
       reason: 'not-found',
     });
     await expect(deleteReferenceDocument(999999)).resolves.toMatchObject({
+      ok: false,
+      reason: 'not-found',
+    });
+  });
+});
+
+describe('createReferenceDocumentWithFile（REST 同签名模拟）', () => {
+  const VALID_FILE_INPUT = {
+    title: '文件资料',
+    documentType: 'MAINTENANCE_GUIDE',
+    equipmentModelId: null,
+    description: null,
+    contentText: null,
+    file: new File(['bytes'], 'machine-manual.pdf', { type: 'application/pdf' }),
+  };
+
+  it('仅文件创建成功：落库存储元数据，正文为空；contentText 并存时同时保留', async () => {
+    const fileOnly = await createReferenceDocumentWithFile(VALID_FILE_INPUT);
+
+    expect(fileOnly).toMatchObject({ ok: true });
+
+    if (fileOnly.ok) {
+      const detail = await fetchReferenceDocument(fileOnly.id);
+
+      expect(detail.ok).toBe(true);
+
+      if (detail.ok) {
+        expect(detail.detail.originalFilename).toBe('machine-manual.pdf');
+        expect(detail.detail.mimeType).toBe('application/pdf');
+        expect(detail.detail.contentText).toBeNull();
+      }
+    }
+
+    const withText = await createReferenceDocumentWithFile({
+      ...VALID_FILE_INPUT,
+      title: '图文并存资料',
+      contentText: '补充正文',
+    });
+
+    expect(withText).toMatchObject({ ok: true });
+
+    if (withText.ok) {
+      const detail = await fetchReferenceDocument(withText.id);
+
+      if (detail.ok) {
+        expect(detail.detail.contentText).toBe('补充正文');
+      }
+    }
+  });
+
+  it.each([
+    ['标题空白', { ...VALID_FILE_INPUT, title: ' ' }],
+    ['白名单外扩展名', { ...VALID_FILE_INPUT, file: new File(['x'], 'virus.exe') }],
+    ['无扩展名', { ...VALID_FILE_INPUT, file: new File(['x'], 'no-extension') }],
+    ['型号不存在', { ...VALID_FILE_INPUT, equipmentModelId: 999999 }],
+  ])('%s 拒绝', async (_name, input) => {
+    const result = await createReferenceDocumentWithFile(input);
+
+    expect(result.ok).toBe(false);
+
+    if (!result.ok) {
+      expect(['invalid-input', 'file-type-not-allowed', 'model-not-found']).toContain(
+        result.reason,
+      );
+    }
+  });
+});
+
+describe('downloadReferenceDocumentFile（REST 同签名模拟）', () => {
+  it('文件资料返回合成字节与原始文件名', async () => {
+    const result = await downloadReferenceDocumentFile(970002);
+
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      expect(result.filename).toBe('nxe-3400c-source-guide-mock.pdf');
+      expect(result.blob.size).toBeGreaterThan(0);
+    }
+  });
+
+  it('纯文本资料 file-not-available；不存在与已软删统一 not-found', async () => {
+    await expect(downloadReferenceDocumentFile(970005)).resolves.toMatchObject({
+      ok: false,
+      reason: 'file-not-available',
+    });
+    await expect(downloadReferenceDocumentFile(999999)).resolves.toMatchObject({
+      ok: false,
+      reason: 'not-found',
+    });
+    await expect(downloadReferenceDocumentFile(970004)).resolves.toMatchObject({
       ok: false,
       reason: 'not-found',
     });

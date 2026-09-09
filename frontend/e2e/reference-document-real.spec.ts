@@ -1,5 +1,5 @@
 // e2e/reference-document-real.spec.ts
-// AI 参考资料库真实后端数据流 e2e（阶段三 T-03/T-04）。
+// AI 参考资料库真实后端数据流 e2e（阶段三 T-03/T-04 + 0909 第二轮文件上传/下载链路）。
 //
 // 数据基础：backend seed 预置参考资料 970001~970003（未软删，含通用/指定型号/
 // 有 storage 引用三种形态）与 970004（已软删，默认不可见）；seed 行只做只读断言。
@@ -10,14 +10,18 @@
 // 前提不满足（无本地后端 / 无 env）时用例自动跳过，不会以失败阻塞。
 
 import { expect, test } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 
 import {
   deleteE2EReferenceDocumentRowsByIds,
+  deleteE2EReferenceDocumentStorageFilesByIds,
+  findReferenceDocumentStorageReferenceById,
   hasFrontendGraphQLEndpoint,
   isRealBackendAvailable,
   readBackendEnv,
   readBackendEnvOrNull,
   realGraphqlCall,
+  realRestDownload,
   REFERENCE_DOCUMENT_E2E_TITLE_PREFIX,
 } from './helpers/real-backend';
 
@@ -262,6 +266,9 @@ test.describe('real backend reference document flow', () => {
     await expect(page.getByRole('button', { name: /编\s*辑/ })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '删 除' })).toHaveCount(0);
 
+    // 下载入口三角色可见（种子 970002 带原始文件名）：工程师只读但可下载
+    await expect(page.getByRole('button', { name: /下载文件/ })).toBeVisible();
+
     // 新增页被拒绝清单拦截，安全跳转回工程师主页
     await page.goto(NEW_PAGE_PATH);
     await expect(page).toHaveURL(/\/engineer$/);
@@ -319,5 +326,107 @@ test.describe('real backend reference document flow', () => {
 
     // 越权写确实未落库（列表中无本次运行创建的行）
     expect(await findE2EDocumentIds(env)).toEqual([]);
+  });
+
+  // 0909 第二轮阻塞项 1 主链路：管理员 UI 上传真实小文件创建（仅文件、正文留空）→
+  // 列表「原始文件名」列 → 详情元数据（含下载入口）→ 浏览器下载事件断言文件名与字节 →
+  // Node 侧 REST 下载字节比对 → 软删消失；存储物理文件按本次运行的精确引用路径清理。
+  test('super admin file upload and download journey via rest multipart', async ({ page }) => {
+    test.setTimeout(90_000);
+    const env = readBackendEnv();
+
+    await page.goto('/login');
+    await page.getByLabel('账号或邮箱').fill('mock_super_admin');
+    await page.getByLabel('密码').fill(env.MOCK_SEED_PASSWORD);
+    await page.getByRole('button', { name: /登\s*录/ }).click();
+    await expect(page).toHaveURL(/\/admin$/);
+
+    const createdIdsFromUi: number[] = [];
+    const uploadBytes = new TextEncoder().encode(
+      '# 光闸联锁检修记录\n\n每周检查光闸联锁与急停按钮，异常时按 A-3 流程处置。',
+    );
+    const uploadFilename = `optics-check-${RUN_ID}.md`;
+
+    try {
+      await page.goto(LIST_PATH);
+      await expect(page.getByRole('heading', { name: '参考资料库' })).toBeVisible();
+      await page.getByRole('button', { name: '新增资料' }).click();
+      await expect(page).toHaveURL(new RegExp(NEW_PAGE_PATH));
+      await page.getByLabel('文档标题').fill(`${RUN_TITLE_KEYWORD}（文件上传）`);
+      await page.getByRole('combobox').nth(0).click();
+      await page.locator('.ant-select-item-option', { hasText: '检查表' }).click();
+
+      // 仅文件创建：正文留空（双空拦截不触发，文件已提供），经 Upload 手动模式暂存
+      await page.setInputFiles('input[type="file"]', {
+        buffer: Buffer.from(uploadBytes),
+        mimeType: 'text/markdown',
+        name: uploadFilename,
+      });
+      await expect(page.getByText(uploadFilename)).toBeVisible();
+      await page.getByRole('button', { name: /创建资料/ }).click();
+
+      await expect(page.getByText('参考资料创建成功')).toBeVisible();
+      await page.getByRole('button', { name: '查看详情' }).click();
+      await expect(page).toHaveURL(/\/reference-documents\/\d+$/);
+      const createdIdMatch = page.url().match(/\/reference-documents\/(\d+)$/);
+
+      if (createdIdMatch) {
+        createdIdsFromUi.push(Number(createdIdMatch[1]));
+      }
+
+      const createdId = createdIdsFromUi[0];
+
+      expect(createdId).toBeDefined();
+
+      // 详情元数据：原始文件名 / 文件类型落库；仅文件创建无正文；下载入口恒显
+      await expect(page.getByText(`${RUN_TITLE_KEYWORD}（文件上传）`).first()).toBeVisible();
+      await expect(page.getByText(uploadFilename).first()).toBeVisible();
+      await expect(page.getByText('text/markdown')).toBeVisible();
+      await expect(page.getByText('该资料暂无文本内容（仅存储引用）。')).toBeVisible();
+      await expect(page.getByRole('button', { name: /下载文件/ })).toBeVisible();
+
+      // 服务端生成了白名单格式的存储引用（32 位 hex + 扩展名）
+      const storageReference = findReferenceDocumentStorageReferenceById(createdId);
+
+      expect(storageReference).toMatch(/^[0-9a-f]{32}\.[a-z0-9]{1,8}$/);
+
+      // 浏览器下载：Playwright download 事件断言文件名与字节内容一致
+      const downloadPromise = page.waitForEvent('download');
+
+      await page.getByRole('button', { name: /下载文件/ }).click();
+
+      const download = await downloadPromise;
+
+      expect(download.suggestedFilename()).toBe(uploadFilename);
+      expect(new Uint8Array(readFileSync(await download.path()))).toEqual(uploadBytes);
+
+      // Node 侧 REST 直连下载：Content-Type 与字节与上传一致（服务端存储往返无损）
+      const restDownload = await realRestDownload(env, createdId);
+
+      expect(restDownload.status).toBe(200);
+      expect(restDownload.contentType).toBe('text/markdown');
+      expect(restDownload.contentDisposition).toContain(uploadFilename);
+      expect(new Uint8Array(restDownload.buffer)).toEqual(uploadBytes);
+
+      // 列表「原始文件名」列展示上传文件名
+      await page.goto(LIST_PATH);
+      await expect(page.getByText(uploadFilename)).toBeVisible();
+
+      // 回到详情后软删：二次确认 → 回列表且该行消失
+      await page.goto(`/reference-documents/${createdId}`);
+      await expect(page.getByText(`${RUN_TITLE_KEYWORD}（文件上传）`).first()).toBeVisible();
+      await page.getByRole('button', { name: '删 除' }).click();
+      await page.getByRole('button', { name: '确认删除' }).click();
+      await expect(page.getByText('参考资料已删除。')).toBeVisible();
+      await expect(page.getByText(uploadFilename)).toHaveCount(0);
+    } finally {
+      await cleanupE2EDocuments(env, createdIdsFromUi);
+      // 存储物理文件按本次运行记录的精确引用路径清理（不扫描批量删）
+      try {
+        deleteE2EReferenceDocumentStorageFilesByIds(createdIdsFromUi);
+      } catch (error) {
+        console.warn(`[e2e] 存储文件清理跳过：${(error as Error).message}`);
+      }
+    }
   });
 });

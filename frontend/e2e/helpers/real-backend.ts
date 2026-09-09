@@ -9,11 +9,16 @@
 // 真实链路用例产生的数据由用例自行清理或恢复，不污染共享开发库基线。
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const BACKEND_GRAPHQL = 'http://127.0.0.1:3000/graphql';
 export const BACKEND_HEALTH = 'http://127.0.0.1:3000/health';
+export const BACKEND_REST_UPLOAD = 'http://127.0.0.1:3000/api/reference-documents/upload';
+export function backendRestDownloadUrl(id: number): string {
+  return `http://127.0.0.1:3000/api/reference-documents/${id}/download`;
+}
 
 const BACKEND_ENV_FILE = fileURLToPath(
   new URL('../../../backend/env/.env.development', import.meta.url),
@@ -123,6 +128,10 @@ export function deleteRepairRequestByRequestNo(requestNo: string): void {
 // 并行运行也可能互删（负责人 0909 阻塞项 1）。
 export const REFERENCE_DOCUMENT_E2E_TITLE_PREFIX = 'E2E 参考资料验收行';
 
+// 服务端生成的存储引用格式（与 backend local-storage 实现同口径白名单）：
+// 32 位小写 hex + 白名单扩展名，天然无路径语义；任何白名单外的引用都拒绝清理。
+const STORAGE_REFERENCE_PATTERN = /^[0-9a-f]{32}\.[a-z0-9]{1,8}$/;
+
 // 物理清理安全门：物理 DELETE 只允许发生在「显式 opt-in + 库名属测试库」的配置上。
 // 共享开发库（DB_NAME 不含 e2e/test 标记）一律在启动 mysql 进程前拒绝；
 // 宁可残留软删行（对列表/详情不可见，由库策略另行清理），也不按前缀物理删除。
@@ -167,6 +176,144 @@ export function deleteE2EReferenceDocumentRowsByIds(ids: readonly number[]): voi
   assertPhysicalCleanupAllowed(readBackendEnv());
 
   mysqlQuery(`DELETE FROM reference_document WHERE id IN (${ids.join(',')})`);
+}
+
+// ---- 文件上传 / 下载 REST 链路（0909 第二轮阻塞项 1 的 e2e 支撑） ----
+
+/** 以指定账号真实登录换取 accessToken（Node 侧 REST 调用复用 realLogin 收口） */
+async function realAccessTokenOrThrow(
+  env: Record<string, string>,
+  loginName: string,
+): Promise<string> {
+  const { accessToken } = await realLogin(env, loginName);
+
+  return accessToken;
+}
+
+/**
+ * Node 侧真实 multipart 上传（绕过 UI 直接打 REST 边界，用于权限/错误分支断言；
+ * UI 主链路走 setInputFiles 走浏览器真实通道）。返回完整响应体（统一信封）。
+ */
+export async function realRestUpload(
+  env: Record<string, string>,
+  file: { name: string; contentType: string; bytes: Uint8Array },
+  fields: Record<string, string>,
+  loginName = 'mock_super_admin',
+): Promise<{ status: number; body: unknown }> {
+  const accessToken = await realAccessTokenOrThrow(env, loginName);
+  const formData = new FormData();
+
+  formData.append(
+    'file',
+    new Blob([file.bytes as BlobPart], { type: file.contentType }),
+    file.name,
+  );
+  for (const [key, value] of Object.entries(fields)) {
+    formData.append(key, value);
+  }
+
+  const response = await fetch(BACKEND_REST_UPLOAD, {
+    body: formData,
+    headers: { Authorization: `Bearer ${accessToken}` },
+    method: 'POST',
+  });
+
+  return { status: response.status, body: await response.json().catch(() => null) };
+}
+
+/**
+ * Node 侧真实流式下载（断言 Content-Type / Content-Disposition / 字节内容）。
+ * 返回 buffer 而非 text：下载对象是二进制文件。
+ */
+export async function realRestDownload(
+  env: Record<string, string>,
+  id: number,
+  loginName = 'mock_super_admin',
+): Promise<{
+  status: number;
+  contentType: string | null;
+  contentDisposition: string | null;
+  buffer: ArrayBuffer;
+  body: unknown;
+}> {
+  const accessToken = await realAccessTokenOrThrow(env, loginName);
+  const response = await fetch(backendRestDownloadUrl(id), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const contentType = response.headers.get('content-type');
+  const contentDisposition = response.headers.get('content-disposition');
+
+  if (!response.ok) {
+    return {
+      status: response.status,
+      contentType,
+      contentDisposition,
+      buffer: new ArrayBuffer(0),
+      body: await response.json().catch(() => null),
+    };
+  }
+
+  return {
+    status: response.status,
+    contentType,
+    contentDisposition,
+    buffer: await response.arrayBuffer(),
+    body: null,
+  };
+}
+
+/** 按精确 ID 读取存储引用（SELECT 只读，不涉及清理安全门；无引用/无行返回 null） */
+export function findReferenceDocumentStorageReferenceById(id: number): string | null {
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`存储引用查询目标 ID 未通过正整数校验：${JSON.stringify(id)}`);
+  }
+
+  const value = mysqlQuery(
+    `SELECT IFNULL(storage_reference, '') FROM reference_document WHERE id = ${id}`,
+  );
+
+  return value.length > 0 ? value : null;
+}
+
+/**
+ * 按本次运行上传产生的精确 ID 清理存储物理文件（0909 计划要求：按精确引用路径，不扫描批量删）。
+ * 引用必须命中服务端生成格式白名单，且解析后必须落在存储目录内，否则拒绝删除。
+ */
+export function deleteE2EReferenceDocumentStorageFilesByIds(ids: readonly number[]): void {
+  if (ids.length === 0) {
+    return;
+  }
+
+  for (const id of ids) {
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error(`存储文件清理目标 ID 未通过正整数校验：${JSON.stringify(id)}`);
+    }
+  }
+
+  const env = readBackendEnv();
+  const storageDir = path.resolve(
+    fileURLToPath(new URL('../../../backend', import.meta.url)),
+    env.REFERENCE_DOCUMENT_STORAGE_DIR || 'var/reference-documents',
+  );
+
+  for (const id of ids) {
+    const reference = findReferenceDocumentStorageReferenceById(id);
+
+    if (reference === null || !STORAGE_REFERENCE_PATTERN.test(reference)) {
+      continue;
+    }
+
+    const filePath = path.resolve(storageDir, reference);
+
+    // 双保险：断言解析后的精确路径仍在存储目录内（与后端 resolve 防御同口径）
+    if (!filePath.startsWith(`${storageDir}${path.sep}`)) {
+      throw new Error(`存储文件路径越界，拒绝删除：${JSON.stringify(filePath)}`);
+    }
+
+    if (existsSync(filePath)) {
+      rmSync(filePath, { force: true });
+    }
+  }
 }
 
 // 可用性探针：健康检查 + 用真实 Mock 账号登录（同时验证后端已种子且登录链路可用）。

@@ -10,14 +10,17 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assertPhysicalCleanupAllowed,
   deleteE2EReferenceDocumentRowsByIds,
+  deleteE2EReferenceDocumentStorageFilesByIds,
   deleteRepairRequestByRequestNo,
   findRepairRequestByRequestNo,
   hasFrontendGraphQLEndpoint,
 } from './real-backend';
 
-const { execFileSyncMock, readFileSyncMock } = vi.hoisted(() => ({
+const { execFileSyncMock, existsSyncMock, readFileSyncMock, rmSyncMock } = vi.hoisted(() => ({
   execFileSyncMock: vi.fn(),
+  existsSyncMock: vi.fn(),
   readFileSyncMock: vi.fn(),
+  rmSyncMock: vi.fn(),
 }));
 
 // execFileSync（mysql 进程）与 readFileSync（后端 env 文件）替换为 mock：
@@ -28,7 +31,9 @@ vi.mock('node:child_process', async (importOriginal) => ({
 }));
 vi.mock('node:fs', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs')>()),
+  existsSync: existsSyncMock,
   readFileSync: readFileSyncMock,
+  rmSync: rmSyncMock,
 }));
 
 const VALID_REQUEST_NO = 'RR20260902000000AB12CD';
@@ -223,5 +228,71 @@ describe('real-backend 前端真实通道探测（负责人 0909 必须修复 3�
     });
 
     expect(hasFrontendGraphQLEndpoint()).toBe(true);
+  });
+});
+
+describe('real-backend 存储物理文件清理（0909 第二轮：按精确引用路径，不扫描批量删）', () => {
+  const VALID_REFERENCE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90.pdf';
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset().mockReturnValue('');
+    existsSyncMock.mockReset().mockReturnValue(false);
+    rmSyncMock.mockReset();
+    readFileSyncMock
+      .mockReset()
+      .mockReturnValue(
+        'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=app\n',
+      );
+  });
+
+  it('空 ID 列表是 no-op，不启动 mysql 进程', () => {
+    expect(() => deleteE2EReferenceDocumentStorageFilesByIds([])).not.toThrow();
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])('非安全正整数 ID（%p）直接抛错且不访问数据库', (invalidId) => {
+    expect(() => deleteE2EReferenceDocumentStorageFilesByIds([invalidId])).toThrow(
+      '未通过正整数校验',
+    );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('合法引用：仅删除存储目录内解析后的精确路径，并带格式白名单校验', () => {
+    execFileSyncMock.mockReturnValue(VALID_REFERENCE);
+    existsSyncMock.mockReturnValue(true);
+
+    deleteE2EReferenceDocumentStorageFilesByIds([970100]);
+
+    // 先按精确 ID 查引用（SELECT），再删除解析后的唯一文件
+    expect(executedSql()).toBe(
+      "SELECT IFNULL(storage_reference, '') FROM reference_document WHERE id = 970100",
+    );
+    expect(rmSyncMock).toHaveBeenCalledTimes(1);
+
+    const removedPath = rmSyncMock.mock.calls[0]?.[0] as string;
+
+    expect(removedPath).toContain('var/reference-documents');
+    expect(removedPath.endsWith(VALID_REFERENCE)).toBe(true);
+    expect(removedPath).not.toContain('..');
+  });
+
+  it.each([
+    ['路径穿越', '../../../etc/passwd'],
+    ['非白名单格式', 'short-name.pdf'],
+    ['目录拼接引用', `${VALID_REFERENCE}/../../evil.pdf`],
+  ])('白名单外引用（%s）拒绝删除物理文件', (_label, reference) => {
+    execFileSyncMock.mockReturnValue(reference);
+
+    deleteE2EReferenceDocumentStorageFilesByIds([970100]);
+
+    expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('无存储引用的行（纯文本资料）安全跳过', () => {
+    execFileSyncMock.mockReturnValue('');
+
+    deleteE2EReferenceDocumentStorageFilesByIds([970005]);
+
+    expect(rmSyncMock).not.toHaveBeenCalled();
   });
 });

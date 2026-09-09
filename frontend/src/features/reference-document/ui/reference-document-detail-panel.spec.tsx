@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ReferenceDocumentDetail } from '../infrastructure/reference-document.types';
 import * as referenceDocumentAdapter from '../infrastructure/reference-document-adapter';
+import * as referenceDocumentHttpAdapter from '../infrastructure/reference-document-http-adapter';
 
 import { ReferenceDocumentDetailPanel } from './reference-document-detail-panel';
 
@@ -25,6 +26,15 @@ vi.mock('../infrastructure/reference-document-adapter', async (importOriginal) =
     fetchReferenceDocument: vi.fn(),
     updateReferenceDocument: vi.fn(),
     deleteReferenceDocument: vi.fn(),
+  };
+});
+
+vi.mock('../infrastructure/reference-document-http-adapter', async (importOriginal) => {
+  const actual = await importOriginal<typeof referenceDocumentHttpAdapter>();
+
+  return {
+    ...actual,
+    downloadReferenceDocumentFile: vi.fn(),
   };
 });
 
@@ -42,6 +52,7 @@ const navigateMock = vi.fn();
 const fetchDetailMock = vi.mocked(referenceDocumentAdapter.fetchReferenceDocument);
 const updateMock = vi.mocked(referenceDocumentAdapter.updateReferenceDocument);
 const deleteMock = vi.mocked(referenceDocumentAdapter.deleteReferenceDocument);
+const downloadFileMock = vi.mocked(referenceDocumentHttpAdapter.downloadReferenceDocumentFile);
 
 function buildDetail(id: number): ReferenceDocumentDetail {
   return {
@@ -64,7 +75,12 @@ beforeEach(() => {
   fetchDetailMock.mockReset();
   updateMock.mockReset();
   deleteMock.mockReset();
+  downloadFileMock.mockReset();
   navigateMock.mockReset();
+
+  // jsdom 无 blob URL 体系，浏览器保存链路用 spy 钉住调用形态
+  URL.createObjectURL = vi.fn(() => 'blob:mock-url');
+  URL.revokeObjectURL = vi.fn();
 });
 
 describe('ReferenceDocumentDetailPanel', () => {
@@ -93,6 +109,64 @@ describe('ReferenceDocumentDetailPanel', () => {
 
     expect(screen.getByRole('button', { name: /编\s*辑/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /删\s*除/ })).toBeTruthy();
+  });
+
+  it('下载入口：canManage=false（ENGINEER）也可见；点击后经 blob URL 触发浏览器保存', async () => {
+    const blob = new Blob(['pdf-bytes'], { type: 'application/pdf' });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fetchDetailMock.mockResolvedValue({ ok: true, detail: buildDetail(970002) });
+    downloadFileMock.mockResolvedValue({
+      ok: true,
+      blob,
+      filename: 'nxe-3400c-source-guide-mock.pdf',
+    });
+
+    render(<ReferenceDocumentDetailPanel canManage={false} documentId={970002} />);
+    await screen.findByText('NXE:3400C 光源维护指南（Mock）');
+
+    // 三角色可见：canManage=false 仍显示下载入口
+    fireEvent.click(screen.getByRole('button', { name: /下载文件/ }));
+
+    await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
+    expect(downloadFileMock).toHaveBeenCalledWith(970002);
+    expect(URL.createObjectURL).toHaveBeenCalledWith(blob);
+
+    // a[download] 带服务端文件名，保存后回收 URL
+    const anchor = clickSpy.mock.contexts[0] as HTMLAnchorElement;
+
+    expect(anchor.download).toBe('nxe-3400c-source-guide-mock.pdf');
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+
+    clickSpy.mockRestore();
+  });
+
+  it('纯文本资料不显示下载入口', async () => {
+    fetchDetailMock.mockResolvedValue({
+      ok: true,
+      detail: { ...buildDetail(970005), originalFilename: null, mimeType: null },
+    });
+
+    render(<ReferenceDocumentDetailPanel canManage={false} documentId={970005} />);
+    await screen.findByText('NXE:3400C 光源维护指南（Mock）');
+
+    expect(screen.queryByRole('button', { name: /下载文件/ })).toBeNull();
+  });
+
+  it('下载失败展示受控错误文案', async () => {
+    fetchDetailMock.mockResolvedValue({ ok: true, detail: buildDetail(970002) });
+    downloadFileMock.mockResolvedValue({
+      ok: false,
+      reason: 'file-not-available',
+      message: '该资料没有可下载的文件。',
+    });
+
+    render(<ReferenceDocumentDetailPanel canManage={false} documentId={970002} />);
+    await screen.findByText('NXE:3400C 光源维护指南（Mock）');
+
+    fireEvent.click(screen.getByRole('button', { name: /下载文件/ }));
+
+    expect(await screen.findByText('该资料没有可下载的文件。')).toBeTruthy();
   });
 
   it('统一 NOT_FOUND：不存在与已软删呈现 warning 态而非数据', async () => {

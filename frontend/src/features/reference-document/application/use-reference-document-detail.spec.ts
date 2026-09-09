@@ -171,7 +171,10 @@ describe('useReferenceDocumentDetail 竞态保护', () => {
   // null 分支同样递增序号使在途 A 请求过期；以下三例分别钉住 success / not-found / failure。
   describe('A 在途时切换到 null（无效路由）', () => {
     function arrangeInFlightToNull() {
-      const promiseA = deferred<{ ok: true; detail: ReferenceDocumentDetail }>();
+      const promiseA = deferred<
+        | { ok: true; detail: ReferenceDocumentDetail }
+        | { ok: false; reason: string; message: string }
+      >();
 
       fetchDetailMock.mockImplementation((id) =>
         id === 970001 ? (promiseA.promise as never) : (Promise.resolve() as never),
@@ -185,9 +188,7 @@ describe('useReferenceDocumentDetail 竞态保护', () => {
     }
 
     async function switchToNullAndWait(
-      rendered: ReturnType<
-        typeof renderHook<{ id: number | null }, { state: { status: string; message?: string } }>
-      >,
+      rendered: ReturnType<typeof arrangeInFlightToNull>['rendered'],
     ) {
       rendered.rerender({ id: null });
       await waitFor(() => expect(rendered.result.current.state.status).toBe('not-found'));
