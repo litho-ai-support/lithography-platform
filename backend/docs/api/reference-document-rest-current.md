@@ -49,7 +49,7 @@ multipart/form-data；权限：仅 `SUPER_ADMIN`（精确判定，不继承）�
 
 ## GET /api/reference-documents/:id/download
 
-权限：所有已登录角色（`hasRole` 层级：SUPER_ADMIN / ENGINEER / CUSTOMER）。成功 HTTP 200。
+权限：SUPER_ADMIN / ENGINEER（`hasRole` 层级；负责人 0910 裁定收窄——CUSTOMER 无页面访问权限，下载不对其开放，请求返回 HTTP 403 `INSUFFICIENT_PERMISSIONS`，与 GraphQL 读口径一致）。成功 HTTP 200。
 
 - 复用统一 NOT_FOUND 口径：不存在 / 已软删 → `NOT_FOUND`（HTTP 404，防探测，不泄露删除状态）。
 - 无 `storageReference`（纯文本资料）或存储对象缺失 → `FILE_NOT_AVAILABLE`（HTTP 404，受控错误，不泄露服务器路径）。
@@ -64,7 +64,7 @@ multipart/form-data；权限：仅 `SUPER_ADMIN`（精确判定，不继承）�
 | code | HTTP | 说明 |
 | --- | --- | --- |
 | `JWT_ERROR` / `AUTH_ERROR` 组 | 401 | 未登录 / Token 失效 |
-| `PERMISSION_ERROR` 组 | 403 | 角色不满足（如工程师上传） |
+| `PERMISSION_ERROR` 组 | 403 | 角色不满足（如工程师上传、客户下载） |
 | `INPUT_NORMALIZE_*` / `REFERENCE_DOCUMENT_INVALID_PARAMS` | 400 | 字段校验失败 |
 | `REFERENCE_DOCUMENT_EQUIPMENT_MODEL_NOT_FOUND` | 400 | 型号不存在 |
 | `REFERENCE_DOCUMENT_CONTENT_SOURCE_EMPTY` | 400 | 正文与文件双空 |

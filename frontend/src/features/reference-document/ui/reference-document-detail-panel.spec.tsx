@@ -126,7 +126,7 @@ describe('ReferenceDocumentDetailPanel', () => {
     render(<ReferenceDocumentDetailPanel canManage={false} documentId={970002} />);
     await screen.findByText('NXE:3400C 光源维护指南（Mock）');
 
-    // 三角色可见：canManage=false 仍显示下载入口
+    // 只读角色（ENGINEER）可见：canManage=false 仍显示下载入口
     fireEvent.click(screen.getByRole('button', { name: /下载文件/ }));
 
     await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));

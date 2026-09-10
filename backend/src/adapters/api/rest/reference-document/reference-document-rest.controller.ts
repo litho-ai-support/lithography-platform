@@ -222,10 +222,10 @@ export class ReferenceDocumentRestController {
     }
   }
 
-  /** 文件下载（所有已登录角色；软删/不存在/文件缺失统一受控错误，不泄露路径） */
+  /** 文件下载（ENGINEER + SUPER_ADMIN，与 GraphQL 读口径一致——客户无页面访问权限不开放下载；软删/不存在/文件缺失统一受控错误，不泄露路径） */
   @Get(':id/download')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(IdentityTypeEnum.SUPER_ADMIN, IdentityTypeEnum.ENGINEER, IdentityTypeEnum.CUSTOMER)
+  @Roles(IdentityTypeEnum.SUPER_ADMIN, IdentityTypeEnum.ENGINEER)
   async download(
     @Param('id', ParseIntPipe) id: number,
     @currentUser() user: JwtPayload,

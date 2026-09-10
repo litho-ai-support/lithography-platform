@@ -19,7 +19,7 @@ import {
 import { REFERENCE_DOCUMENT_STORAGE } from './reference-document-storage.contract';
 
 /**
- * 获取参考资料下载文件用例（所有已登录角色）。
+ * 获取参考资料下载文件用例（ENGINEER + SUPER_ADMIN，负责人 0910 裁定收窄，与 GraphQL 读口径一致）。
  *
  * - 复用统一 NOT_FOUND 口径：不存在 / 已软删一致拒绝，不泄露删除状态；
  * - 无存储引用（纯文本资料）或存储对象缺失/引用非法：统一 FILE_NOT_AVAILABLE 受控错误，

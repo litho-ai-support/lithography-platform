@@ -831,11 +831,11 @@ describe('AI 参考资料库 (e2e)', () => {
       expect(rows).toHaveLength(0);
     });
 
-    it('三角色下载成功：Content-Type 取 DB MIME、RFC 5987 文件名、字节一致', async () => {
+    it('SUPER_ADMIN 与 ENGINEER 下载成功：Content-Type 取 DB MIME、RFC 5987 文件名、字节一致', async () => {
       // 落库名为 ASCII；改写为中文名以钉住含空格与 CJK 的 ext-value 编码链路
       await documentRepository.update(fileOnlyDocumentId, { originalFilename: 'E2E 报告.txt' });
 
-      for (const token of [adminToken, engineerToken, customerToken]) {
+      for (const token of [adminToken, engineerToken]) {
         const response = await download(token, fileOnlyDocumentId).expect(200);
         expect(response.headers['content-type']).toContain('text/plain');
         expect(response.headers['content-disposition']).toContain(
@@ -843,6 +843,14 @@ describe('AI 参考资料库 (e2e)', () => {
         );
         expect(response.text).toBe('file-only-bytes');
       }
+    });
+
+    it('客户下载 403（负责人 0910 裁定：CUSTOMER 无页面访问权限，不开放下载）', async () => {
+      const response = await download(customerToken, fileOnlyDocumentId).expect(403);
+      expect(response.body.data).toMatchObject({
+        statusCode: 403,
+        code: 'INSUFFICIENT_PERMISSIONS',
+      });
     });
 
     it('匿名下载 401', async () => {
@@ -913,7 +921,7 @@ describe('AI 参考资料库 (e2e)', () => {
       );
       const row = await documentRepository.findOne({ where: { title: 'E2E 缺失文件行' } });
 
-      const response = await download(customerToken, row!.id).expect(404);
+      const response = await download(engineerToken, row!.id).expect(404);
       expect(response.body.data).toMatchObject({
         statusCode: 404,
         code: 'REFERENCE_DOCUMENT_FILE_NOT_AVAILABLE',

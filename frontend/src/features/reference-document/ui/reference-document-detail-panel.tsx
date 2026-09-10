@@ -37,7 +37,8 @@ import { REFERENCE_DOCUMENTS_LIST_PATH } from './reference-document-paths';
  *   已有文件的资料允许清空正文（与后端防御放宽同口径，经 hasExistingFile 传给表单）；
  * - 软删 Popconfirm 二次确认；删除中禁用；失败给明确原因并刷新数据态，
  *   不得乐观成功（backend e2e 口径：重复软删统一 NOT_FOUND）；
- * - 带文件的资料恒显「下载文件」按钮（三角色可见）：fetch blob 后经
+ * - 带文件的资料恒显「下载文件」按钮（页面可见角色均可下载；CUSTOMER 无页面访问权限，
+ *   REST 下载后端也已收窄，负责人 0910 裁定）：fetch blob 后经
  *   createObjectURL + a[download] 触发浏览器保存（Authorization 头鉴权，
  *   不用 window.open / 直链），失败 message 反馈。
  */

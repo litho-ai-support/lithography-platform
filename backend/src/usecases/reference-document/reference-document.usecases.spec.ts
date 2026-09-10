@@ -647,7 +647,7 @@ describe('GetReferenceDocumentFileUsecase', () => {
     storageReference: 'a1b2c3d4e5f60718293a4b5c6d7e8f90.pdf',
   });
 
-  it('三角色均可下载（含 CUSTOMER）：返回展示文件名/MIME 与绝对路径载荷', async () => {
+  it('SUPER_ADMIN 与 ENGINEER 均可下载：返回展示文件名/MIME 与绝对路径载荷', async () => {
     const queryService = makeQueryService();
     queryService.findDetail.mockResolvedValue(fileDetail);
     const storage = makeStorage();
@@ -656,7 +656,7 @@ describe('GetReferenceDocumentFileUsecase', () => {
     storage.resolve.mockReturnValue(existingPath);
     const { usecase } = makeUsecase({ queryService, storage });
 
-    for (const roles of [['SUPER_ADMIN'], ['ENGINEER'], ['CUSTOMER']]) {
+    for (const roles of [['SUPER_ADMIN'], ['ENGINEER']]) {
       await expect(
         usecase.execute({ session: session(roles), documentId: 970001 }),
       ).resolves.toMatchObject({
@@ -667,6 +667,14 @@ describe('GetReferenceDocumentFileUsecase', () => {
       });
     }
     expect(storage.resolve).toHaveBeenCalledWith(fileDetail.storageReference);
+  });
+
+  it('CUSTOMER 拒绝下载（0910 裁定收窄，与 GraphQL 读口径一致）', async () => {
+    const { usecase } = makeUsecase();
+
+    await expect(
+      usecase.execute({ session: session(['CUSTOMER']), documentId: 970001 }),
+    ).rejects.toMatchObject({ code: PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS });
   });
 
   it('空角色会话拒绝（匿名会话不允许下载）', async () => {
@@ -684,7 +692,7 @@ describe('GetReferenceDocumentFileUsecase', () => {
     const { usecase } = makeUsecase({ queryService, storage });
 
     await expect(
-      usecase.execute({ session: session(['CUSTOMER']), documentId: 970001 }),
+      usecase.execute({ session: session(['ENGINEER']), documentId: 970001 }),
     ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.FILE_NOT_AVAILABLE });
     expect(storage.resolve).not.toHaveBeenCalled();
   });

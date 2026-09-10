@@ -40,14 +40,15 @@ export function assertReferenceDocumentWriteRole(roles: readonly string[]): void
 }
 
 /**
- * 下载角色兜底决策：所有已登录角色均可下载（负责人 0909 第二轮口径，
- * 不按上传者或所属用户限制）。匿名请求由守卫层拦截，此处兜底断言会话携带角色。
+ * 下载角色兜底决策：ENGINEER + SUPER_ADMIN（负责人 0910 裁定收窄，与 GraphQL 读口径一致——
+ * 客户无页面访问权限，下载入口不对其暴露；不按上传者或所属用户限制）。
+ * 守卫层 @Roles(ENGINEER, SUPER_ADMIN) 已拦截，此处兜底防止守卫被绕过或角色数据漂移。
  */
 export function assertReferenceDocumentDownloadRole(roles: readonly string[]): void {
-  if (roles.length === 0) {
+  if (!hasRole(roles, IdentityTypeEnum.ENGINEER)) {
     throw new DomainError(
       PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS,
-      '未登录或会话缺少角色信息，无法下载参考资料文件',
+      '仅工程师与管理员账号可以下载参考资料文件',
       { roles: [...roles] },
     );
   }
