@@ -15,6 +15,9 @@ import type {
  * - Token 读取复用共享层既有桥接（configureGraphQLRuntime 注入的 getAccessToken），
  *   不直接依赖 auth-session——与 GraphQL authLink 的注入模式同源，项目使用
  *   Authorization 头鉴权，REST 下载无法用 window.open / <a href> 直链；
+ * - 会话失效（401）与 GraphQL 链路同口径：先尝试 refreshSession 刷新后重试一次，
+ *   无刷新能力、刷新失败或重试仍 401 时宣布会话失效（onAuthFailure），
+ *   由 app 装配统一清理与跳转（见 docs/project-convention/graphql-ingress-auth-boundary.md）；
  * - REST 边界无 GraphQL extensions 错误契约，响应为统一信封
  *   { success, data: { statusCode, code, message } }，本层把所有失败
  *   （transport / auth / 业务拒绝）统一归并为显式失败结果，表单与详情层
@@ -87,6 +90,55 @@ function readAccessToken(): string | null {
   return typeof token === 'string' && token.length > 0 ? token : null;
 }
 
+/** REST 请求初始化（Token 头由 fetchRestWithAuthRetry 统一注入） */
+type RestRequestInit = { method?: string; body?: BodyInit };
+
+/**
+ * 带会话失效处理的 REST 请求：401 时与 GraphQL executeGraphQL 同口径
+ * （refreshSession 刷新后重试一次；无刷新能力 / 刷新失败 / 重试仍 401 时
+ * 调 onAuthFailure 宣布会话失效），避免 Token 过期后上传/下载只弹通用错误
+ * 而不跳登录页的体验断链。FormData / URLSearchParams 可重复传入 fetch，重试无需重建。
+ */
+async function fetchRestWithAuthRetry(url: string, init: RestRequestInit): Promise<Response> {
+  const send = (token: string | null) =>
+    fetch(url, {
+      ...init,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+
+  let response = await send(readAccessToken());
+
+  if (response.status !== 401) {
+    return response;
+  }
+
+  const { refreshSession, onAuthFailure } = getGraphQLRuntimeConfig();
+
+  if (!refreshSession) {
+    // 没有刷新能力时（如当前 P0 登录链路），仍要宣布一次会话失效，
+    // 由 app 装配决定清理与跳转（与 GraphQL 链路同口径）
+    onAuthFailure?.();
+
+    return response;
+  }
+
+  try {
+    await refreshSession();
+  } catch {
+    onAuthFailure?.();
+
+    return response;
+  }
+
+  response = await send(readAccessToken());
+
+  if (response.status === 401) {
+    onAuthFailure?.();
+  }
+
+  return response;
+}
+
 function toRestErrorEnvelope(payload: unknown): RestErrorEnvelope {
   if (typeof payload !== 'object' || payload === null) {
     return {};
@@ -153,10 +205,8 @@ export async function createReferenceDocumentWithFile(
   let response: Response;
 
   try {
-    const token = readAccessToken();
-    response = await fetch(UPLOAD_ENDPOINT, {
+    response = await fetchRestWithAuthRetry(UPLOAD_ENDPOINT, {
       method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       body: formData,
     });
   } catch {
@@ -221,10 +271,7 @@ export async function downloadReferenceDocumentFile(
   let response: Response;
 
   try {
-    const token = readAccessToken();
-    response = await fetch(downloadEndpoint(id), {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    });
+    response = await fetchRestWithAuthRetry(downloadEndpoint(id), {});
   } catch {
     return {
       ok: false,
