@@ -1,9 +1,7 @@
 // src/usecases/reference-document/reference-document.usecases.spec.ts
 
 /// <reference types="jest" />
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+import { Readable } from 'node:stream';
 
 import type { UsecaseSession } from '@app-types/auth/session.types';
 import {
@@ -50,13 +48,6 @@ const makeTransactionRunner = () =>
 
 const session = (roles: string[]): UsecaseSession =>
   ({ accountId: 900001, roles, activeRole: roles[0] }) as UsecaseSession;
-
-/** 下载用例成功路径需要真实存在文件（fsp.access 实盘校验）：运行级临时目录，精确清理 */
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'refdoc-file-usecase-'));
-
-afterAll(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
-});
 
 const detailQueryResult = (overrides: Record<string, unknown> = {}) => ({
   id: 970001,
@@ -619,7 +610,7 @@ describe('SoftDeleteReferenceDocumentUsecase', () => {
 describe('GetReferenceDocumentFileUsecase', () => {
   const makeStorage = () => ({
     save: jest.fn(),
-    resolve: jest.fn(),
+    open: jest.fn(),
     delete: jest.fn(),
   });
   const makeUsecase = (
@@ -647,13 +638,11 @@ describe('GetReferenceDocumentFileUsecase', () => {
     storageReference: 'a1b2c3d4e5f60718293a4b5c6d7e8f90.pdf',
   });
 
-  it('SUPER_ADMIN 与 ENGINEER 均可下载：返回展示文件名/MIME 与绝对路径载荷', async () => {
+  it('SUPER_ADMIN 与 ENGINEER 均可下载：返回展示文件名/MIME 与内容流载荷（不含路径）', async () => {
     const queryService = makeQueryService();
     queryService.findDetail.mockResolvedValue(fileDetail);
     const storage = makeStorage();
-    const existingPath = path.join(tmpRoot, 'downloadable.pdf');
-    fs.writeFileSync(existingPath, 'pdf-bytes');
-    storage.resolve.mockReturnValue(existingPath);
+    storage.open.mockResolvedValue(Readable.from([Buffer.from('pdf-bytes')]));
     const { usecase } = makeUsecase({ queryService, storage });
 
     for (const roles of [['SUPER_ADMIN'], ['ENGINEER']]) {
@@ -663,10 +652,9 @@ describe('GetReferenceDocumentFileUsecase', () => {
         documentId: 970001,
         originalFilename: '说明书.pdf',
         mimeType: 'application/pdf',
-        absolutePath: existingPath,
       });
     }
-    expect(storage.resolve).toHaveBeenCalledWith(fileDetail.storageReference);
+    expect(storage.open).toHaveBeenCalledWith(fileDetail.storageReference);
   });
 
   it('CUSTOMER 拒绝下载（0910 裁定收窄，与 GraphQL 读口径一致）', async () => {
@@ -694,16 +682,14 @@ describe('GetReferenceDocumentFileUsecase', () => {
     await expect(
       usecase.execute({ session: session(['ENGINEER']), documentId: 970001 }),
     ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.FILE_NOT_AVAILABLE });
-    expect(storage.resolve).not.toHaveBeenCalled();
+    expect(storage.open).not.toHaveBeenCalled();
   });
 
-  it('存储引用非法（resolve 抛错）收敛为 FILE_NOT_AVAILABLE，不返回路径', async () => {
+  it('存储引用非法（open 抛错）收敛为 FILE_NOT_AVAILABLE，不返回路径', async () => {
     const queryService = makeQueryService();
     queryService.findDetail.mockResolvedValue(fileDetail);
     const storage = makeStorage();
-    storage.resolve.mockImplementation(() => {
-      throw new Error('Rejected invalid storage reference format');
-    });
+    storage.open.mockRejectedValue(new Error('Rejected invalid storage reference format'));
     const { usecase } = makeUsecase({ queryService, storage });
 
     await expect(
@@ -715,7 +701,7 @@ describe('GetReferenceDocumentFileUsecase', () => {
     const queryService = makeQueryService();
     queryService.findDetail.mockResolvedValue(fileDetail);
     const storage = makeStorage();
-    storage.resolve.mockReturnValue(path.join(tmpRoot, 'missing-file.pdf'));
+    storage.open.mockRejectedValue(new Error('ENOENT: no such file or directory'));
     const { usecase } = makeUsecase({ queryService, storage });
 
     await expect(

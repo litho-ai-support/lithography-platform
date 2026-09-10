@@ -1,7 +1,5 @@
 // src/usecases/reference-document/get-reference-document-file.usecase.ts
 
-import * as fsp from 'node:fs/promises';
-
 import { Inject, Injectable } from '@nestjs/common';
 
 import { DomainError, REFERENCE_DOCUMENT_ERROR } from '@core/common/errors/domain-error';
@@ -24,7 +22,8 @@ import { REFERENCE_DOCUMENT_STORAGE } from './reference-document-storage.contrac
  * - 复用统一 NOT_FOUND 口径：不存在 / 已软删一致拒绝，不泄露删除状态；
  * - 无存储引用（纯文本资料）或存储对象缺失/引用非法：统一 FILE_NOT_AVAILABLE 受控错误，
  *   不泄露服务器路径、存储引用与存储后端类型（负责人 0909 第二轮下载要求）；
- * - 返回的 absolutePath 仅供 adapter 组装文件流，不得进入响应体。
+ * - 返回的 content 为存储契约 open() 的只读内容流，仅供 adapter 组装响应；
+ *   本用例不依赖 node:fs，不感知服务器绝对路径（负责人 0910 要求）。
  */
 @Injectable()
 export class GetReferenceDocumentFileUsecase {
@@ -53,12 +52,12 @@ export class GetReferenceDocumentFileUsecase {
       });
     }
 
-    // 引用格式/越界与存储对象存在性校验先于文件流组装；任何存储侧失败都收敛为受控错误
-    let absolutePath: string;
+    // 引用格式/越界与存储对象存在性校验由存储契约 open() 内部完成（先于读取）；
+    // 任何存储侧失败都收敛为受控错误，不暴露实现细节
+    let content: ReferenceDocumentFilePayload['content'];
 
     try {
-      absolutePath = this.storage.resolve(detail.storageReference);
-      await fsp.access(absolutePath);
+      content = await this.storage.open(detail.storageReference);
     } catch {
       throw new DomainError(REFERENCE_DOCUMENT_ERROR.FILE_NOT_AVAILABLE, '该资料没有可下载的文件', {
         documentId: command.documentId,
@@ -69,7 +68,7 @@ export class GetReferenceDocumentFileUsecase {
       documentId: detail.id,
       originalFilename: detail.originalFilename,
       mimeType: detail.mimeType,
-      absolutePath,
+      content,
     };
   }
 }

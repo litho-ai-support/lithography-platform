@@ -2,6 +2,7 @@
 
 import type { UsecaseSession } from '@app-types/auth/session.types';
 import type { PaginationParams } from '@core/pagination/pagination.types';
+import type { Readable } from 'node:stream';
 import type {
   ReferenceDocumentDetailView,
   ReferenceDocumentListPage,
@@ -63,20 +64,46 @@ export type GetReferenceDocumentFileCommand = {
 };
 
 /**
+ * 带文件创建命令（REST multipart 上传路径，负责人 0910 架构要求）：
+ * 文件保存、数据库写入与失败补偿由 CreateReferenceDocumentWithFileUsecase 统一编排，
+ * adapter 只负责 multipart 协议解析后组装本命令。
+ */
+export type CreateReferenceDocumentWithFileCommand = {
+  session: UsecaseSession;
+  title: string;
+  documentType: string;
+  /** 为空表示通用资料 */
+  equipmentModelId?: number | null;
+  description?: string | null;
+  /** 文本内容来源；可为 null（仅文件创建），双空拒绝归 CreateReferenceDocumentUsecase */
+  contentText: string | null;
+  /**
+   * multipart 文件载荷（协议解析产物）：原始文件名已由 adapter 完成 latin1 还原与
+   * 展示清洗；扩展名 → MIME 映射、大小上限、存储保存与补偿归本用例层。
+   */
+  file: {
+    buffer: Buffer;
+    size: number;
+    originalFilename: string;
+  };
+};
+
+/**
  * 存储契约接口 re-export（接口定义在相邻 reference-document-storage.contract.ts；
  * adapter 层架构规则：流程类型从 *.types.ts type-only 导入）。
  */
 export type { ReferenceDocumentStorage } from './reference-document-storage.contract';
 
 /**
- * 下载用例的内部载荷：absolutePath 仅供 adapter 组装文件流，
- * 不得进入响应体（对外 DTO 与错误信息均不携带服务器路径）。
+ * 下载用例的内部载荷：content 为存储契约 open() 返回的只读内容流，仅供 adapter
+ * 组装响应，不得携带服务器路径等实现细节（负责人 0910 要求；对外 DTO 与错误信息
+ * 同样不携带路径）。
  */
 export type ReferenceDocumentFilePayload = {
   documentId: number;
   originalFilename: string;
   mimeType: string;
-  absolutePath: string;
+  content: Readable;
 };
 
 export type UpdateReferenceDocumentCommand = {

@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
+import type { Readable } from 'node:stream';
 
 import { ConfigService } from '@nestjs/config';
 import { Injectable } from '@nestjs/common';
@@ -22,7 +23,9 @@ const FILE_EXTENSION_PATTERN = /^[a-z0-9]{1,8}$/;
  *   目录内容为运行时上传产物，不入 Git（backend/.gitignore 的 /var 与 env 示例注释）；
  * - 防穿越双保险：引用必须匹配白名单格式（已排除分隔符与 ..），resolve 后仍断言
  *   结果路径位于存储目录内；两道检查都先于任何磁盘访问；
- * - 不接受客户端提供的任何路径成分。
+ * - 不接受客户端提供的任何路径成分；
+ * - 服务器绝对路径是实现私有细节（0910 裁定）：契约仅暴露 open() 只读流能力，
+ *   路径不作为结果返回给 usecase 或 adapter。
  */
 @Injectable()
 export class LocalReferenceDocumentStorage implements ReferenceDocumentStorage {
@@ -56,7 +59,16 @@ export class LocalReferenceDocumentStorage implements ReferenceDocumentStorage {
     return reference;
   }
 
-  resolve(storageReference: string): string {
+  async open(storageReference: string): Promise<Readable> {
+    // 白名单 + 越界断言先于任何磁盘访问；文件缺失由 access 拦截，调用方收敛为受控错误
+    const resolved = this.resolve(storageReference);
+    await fsp.access(resolved);
+
+    return fs.createReadStream(resolved);
+  }
+
+  /** 私有实现细节：绝不把路径返回给契约调用方，仅内部 save/open/delete 使用 */
+  private resolve(storageReference: string): string {
     if (!STORAGE_REFERENCE_PATTERN.test(storageReference)) {
       throw new Error('Rejected invalid storage reference format');
     }

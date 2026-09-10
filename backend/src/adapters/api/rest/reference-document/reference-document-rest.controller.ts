@@ -3,7 +3,6 @@
 import { mapJwtToUsecaseSession } from '@app-types/auth/session.types';
 import { JwtPayload } from '@app-types/jwt.types';
 import { IdentityTypeEnum } from '@app-types/models/account.types';
-import { createReadStream } from 'node:fs';
 import * as path from 'node:path';
 
 import {
@@ -13,7 +12,6 @@ import {
   HttpCode,
   HttpStatus,
   HttpException,
-  Inject,
   Param,
   ParseIntPipe,
   Post,
@@ -31,42 +29,13 @@ import { Roles } from '@src/adapters/api/graphql/decorators/roles.decorator';
 import { JwtAuthGuard } from '@src/adapters/api/graphql/guards/jwt-auth.guard';
 import { RolesGuard } from '@src/adapters/api/graphql/guards/roles.guard';
 import { DomainError, REFERENCE_DOCUMENT_ERROR } from '@core/common/errors/domain-error';
-import { CreateReferenceDocumentUsecase } from '@src/usecases/reference-document/create-reference-document.usecase';
-import { GetReferenceDocumentFileUsecase } from '@src/usecases/reference-document/get-reference-document-file.usecase';
-import { REFERENCE_DOCUMENT_STORAGE } from '@src/usecases/reference-document/reference-document-storage.contract';
 import { resolveRestStatus } from '@core/common/errors/rest-error-status';
-import {
-  REFERENCE_DOCUMENT_ALLOWED_MIME_TYPES,
-  REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES,
-} from '@src/adapters/api/rest/rest-adapter.tokens';
-import type {
-  ReferenceDocumentFilePayload,
-  ReferenceDocumentStorage,
-} from '@src/usecases/reference-document/reference-document.types';
+import { CreateReferenceDocumentWithFileUsecase } from '@src/usecases/reference-document/create-reference-document-with-file.usecase';
+import { GetReferenceDocumentFileUsecase } from '@src/usecases/reference-document/get-reference-document-file.usecase';
+import type { ReferenceDocumentFilePayload } from '@src/usecases/reference-document/reference-document.types';
 
 /** 上传边界防御性硬上限：multer 先挡住极端超大请求；业务上限以下方配置为准并给出业务错误码 */
 const UPLOAD_HARD_LIMIT_BYTES = 64 * 1024 * 1024;
-
-/**
- * 扩展名 → 规范 MIME 映射（单一口径，与 config.module 默认白名单同源维护）。
- * 以扩展名为主判定、以映射结果写入数据库 MIME，不信任客户端 Content-Type
- * （负责人 0909 第二轮：不能直接信任客户端文件名或路径）。
- */
-const EXTENSION_TO_MIME: Record<string, string> = {
-  pdf: 'application/pdf',
-  doc: 'application/msword',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xls: 'application/vnd.ms-excel',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  ppt: 'application/vnd.ms-powerpoint',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  txt: 'text/plain',
-  md: 'text/markdown',
-  csv: 'text/csv',
-};
 
 /** REST 边界的 multipart 文件最小结构（不依赖 multer 类型包，仅取用到的字段） */
 type UploadedFilePayload = {
@@ -131,33 +100,21 @@ function toUploadedFilePayload(file: unknown): UploadedFilePayload {
 }
 
 /**
- * 参考资料文件上传 / 下载 REST 边界（负责人 0909 第二轮阻塞项 1）。
+ * 参考资料文件上传 / 下载 REST 边界（负责人 0909 第二轮阻塞项 1；0910 架构修复）。
  *
- * - 上传：仅 SUPER_ADMIN；multipart/form-data 经存储契约先写文件、再事务落库，
- *   落库失败删除已写文件（原子性：不留 DB 记录与孤儿文件的对偶失败）；
- * - 下载：所有已登录角色；按 DB 存储引用经存储契约读取（不接受客户端路径），
- *   StreamableFile 流式返回，Content-Disposition 按 RFC 5987 编码原始文件名；
+ * - 本类只做 multipart 协议解析、Session 映射、调用 Usecase 与 HTTP 响应封装，
+ *   不承载业务规则、事务或 I/O 编排（adapters.rules.md 边界）：
+ *   上传交由 CreateReferenceDocumentWithFileUsecase 统一编排保存/落库/补偿；
+ *   下载经 GetReferenceDocumentFileUsecase 返回内容流，本类不感知存储实现；
+ * - multer 硬上限属于传输层防御，业务大小/类型/双空规则归 usecase 层单一真源；
  * - 错误统一为 HTTP 状态码 + { statusCode, code, message } JSON 体，不携带服务器路径。
  */
 @Controller('api/reference-documents')
 export class ReferenceDocumentRestController {
-  private readonly uploadMaxBytes: number;
-  private readonly allowedMimeTypes: ReadonlySet<string>;
-
   constructor(
-    private readonly createReferenceDocumentUsecase: CreateReferenceDocumentUsecase,
+    private readonly createReferenceDocumentWithFileUsecase: CreateReferenceDocumentWithFileUsecase,
     private readonly getReferenceDocumentFileUsecase: GetReferenceDocumentFileUsecase,
-    @Inject(REFERENCE_DOCUMENT_STORAGE)
-    private readonly storage: ReferenceDocumentStorage,
-    @Inject(REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES)
-    uploadMaxBytes: number,
-    @Inject(REFERENCE_DOCUMENT_ALLOWED_MIME_TYPES)
-    allowedMimeTypes: string[],
-  ) {
-    // 上传上限与 MIME 白名单由 rest-adapter.module DI 装配读取（运行时配置不入 controller）
-    this.uploadMaxBytes = uploadMaxBytes;
-    this.allowedMimeTypes = new Set(allowedMimeTypes);
-  }
+  ) {}
 
   /** 文件上传创建（仅 SUPER_ADMIN）：multipart/form-data；contentText 可空，与文件双空才拒绝 */
   @Post('upload')
@@ -172,48 +129,24 @@ export class ReferenceDocumentRestController {
   ): Promise<{ id: number }> {
     const uploaded = toUploadedFilePayload(file);
 
-    if (uploaded.size > this.uploadMaxBytes) {
-      throw new DomainError(REFERENCE_DOCUMENT_ERROR.UPLOAD_FILE_TOO_LARGE, '上传文件超过大小限制');
-    }
-
-    // 类型以扩展名为主判定（不信任客户端 MIME 头），MIME 白名单来自配置
+    // 协议层职责止于 latin1 还原与展示清洗；大小/类型/双空与存储编排归 usecase 单一真源
     const originalFilename = sanitizeOriginalFilename(decodeUtf8FileName(uploaded.originalname));
-    const extension = path.extname(originalFilename).slice(1).toLowerCase();
-    const mimeType = EXTENSION_TO_MIME[extension];
-
-    if (mimeType === undefined || !this.allowedMimeTypes.has(mimeType)) {
-      throw new DomainError(
-        REFERENCE_DOCUMENT_ERROR.UPLOAD_FILE_TYPE_NOT_ALLOWED,
-        '不允许上传该类型的文件',
-      );
-    }
-
-    // 先写存储文件，再事务落库；落库失败删除已写文件（不留孤儿文件）
-    let storageReference: string;
+    const contentText = readMultipartString(body, 'contentText');
+    const equipmentModelIdRaw = readMultipartString(body, 'equipmentModelId');
 
     try {
-      storageReference = await this.storage.save(uploaded.buffer, extension);
-    } catch {
-      throw new DomainError(REFERENCE_DOCUMENT_ERROR.CREATION_FAILED, '文件保存失败，请稍后重试');
-    }
-
-    try {
-      const contentText = readMultipartString(body, 'contentText');
-      const equipmentModelIdRaw = readMultipartString(body, 'equipmentModelId');
-      const result = await this.createReferenceDocumentUsecase.execute({
+      const result = await this.createReferenceDocumentWithFileUsecase.execute({
         session: mapJwtToUsecaseSession(user),
         title: readMultipartString(body, 'title') ?? '',
         documentType: readMultipartString(body, 'documentType') ?? '',
         equipmentModelId: equipmentModelIdRaw === null ? null : Number(equipmentModelIdRaw),
         description: readMultipartString(body, 'description'),
         contentText,
-        file: { originalFilename, mimeType, storageReference },
+        file: { buffer: uploaded.buffer, size: uploaded.size, originalFilename },
       });
 
       return { id: result.id };
     } catch (error) {
-      await this.storage.delete(storageReference).catch(() => undefined);
-
       if (error instanceof DomainError) {
         this.toRestError(error);
       }
@@ -255,7 +188,7 @@ export class ReferenceDocumentRestController {
     response.setHeader('Content-Type', payload.mimeType);
     response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodedFilename}`);
 
-    return new StreamableFile(createReadStream(payload.absolutePath));
+    return new StreamableFile(payload.content);
   }
 
   /** DomainError → REST 统一错误体；函数签名返回 never，便于在 catch 中直接调用后 throw */

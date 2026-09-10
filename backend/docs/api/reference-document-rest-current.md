@@ -35,9 +35,9 @@ multipart/form-data；权限：仅 `SUPER_ADMIN`（精确判定，不继承）�
 - 类型判定以**扩展名**为主（不信任客户端 MIME 头），扩展名与 `REFERENCE_DOCUMENT_ALLOWED_MIME_TYPES` 白名单双重校验。白名单外 → `UPLOAD_FILE_TYPE_NOT_ALLOWED`（HTTP 415）。默认白名单：pdf / doc / docx / xls / xlsx / ppt / pptx / png / jpg / jpeg / txt / md / csv。env 白名单只能**收窄**内置扩展名→MIME 映射，新增映射中不存在的 MIME 无效（需同步扩展映射代码）。
 - 文件名仅取 `basename` 并剔除控制字符与首尾空白后存 `originalFilename`（≤255，空值回落「未命名文件」），不含路径成分；multipart filename 经 multer latin1 误码时先做 UTF-8 还原（中文文件名不乱码）。
 
-### 原子性
+### 原子性（编排归 usecase 层，负责人 0910 架构要求）
 
-先经存储契约写文件 → 再事务落库；落库失败 catch 中删除已写文件（文件失败则不触库）。对偶保证：不留 DB 记录与孤儿文件。
+REST controller 只做 multipart 协议解析与命令组装；文件保存 → 事务落库 → 失败补偿由 `CreateReferenceDocumentWithFileUsecase` 统一编排：先经存储契约写文件 → 再事务落库（保存失败则不触库，`CREATION_FAILED`）；落库失败补偿删除本次生成的精确引用。对偶保证：不留 DB 记录与孤儿文件；补偿删除自身失败时不静默——记入错误日志并附上可清理的精确 storageReference（服务端生成、无路径语义，不向客户端泄露）。
 
 ### 成功响应
 
@@ -54,7 +54,7 @@ multipart/form-data；权限：仅 `SUPER_ADMIN`（精确判定，不继承）�
 - 复用统一 NOT_FOUND 口径：不存在 / 已软删 → `NOT_FOUND`（HTTP 404，防探测，不泄露删除状态）。
 - 无 `storageReference`（纯文本资料）或存储对象缺失 → `FILE_NOT_AVAILABLE`（HTTP 404，受控错误，不泄露服务器路径）。
 - 响应头：`Content-Type` 取 DB `mimeType`；`Content-Disposition: attachment; filename="..."; filename*=UTF-8''...`（RFC 5987 编码 `originalFilename`，中文不乱码）。
-- 响应体：`StreamableFile` 流式返回文件字节。
+- 响应体：`StreamableFile` 流式返回文件字节；存储契约仅向用例层暴露只读内容流能力（`open`），服务器绝对路径为实现私有细节，不出现在 usecase 结果、adapter 与响应中。
 - 存储引用由服务端生成（`^[0-9a-f]{32}\.[a-z0-9]{1,8}$` 白名单），读取时 `path.resolve` 后断言仍在存储目录内（双保险防路径穿越）；不接受任何客户端路径输入。
 
 ## 错误响应（REST 统一口径）

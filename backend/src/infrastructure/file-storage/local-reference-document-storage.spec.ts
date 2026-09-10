@@ -4,6 +4,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { Readable } from 'node:stream';
 
 import { LocalReferenceDocumentStorage } from './local-reference-document-storage';
 
@@ -12,6 +13,17 @@ const makeStorage = (dir: string) =>
   new LocalReferenceDocumentStorage({
     get: jest.fn(() => dir),
   } as never);
+
+/** 读取流全部字节（单测内消费 open() 返回的内容流） */
+const readStream = (stream: Readable): Promise<Buffer> => {
+  const chunks: Buffer[] = [];
+
+  return new Promise((resolve, reject) => {
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
+  });
+};
 
 describe('LocalReferenceDocumentStorage', () => {
   const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'refdoc-storage-unit-'));
@@ -52,12 +64,21 @@ describe('LocalReferenceDocumentStorage', () => {
     },
   );
 
-  it('resolve 对合法引用返回存储目录内的绝对路径', () => {
+  it('open 对合法引用返回只读流且不暴露路径，字节与写入内容一致', async () => {
+    const storage = makeStorage(baseDir);
+    const content = Buffer.from('open-stream-bytes');
+    const reference = await storage.save(content, 'pdf');
+
+    const stream = await storage.open(reference);
+
+    expect(stream).toBeInstanceOf(Readable);
+    expect((await readStream(stream)).equals(content)).toBe(true);
+  });
+
+  it('open 对不存在的文件抛错（调用方收敛为受控错误，不泄露路径）', async () => {
     const storage = makeStorage(baseDir);
 
-    const resolved = storage.resolve('a1b2c3d4e5f60718293a4b5c6d7e8f90.pdf');
-
-    expect(resolved.startsWith(baseDir + path.sep)).toBe(true);
+    await expect(storage.open('a1b2c3d4e5f60718293a4b5c6d7e8f90.pdf')).rejects.toThrow();
   });
 
   it.each([
@@ -69,16 +90,18 @@ describe('LocalReferenceDocumentStorage', () => {
     'A1B2C3D4E5F60718293A4B5C6D7E8F90.PDF',
     '%2e%2e%2fevil.pdf',
     'a.pdf',
-  ])('resolve 拒绝格式白名单外引用（含路径穿越与 URL 编码形态）：%j', (reference) => {
+  ])('open 拒绝格式白名单外引用（含路径穿越与 URL 编码形态）：%j', async (reference) => {
     const storage = makeStorage(baseDir);
 
-    expect(() => storage.resolve(reference)).toThrow(/Rejected invalid storage reference format/);
+    await expect(storage.open(reference)).rejects.toThrow(
+      /Rejected invalid storage reference format/,
+    );
   });
 
   it('delete 幂等：存在的文件删除成功，不存在时静默成功', async () => {
     const storage = makeStorage(baseDir);
     const reference = await storage.save(Buffer.from('to-delete'), 'txt');
-    const absolutePath = storage.resolve(reference);
+    const absolutePath = path.join(baseDir, reference);
     expect(fs.existsSync(absolutePath)).toBe(true);
 
     await storage.delete(reference);
@@ -91,7 +114,7 @@ describe('LocalReferenceDocumentStorage', () => {
   it('save 前查重与 wx 标志：绝不覆盖已存在同名文件', async () => {
     const storage = makeStorage(baseDir);
     const reference = await storage.save(Buffer.from('first'), 'txt');
-    const absolutePath = storage.resolve(reference);
+    const absolutePath = path.join(baseDir, reference);
 
     // 人工放置同名文件后重试大量生成，内容不被覆盖（wx 标志保证）
     const before = fs.readFileSync(absolutePath);
