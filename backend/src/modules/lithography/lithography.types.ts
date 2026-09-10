@@ -278,7 +278,8 @@ export type ReferenceDocumentListItemQueryResult = Omit<
 
 /**
  * 资料详情稳定读视图（元数据 + 文本内容）。
- * 不返回账号 ID、存储后端/存储引用与服务器路径（0907.docx：不能把服务器本地路径返回给浏览器）。
+ * 不返回账号 ID、存储后端/存储引用与服务器路径（0907.docx：不能把服务器本地路径返回给浏览器）；
+ * 「是否有文件」以衍生布尔 hasFile 对外（权威判定 = storageReference 非空，与下载/编辑防御真源一致）。
  */
 export type ReferenceDocumentDetailView = {
   id: number;
@@ -289,6 +290,7 @@ export type ReferenceDocumentDetailView = {
   description: string | null;
   originalFilename: string | null;
   mimeType: string | null;
+  hasFile: boolean;
   contentText: string | null;
   creatorNickname: string;
   createdAt: Date;

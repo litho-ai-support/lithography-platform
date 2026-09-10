@@ -194,10 +194,25 @@ describe('ReferenceDocumentQueryService', () => {
       equipmentModelName: 'NXT:1980Di',
       contentText: 'E-CHUCK-101',
       createdByAccountId: 900001,
+      hasFile: true,
     });
     expect(detail).not.toHaveProperty('storageBackend');
     // storageReference 为内部装配字段，仅供下载用例定位文件；对外 DTO 视图由 usecase 层剥离
     expect(detail).toHaveProperty('storageReference', 'mock/reference/a.pdf');
+  });
+
+  it('hasFile 权威判定 = 存储引用非空：有文件名但无存储引用的行 hasFile=false（不承诺可下载）', async () => {
+    const documentRepo = makeDocumentRepo();
+    documentRepo.findOne.mockResolvedValue(
+      documentEntity({ originalFilename: 'legacy.pdf', mimeType: 'application/pdf' }),
+    );
+    const modelRepo = makeModelRepo();
+    modelRepo.findOne.mockResolvedValue(modelEntity());
+    const service = new ReferenceDocumentQueryService(documentRepo as never, modelRepo as never);
+
+    const detail = await service.findDetail({ documentId: 970001 });
+
+    expect(detail).toMatchObject({ originalFilename: 'legacy.pdf', hasFile: false });
   });
 
   it('不存在与已软删详情统一 NOT_FOUND，不区分错误表述（防删除状态探测）', async () => {

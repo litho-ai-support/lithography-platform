@@ -7,9 +7,9 @@ import type {
 
 /**
  * 阶段二 Mock 数据集，形状与语义对齐 backend seed-mock（970001~970004）：
- * - 970001 指定型号 + 有存储引用（错误代码手册）；
+ * - 970001 指定型号 + 有文件名但无存储引用（错误代码手册；hasFile=false，不承诺可下载）；
  * - 970002 指定型号 + 有存储引用（维护指南）；
- * - 970003 通用资料 + 有存储引用（安全规范）；
+ * - 970003 通用资料 + 有文件名但无存储引用（安全规范；hasFile=false）；
  * - 970004 已软删除（默认列表不可见，详情统一不可访问）；
  * - 970005+ 覆盖纯文本资料（无存储引用）与长列表分页。
  *
@@ -39,6 +39,7 @@ const MOCK_REFERENCE_DOCUMENT_SEEDS: MockReferenceDocumentRecord[] = [
     description: '按错误码段整理的现场排查手册，含复位步骤与升级条件。',
     originalFilename: 'nxt-1980di-error-codes-mock.txt',
     mimeType: 'text/plain',
+    hasFile: false,
     contentText:
       '# NXT:1980Di 常见错误代码手册\n\n## E-STAGE-201\n干涉仪信号异常：检查测量束位置后复位。\n\n## E-LENS-102\n透镜温度漂移：等待热稳定后重试。',
     creatorNickname: '系统管理员',
@@ -55,6 +56,7 @@ const MOCK_REFERENCE_DOCUMENT_SEEDS: MockReferenceDocumentRecord[] = [
     description: '光源模块周期性维护要点与耗材更换记录模板。',
     originalFilename: 'nxe-3400c-source-guide-mock.pdf',
     mimeType: 'application/pdf',
+    hasFile: true,
     contentText:
       '# NXE:3400C 光源维护指南\n\n## 周期检查\n每周记录光源能量衰减曲线。\n\n## 耗材更换\n达到触发阈值后按标准流程更换。',
     creatorNickname: '陈工',
@@ -71,6 +73,7 @@ const MOCK_REFERENCE_DOCUMENT_SEEDS: MockReferenceDocumentRecord[] = [
     description: '通用资料：进入设备区诊断故障前的断电与上锁挂牌要求。',
     originalFilename: 'safety-standard-mock.md',
     mimeType: 'text/markdown',
+    hasFile: false,
     contentText:
       '# 故障诊断安全规范\n\n1. 断电并上锁挂牌；\n2. 确认残余气压释放；\n3. 双人作业制度。',
     creatorNickname: '系统管理员',
@@ -87,6 +90,7 @@ const MOCK_REFERENCE_DOCUMENT_SEEDS: MockReferenceDocumentRecord[] = [
     description: '已被新版检查表替代，仅留档。',
     originalFilename: 'xt-checklist-old-mock.txt',
     mimeType: 'text/plain',
+    hasFile: false,
     contentText: '# XT 系列开机检查表（旧版）\n\n- 确认气源压力；\n- 确认 stage 归零。',
     creatorNickname: '陈工',
     createdAt: '2026-08-04T11:00:00.000Z',
@@ -103,6 +107,7 @@ const MOCK_REFERENCE_DOCUMENT_SEEDS: MockReferenceDocumentRecord[] = [
     description: '纯文本资料：现场直接粘贴使用的每周点位记录模板。',
     originalFilename: null,
     mimeType: null,
+    hasFile: false,
     contentText:
       '# Weekly 点位记录\n\n- [ ] 浸没液体流量\n- [ ] 排液阀状态\n- [ ] 腔体湿度\n- 备注：____',
     creatorNickname: '陈工',
@@ -119,6 +124,7 @@ const MOCK_REFERENCE_DOCUMENT_SEEDS: MockReferenceDocumentRecord[] = [
     description: '纯文本资料：对准子系统的报警现场处置顺序笔记。',
     originalFilename: null,
     mimeType: null,
+    hasFile: false,
     contentText:
       '# 对准报警处置笔记\n\n1. 先看报警码段；\n2. 记录 wafer 序号；\n3. 按手册 A-3 流程复位。',
     creatorNickname: '系统管理员',
@@ -153,6 +159,7 @@ function buildGeneratedRecords(): MockReferenceDocumentRecord[] {
       description: index % 2 === 0 ? '批量生成的说明文本，用于验证列表展示与筛选。' : null,
       originalFilename: index % 2 === 0 ? `case-${id}-mock.txt` : null,
       mimeType: index % 2 === 0 ? 'text/plain' : null,
+      hasFile: index % 2 === 0,
       contentText: `# 案例 ${id}\n\n批量生成的文本内容，用于验证详情展示与分页。`,
       creatorNickname: index % 3 === 0 ? '陈工' : '系统管理员',
       createdAt: `2026-08-${day}T08:30:00.000Z`,

@@ -78,6 +78,12 @@ export class ReferenceDocumentDetailDTO {
   })
   mimeType?: string | null;
 
+  @Field(() => Boolean, {
+    description:
+      '是否带可下载文件（权威判定 = 存储引用非空；前端下载按钮与编辑放行均以本字段为准）',
+  })
+  hasFile!: boolean;
+
   @Field(() => String, { nullable: true, description: '文本内容' })
   contentText?: string | null;
 

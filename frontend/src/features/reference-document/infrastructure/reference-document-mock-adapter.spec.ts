@@ -176,7 +176,7 @@ describe('updateReferenceDocument', () => {
     }
   });
 
-  it('必填字段显式 null / 型号不存在拒绝；纯文本资料清空正文拒绝', async () => {
+  it('必填字段显式 null / 型号不存在拒绝；无存储引用资料清空正文拒绝', async () => {
     await expect(updateReferenceDocument(970001, { title: null })).resolves.toMatchObject({
       ok: false,
       reason: 'invalid-input',
@@ -190,24 +190,30 @@ describe('updateReferenceDocument', () => {
       ok: false,
       reason: 'invalid-input',
     });
+    // 有文件名但无存储引用（970001）：后端按存储引用判定，清空正文同样拒绝
+    await expect(updateReferenceDocument(970001, { contentText: '  ' })).resolves.toMatchObject({
+      ok: false,
+      reason: 'invalid-input',
+    });
     await expect(
       updateReferenceDocument(970001, { equipmentModelId: 999999 }),
     ).resolves.toMatchObject({ ok: false, reason: 'model-not-found' });
   });
 
   it('已有文件的资料允许清空正文（编辑防御放宽，与后端同口径）', async () => {
-    await expect(updateReferenceDocument(970001, { contentText: '  ' })).resolves.toMatchObject({
+    await expect(updateReferenceDocument(970002, { contentText: '  ' })).resolves.toMatchObject({
       ok: true,
-      id: 970001,
+      id: 970002,
     });
 
-    const detail = await fetchReferenceDocument(970001);
+    const detail = await fetchReferenceDocument(970002);
 
     expect(detail.ok).toBe(true);
 
     if (detail.ok) {
       expect(detail.detail.contentText).toBeNull();
       expect(detail.detail.originalFilename).not.toBeNull();
+      expect(detail.detail.hasFile).toBe(true);
     }
   });
 
@@ -328,6 +334,11 @@ describe('downloadReferenceDocumentFile（REST 同签名模拟）', () => {
 
   it('纯文本资料 file-not-available；不存在与已软删统一 not-found', async () => {
     await expect(downloadReferenceDocumentFile(970005)).resolves.toMatchObject({
+      ok: false,
+      reason: 'file-not-available',
+    });
+    // 有文件名但无存储引用的行（970001）同样不承诺可下载
+    await expect(downloadReferenceDocumentFile(970001)).resolves.toMatchObject({
       ok: false,
       reason: 'file-not-available',
     });

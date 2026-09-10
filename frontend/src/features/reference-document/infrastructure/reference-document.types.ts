@@ -28,6 +28,9 @@ export type ReferenceDocumentListItem = {
 /** 详情（完整元数据 + 文本内容；编辑与软删仅 SUPER_ADMIN 可见，由页面层按角色控制） */
 export type ReferenceDocumentDetail = Omit<ReferenceDocumentListItem, never> & {
   mimeType: string | null;
+  /** 是否带可下载文件（权威判定 = 后端存储引用非空；下载按钮与编辑放行均以本字段为准，
+   *  不从 originalFilename 推断——有文件名但无存储引用的行不承诺可下载） */
+  hasFile: boolean;
   contentText: string | null;
   updatedAt: string;
 };

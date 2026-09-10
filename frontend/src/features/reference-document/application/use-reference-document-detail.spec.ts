@@ -38,6 +38,7 @@ function buildDetail(id: number): ReferenceDocumentDetail {
     description: null,
     originalFilename: null,
     mimeType: null,
+    hasFile: false,
     contentText: `内容 ${id}`,
     creatorNickname: '系统管理员',
     createdAt: '2026-08-02T09:30:00.000Z',

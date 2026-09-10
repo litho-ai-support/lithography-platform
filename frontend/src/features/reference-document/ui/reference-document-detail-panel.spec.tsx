@@ -64,6 +64,7 @@ function buildDetail(id: number): ReferenceDocumentDetail {
     description: '光源模块周期性维护要点。',
     originalFilename: 'nxe-3400c-source-guide-mock.pdf',
     mimeType: 'application/pdf',
+    hasFile: true,
     contentText: '# 光源维护指南\n\n每周记录能量衰减。',
     creatorNickname: '陈工',
     createdAt: '2026-08-02T09:30:00.000Z',
@@ -144,12 +145,26 @@ describe('ReferenceDocumentDetailPanel', () => {
   it('纯文本资料不显示下载入口', async () => {
     fetchDetailMock.mockResolvedValue({
       ok: true,
-      detail: { ...buildDetail(970005), originalFilename: null, mimeType: null },
+      detail: { ...buildDetail(970005), originalFilename: null, mimeType: null, hasFile: false },
     });
 
     render(<ReferenceDocumentDetailPanel canManage={false} documentId={970005} />);
     await screen.findByText('NXE:3400C 光源维护指南（Mock）');
 
+    expect(screen.queryByRole('button', { name: /下载文件/ })).toBeNull();
+  });
+
+  it('有文件名但无存储引用（hasFile=false）不显示下载入口：不从 originalFilename 推断', async () => {
+    fetchDetailMock.mockResolvedValue({
+      ok: true,
+      detail: { ...buildDetail(970001), hasFile: false },
+    });
+
+    render(<ReferenceDocumentDetailPanel canManage={false} documentId={970001} />);
+    await screen.findByText('NXE:3400C 光源维护指南（Mock）');
+
+    // 原始文件名仍如实展示，但不承诺可下载
+    expect(screen.getByText('nxe-3400c-source-guide-mock.pdf')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /下载文件/ })).toBeNull();
   });
 

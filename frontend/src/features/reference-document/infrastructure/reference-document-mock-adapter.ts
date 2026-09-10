@@ -111,6 +111,7 @@ function toDetail(record: MockReferenceDocumentRecord) {
     description: record.description,
     originalFilename: record.originalFilename,
     mimeType: record.mimeType,
+    hasFile: record.hasFile,
     contentText: record.contentText,
     creatorNickname: record.creatorNickname,
     createdAt: record.createdAt,
@@ -227,6 +228,7 @@ export async function createReferenceDocument(
     description: input.description?.trim() ? input.description.trim() : null,
     originalFilename: null,
     mimeType: null,
+    hasFile: false,
     contentText: input.contentText.trim(),
     creatorNickname: MOCK_CREATOR_NICKNAME,
     createdAt: now,
@@ -264,12 +266,9 @@ export async function updateReferenceDocument(
     };
   }
 
-  // 内容来源双空防御与后端同口径：仅文件资料（已有存储元数据）允许清空正文
-  if (
-    patch.contentText !== undefined &&
-    isNormalizedBlank(patch.contentText) &&
-    record.originalFilename === null
-  ) {
+  // 内容来源双空防御与后端同口径：仅已有存储引用的资料（hasFile）允许清空正文，
+  // 不从 originalFilename 推断——有文件名但无存储引用的行（如 seed/legacy）不放行
+  if (patch.contentText !== undefined && isNormalizedBlank(patch.contentText) && !record.hasFile) {
     return {
       ok: false,
       reason: 'invalid-input',
@@ -425,6 +424,7 @@ export async function createReferenceDocumentWithFile(
     description: input.description?.trim() ? input.description.trim() : null,
     originalFilename: input.file.name,
     mimeType,
+    hasFile: true,
     contentText: input.contentText?.trim() ? input.contentText.trim() : null,
     creatorNickname: MOCK_CREATOR_NICKNAME,
     createdAt: now,
@@ -441,7 +441,8 @@ export async function createReferenceDocumentWithFile(
 /**
  * 下载资料文件（Mock 同签名模拟，行为对齐后端 REST 边界）：
  * - 不存在 / 已软删统一 not-found（防探测口径）；
- * - 纯文本资料 file-not-available；文件资料返回合成字节 Blob（内容为 Mock 占位，非真实文件）。
+ * - 无存储引用（含纯文本与仅有文件名的历史行）file-not-available；
+ *   文件资料返回合成字节 Blob（内容为 Mock 占位，非真实文件）。
  */
 export async function downloadReferenceDocumentFile(
   id: number,
@@ -456,7 +457,7 @@ export async function downloadReferenceDocumentFile(
     };
   }
 
-  if (record.originalFilename === null) {
+  if (!record.hasFile) {
     return {
       ok: false,
       reason: 'file-not-available',
@@ -469,6 +470,7 @@ export async function downloadReferenceDocumentFile(
   return {
     ok: true,
     blob: new Blob([bytes]),
-    filename: record.originalFilename,
+    // 不变式：hasFile=true 蕴含 originalFilename 非空（类型收窄防御，与上方守卫配套）
+    filename: record.originalFilename ?? 'file',
   };
 }

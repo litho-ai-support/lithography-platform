@@ -127,6 +127,9 @@ export class ReferenceDocumentQueryService {
       description: entity.description,
       originalFilename: entity.originalFilename,
       mimeType: entity.mimeType,
+      // 「有文件」权威判定（= storageReference 非空）：前端下载按钮与编辑放行均以本字段为准，
+      // 不再从 originalFilename 推断——有文件名但无存储引用的行（如 seed/legacy）不承诺可下载
+      hasFile: entity.storageReference !== null,
       contentText: entity.contentText,
       createdByAccountId: entity.createdByAccountId,
       // 内部装配字段：仅供下载用例定位存储对象，不进入对外 DTO

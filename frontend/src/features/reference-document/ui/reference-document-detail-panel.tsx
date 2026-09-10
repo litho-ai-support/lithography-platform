@@ -209,7 +209,7 @@ export function ReferenceDocumentDetailPanel({
         title="编辑参考资料"
       >
         <ReferenceDocumentForm
-          hasExistingFile={detail.originalFilename !== null}
+          hasExistingFile={detail.hasFile}
           initial={{
             title: detail.title,
             documentType: detail.documentType,
@@ -284,7 +284,8 @@ export function ReferenceDocumentDetailPanel({
         <div>
           <div className="flex gap-2">
             <Button onClick={() => navigate(REFERENCE_DOCUMENTS_LIST_PATH)}>返回列表</Button>
-            {detail.originalFilename !== null ? (
+            {/* 「有文件」以权威字段 hasFile 为准（= 后端存储引用非空），不从 originalFilename 推断 */}
+            {detail.hasFile ? (
               <Button loading={downloading} onClick={() => void handleDownload()} type="primary">
                 下载文件
               </Button>

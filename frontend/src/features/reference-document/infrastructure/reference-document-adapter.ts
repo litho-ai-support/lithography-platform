@@ -70,6 +70,7 @@ const REFERENCE_DOCUMENT_DETAIL_QUERY = `
       description
       originalFilename
       mimeType
+      hasFile
       contentText
       creatorNickname
       createdAt

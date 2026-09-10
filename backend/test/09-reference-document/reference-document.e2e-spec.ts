@@ -27,7 +27,7 @@ const LIST_QUERY = `
 
 const DETAIL_QUERY = `
   query ReferenceDocument($id: Int!) {
-    referenceDocument(id: $id) { id title contentText mimeType originalFilename creatorNickname }
+    referenceDocument(id: $id) { id title contentText mimeType originalFilename hasFile creatorNickname }
   }
 `;
 
@@ -315,6 +315,7 @@ describe('AI 参考资料库 (e2e)', () => {
         contentText: 'E-CHUCK-101',
         mimeType: 'application/pdf',
         originalFilename: 'e2e-manual.pdf',
+        hasFile: true,
       });
     });
 
