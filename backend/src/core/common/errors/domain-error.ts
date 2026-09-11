@@ -178,6 +178,29 @@ export const REPAIR_REQUEST_ERROR = {
 } as const;
 Object.freeze(REPAIR_REQUEST_ERROR);
 
+// AI 参考资料库相关错误码（资料录入/编辑/软删除，负责人 0907.docx 任务二）
+export const REFERENCE_DOCUMENT_ERROR = {
+  INVALID_PARAMS: 'REFERENCE_DOCUMENT_INVALID_PARAMS',
+  // 指定设备型号不存在（应用层预检给出友好错误，不依赖 RESTRICT 外键裸报错）
+  EQUIPMENT_MODEL_NOT_FOUND: 'REFERENCE_DOCUMENT_EQUIPMENT_MODEL_NOT_FOUND',
+  // 读取/编辑/软删除：目标不可访问时统一使用 NOT_FOUND，避免泄露删除状态
+  // （负责人 docx 验收标准：不存在或已软删除的资料返回统一的 NOT_FOUND）
+  NOT_FOUND: 'REFERENCE_DOCUMENT_NOT_FOUND',
+  // 系统侧落库失败，不向客户端泄漏数据库细节
+  CREATION_FAILED: 'REFERENCE_DOCUMENT_CREATION_FAILED',
+  UPDATE_FAILED: 'REFERENCE_DOCUMENT_UPDATE_FAILED',
+  DELETION_FAILED: 'REFERENCE_DOCUMENT_DELETION_FAILED',
+  // 文件上传（REST multipart，仅 SUPER_ADMIN）：服务端判定，不信任客户端 MIME 头
+  UPLOAD_FILE_MISSING: 'REFERENCE_DOCUMENT_UPLOAD_FILE_MISSING',
+  UPLOAD_FILE_TOO_LARGE: 'REFERENCE_DOCUMENT_UPLOAD_FILE_TOO_LARGE',
+  UPLOAD_FILE_TYPE_NOT_ALLOWED: 'REFERENCE_DOCUMENT_UPLOAD_FILE_TYPE_NOT_ALLOWED',
+  // 内容来源双空：正文与文件至少存在一个（落库层 chk_reference_document_content_source 兜底）
+  CONTENT_SOURCE_EMPTY: 'REFERENCE_DOCUMENT_CONTENT_SOURCE_EMPTY',
+  // 下载：存储对象缺失/不可读等存储侧失败，不泄漏服务器路径与存储引用
+  FILE_NOT_AVAILABLE: 'REFERENCE_DOCUMENT_FILE_NOT_AVAILABLE',
+} as const;
+Object.freeze(REFERENCE_DOCUMENT_ERROR);
+
 export const INPUT_NORMALIZE_ERROR = {
   INVALID_TEXT: 'INPUT_NORMALIZE_INVALID_TEXT',
   REQUIRED_TEXT_EMPTY: 'INPUT_NORMALIZE_REQUIRED_TEXT_EMPTY',
@@ -207,6 +230,8 @@ export type AiWorkflowContextErrorCode =
 export type TimeErrorCode = (typeof TIME_ERROR)[keyof typeof TIME_ERROR];
 export type RepairRequestErrorCode =
   (typeof REPAIR_REQUEST_ERROR)[keyof typeof REPAIR_REQUEST_ERROR];
+export type ReferenceDocumentErrorCode =
+  (typeof REFERENCE_DOCUMENT_ERROR)[keyof typeof REFERENCE_DOCUMENT_ERROR];
 export type InputNormalizeErrorCode =
   (typeof INPUT_NORMALIZE_ERROR)[keyof typeof INPUT_NORMALIZE_ERROR];
 
@@ -232,6 +257,7 @@ export type DomainErrorCode =
   | AiWorkflowContextErrorCode
   | TimeErrorCode
   | RepairRequestErrorCode
+  | ReferenceDocumentErrorCode
   | InputNormalizeErrorCode
   | PaginationErrorCode;
 

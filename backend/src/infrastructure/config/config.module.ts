@@ -448,6 +448,36 @@ const emailDeliveryConfig: ConfigFactory = () => ({
   },
 });
 
+/** 参考资料文件存储默认 MIME 白名单（扩展名同源，见 file-storage 契约） */
+const REFERENCE_DOCUMENT_DEFAULT_MIME_TYPES: readonly string[] = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'image/png',
+  'image/jpeg',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+];
+
+/** 生成参考资料文件存储配置（上传目录/大小上限/MIME 白名单，未配置时用安全缺省） */
+const referenceDocumentStorageConfig: ConfigFactory = () => ({
+  referenceDocumentStorage: {
+    // 相对路径相对 backend 运行目录解析；不得指向 Git 仓库内未忽略目录（见 env/.env.example 注释）
+    dir: getOptionalEnv('REFERENCE_DOCUMENT_STORAGE_DIR') ?? 'var/reference-documents',
+    uploadMaxBytes: getIntEnvWithDefault('REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES', 20 * 1024 * 1024),
+    allowedMimeTypes: (() => {
+      const parsed = parseCsvEnv('REFERENCE_DOCUMENT_ALLOWED_MIME_TYPES');
+
+      return parsed.length > 0 ? parsed : REFERENCE_DOCUMENT_DEFAULT_MIME_TYPES;
+    })(),
+  },
+});
+
 /**
  * 生成 JWT 配置
  */
@@ -499,6 +529,7 @@ const paginationConfig = () => ({
         capabilityRuntimeConfig,
         aiWorkerConfig,
         emailDeliveryConfig,
+        referenceDocumentStorageConfig,
         jwtConfig,
         paginationConfig,
       ],

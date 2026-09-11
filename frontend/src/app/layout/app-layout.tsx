@@ -11,6 +11,7 @@ import { FONT_SCALE_OPTIONS, useTheme } from '@/app/providers';
 import { APP_THEME_CSS_VAR_KEY } from '@/app/theme';
 
 import { AigcSidecar } from '@/widgets/aigc-sidecar';
+import { useAuthSession } from '@/features/auth-session';
 
 import type { AssistantRouteCandidate } from '@/entities/assistant-session';
 
@@ -49,9 +50,11 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
       : document.hasFocus() && document.visibilityState === 'visible',
   );
   const { fontScale, isDark, setFontScale, setIsDark } = useTheme();
+  const { session } = useAuthSession();
   const location = useLocation();
   const navigate = useNavigate();
-  const navigationItems = useMemo(() => getNavigationItems(), []);
+  const activeRole = session?.role ?? null;
+  const navigationItems = useMemo(() => getNavigationItems(undefined, activeRole), [activeRole]);
   const activeNavigationPath = resolveActiveNavigationPath(location.pathname, navigationItems);
   const navigationTabs = useMemo(
     () => navigationItems.map((item) => ({ key: item.path, label: item.label })),

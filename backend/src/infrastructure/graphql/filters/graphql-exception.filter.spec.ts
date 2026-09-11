@@ -1,4 +1,9 @@
-import { CAPABILITY_ERROR, DomainError, REPAIR_REQUEST_ERROR } from '@core/common/errors';
+import {
+  CAPABILITY_ERROR,
+  DomainError,
+  REFERENCE_DOCUMENT_ERROR,
+  REPAIR_REQUEST_ERROR,
+} from '@core/common/errors';
 import type { ArgumentsHost } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { GraphQLError } from 'graphql';
@@ -52,6 +57,33 @@ describe(GqlAllExceptionsFilter.name, () => {
     const filter = new GqlAllExceptionsFilter(configService);
 
     const error = filter.catch(new DomainError(errorCode, '维修申请错误'), host) as GraphQLError;
+
+    expect(error.extensions).toMatchObject({
+      code: gqlCode,
+      errorCode,
+    });
+  });
+
+  it.each([
+    // AI 参考资料库：型号不存在属目标不存在；非法输入 BAD_USER_INPUT；
+    // 不存在/已软删统一 NOT_FOUND；落库失败属系统侧故障
+    [REFERENCE_DOCUMENT_ERROR.EQUIPMENT_MODEL_NOT_FOUND, 'NOT_FOUND'],
+    [REFERENCE_DOCUMENT_ERROR.INVALID_PARAMS, 'BAD_USER_INPUT'],
+    [REFERENCE_DOCUMENT_ERROR.NOT_FOUND, 'NOT_FOUND'],
+    [REFERENCE_DOCUMENT_ERROR.CREATION_FAILED, 'INTERNAL_SERVER_ERROR'],
+    [REFERENCE_DOCUMENT_ERROR.UPDATE_FAILED, 'INTERNAL_SERVER_ERROR'],
+    [REFERENCE_DOCUMENT_ERROR.DELETION_FAILED, 'INTERNAL_SERVER_ERROR'],
+  ])('maps reference document error %s to GraphQL code %s', (errorCode, gqlCode) => {
+    const configService = {
+      get: jest.fn().mockReturnValue('production'),
+    } as unknown as ConfigService;
+    const host = {
+      getType: () => 'graphql',
+      getArgs: () => [undefined, {}, {}, { fieldName: 'testField' }],
+    } as unknown as ArgumentsHost;
+    const filter = new GqlAllExceptionsFilter(configService);
+
+    const error = filter.catch(new DomainError(errorCode, '参考资料错误'), host) as GraphQLError;
 
     expect(error.extensions).toMatchObject({
       code: gqlCode,

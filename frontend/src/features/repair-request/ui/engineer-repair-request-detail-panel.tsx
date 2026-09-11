@@ -51,6 +51,8 @@ import {
 } from 'antd';
 import { useNavigate } from 'react-router';
 
+import { formatDateTimeText } from '@/shared/ui/format-date-time';
+
 import {
   ENGINEER_RESPONSE_TEXT_OVER_CAPACITY_MESSAGE,
   isEngineerResponseTextOverCapacity,
@@ -65,7 +67,6 @@ import type {
 import { RESOLUTION_STATUS_LABELS } from '../infrastructure/repair-request-read.types';
 
 import { ENGINEER_REPAIR_REQUEST_LIST_PATH } from './engineer-repair-request-paths';
-import { formatDateTimeText } from './format-date-time';
 import { AcceptanceTag, ResolutionTag } from './repair-request-status-tags';
 
 function AcceptFeedbackAlert({ result }: { result: AcceptRepairRequestResult | null }) {

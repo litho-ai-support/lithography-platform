@@ -15,6 +15,7 @@
  */
 
 import { executeGraphQL } from '@/shared/graphql';
+import { readGraphQLErrorDetail } from '@/shared/graphql';
 
 import type {
   AcceptRepairRequestFailureReason,
@@ -37,7 +38,6 @@ import type {
   RepairRequestPaginatedDTO,
   RepairRequestPaginationVariables,
 } from './engineer-repair-request.types';
-import { readGraphQLErrorDetail } from './repair-request-adapter';
 
 const ENGINEER_REPAIR_REQUESTS_QUERY = `
   query EngineerRepairRequests($scope: String!, $pagination: PaginationArgs!) {

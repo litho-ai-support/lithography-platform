@@ -129,14 +129,26 @@ describe('维修申请端点鉴权 (e2e)', () => {
       });
     });
 
-    it('ENGINEER 调用 equipmentModels 应返回 FORBIDDEN', async () => {
+    // 角色演进（0907.docx 任务二）：equipmentModels 由仅 CUSTOMER 扩展为三角色可读
+    //（AI 参考资料库超管表单/工程师筛选需要基础数据），原 FORBIDDEN 钉住用例同步翻转。
+    it('ENGINEER 调用 equipmentModels 现已允许（0907 参考资料库型号筛选）', async () => {
       const response = await executeGql({
         app,
         query: EQUIPMENT_MODELS_QUERY,
         token: engineerToken,
       }).expect(200);
-      expect(response.body.errors).toHaveLength(1);
-      expectForbidden(response.body.errors[0], ['ENGINEER']);
+      expect(response.body.errors).toBeUndefined();
+      expect(Array.isArray(response.body.data.equipmentModels)).toBe(true);
+    });
+
+    it('SUPER_ADMIN 调用 equipmentModels 现已允许（0907 参考资料库表单）', async () => {
+      const response = await executeGql({
+        app,
+        query: EQUIPMENT_MODELS_QUERY,
+        token: adminToken,
+      }).expect(200);
+      expect(response.body.errors).toBeUndefined();
+      expect(Array.isArray(response.body.data.equipmentModels)).toBe(true);
     });
 
     it('ENGINEER 调用 createRepairRequest 应返回 FORBIDDEN', async () => {

@@ -90,8 +90,10 @@ const AUTH_SESSION_ROLE_HOME_PATHS: Record<AuthSessionRole, string> = {
 // 由 isRolePathAllowed 的带边界前缀匹配统一放行，不在别处维护第二份角色路径表。
 const AUTH_SESSION_ROLE_ALLOWED_ROOT_PATHS: Record<AuthSessionRole, readonly string[]> = {
   CUSTOMER: ['/customer'],
-  ENGINEER: ['/engineer'],
-  SUPER_ADMIN: ['/admin', '/customer', '/engineer'],
+  // /reference-documents：AI 参考资料库（0907 任务二）；读模型向 ENGINEER/SUPER_ADMIN
+  // 开放，CUSTOMER 完全禁入（访问时安全跳转回个人主页，与后端读守卫口径一致）
+  ENGINEER: ['/engineer', '/reference-documents'],
+  SUPER_ADMIN: ['/admin', '/customer', '/engineer', '/reference-documents'],
 };
 
 // 角色路由拒绝清单：优先于根路径表生效，匹配语义与根路径表一致（精确或带边界子路径）。
@@ -100,7 +102,9 @@ const AUTH_SESSION_ROLE_ALLOWED_ROOT_PATHS: Record<AuthSessionRole, readonly str
 // 故在此显式拒绝创建页，与 ENGINEER 一致跳回各自个人主页；后端约束保持不变。
 const AUTH_SESSION_ROLE_DENIED_PATHS: Record<AuthSessionRole, readonly string[]> = {
   CUSTOMER: [],
-  ENGINEER: [],
+  // /reference-documents/new：新增资料仅 SUPER_ADMIN（后端写接口精确角色），
+  // 与维修申请创建页的裁定同理：拒绝清单避免「能进页面但提交必被拒」的残缺中间态
+  ENGINEER: ['/reference-documents/new'],
   SUPER_ADMIN: ['/customer/repair-requests/new'],
 };
 

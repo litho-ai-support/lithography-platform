@@ -51,6 +51,7 @@ export default defineConfig(({ mode }) => {
   const devServerHost = env.DEV_SERVER_HOST || 'localhost';
   const devServerPort = parseInteger(env.DEV_SERVER_PORT, 5173);
   const devServerStrictPort = parseBoolean(env.DEV_SERVER_STRICT_PORT, false);
+  const devApiProxyTarget = env.DEV_API_PROXY_TARGET || 'http://127.0.0.1:3000';
   const buildOutDir = env.BUILD_OUT_DIR || 'dist';
   const buildSourcemap = parseBoolean(env.BUILD_SOURCEMAP, false);
   const buildChunkWarningLimit = parseInteger(
@@ -70,6 +71,19 @@ export default defineConfig(({ mode }) => {
       host: devServerHost,
       port: devServerPort,
       strictPort: devServerStrictPort,
+      // /graphql 与 /api 同源转发到本地后端：localhost 与端口映射域名均无跨域可用，
+      // 不依赖 VITE_GRAPHQL_ENDPOINT 直连；DEV_API_PROXY_TARGET 可覆盖目标后端
+      // （/api 为参考资料文件上传/下载 REST 边界，与后端无全局前缀的显式路径一致）
+      proxy: {
+        '/graphql': {
+          target: devApiProxyTarget,
+          changeOrigin: true,
+        },
+        '/api': {
+          target: devApiProxyTarget,
+          changeOrigin: true,
+        },
+      },
     },
     build: {
       outDir: buildOutDir,
