@@ -40,7 +40,6 @@ const UPLOAD_HARD_LIMIT_BYTES = 64 * 1024 * 1024;
 /** REST 边界的 multipart 文件最小结构（不依赖 multer 类型包，仅取用到的字段） */
 type UploadedFilePayload = {
   buffer: Buffer;
-  size: number;
   originalname: string;
 };
 
@@ -142,7 +141,7 @@ export class ReferenceDocumentRestController {
         equipmentModelId: equipmentModelIdRaw === null ? null : Number(equipmentModelIdRaw),
         description: readMultipartString(body, 'description'),
         contentText,
-        file: { buffer: uploaded.buffer, size: uploaded.size, originalFilename },
+        file: { buffer: uploaded.buffer, originalFilename },
       });
 
       return { id: result.id };

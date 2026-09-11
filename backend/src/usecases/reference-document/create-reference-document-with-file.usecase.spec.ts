@@ -3,7 +3,11 @@
 /// <reference types="jest" />
 import { Logger } from '@nestjs/common';
 
-import { DomainError, REFERENCE_DOCUMENT_ERROR } from '@core/common/errors/domain-error';
+import {
+  DomainError,
+  PERMISSION_ERROR,
+  REFERENCE_DOCUMENT_ERROR,
+} from '@core/common/errors/domain-error';
 import type { CreateReferenceDocumentUsecase } from './create-reference-document.usecase';
 import { CreateReferenceDocumentWithFileUsecase } from './create-reference-document-with-file.usecase';
 import { CreateReferenceDocumentWithFileCommand } from './reference-document.types';
@@ -50,7 +54,7 @@ const makeCommand = (
   equipmentModelId: null,
   description: null,
   contentText: null,
-  file: { buffer: Buffer.from('file-bytes'), size: 32, originalFilename: '报告.pdf' },
+  file: { buffer: Buffer.from('file-bytes'), originalFilename: '报告.pdf' },
   ...overrides,
 });
 
@@ -125,15 +129,38 @@ describe('CreateReferenceDocumentWithFileUsecase', () => {
     );
   });
 
-  it('超过业务大小上限：UPLOAD_FILE_TOO_LARGE，不触存储不落库', async () => {
+  it('非管理员在任何 I/O 前被拒（负责人 0911）：ENGINEER 触发 INSUFFICIENT_PERMISSIONS，保存/落库/删除均未调用', async () => {
+    const { storage, inner, usecase } = makeUsecase();
+
+    await expect(
+      usecase.execute(makeCommand({ session: { accountId: 900002, roles: ['ENGINEER'] } })),
+    ).rejects.toMatchObject({ code: PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS });
+
+    expect(storage.save).not.toHaveBeenCalled();
+    expect(inner.execute).not.toHaveBeenCalled();
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
+  it('非管理员在任何 I/O 前被拒（负责人 0911）：CUSTOMER 同样不触发任何文件或数据库动作', async () => {
+    const { storage, inner, usecase } = makeUsecase();
+
+    await expect(
+      usecase.execute(makeCommand({ session: { accountId: 900003, roles: ['CUSTOMER'] } })),
+    ).rejects.toMatchObject({ code: PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS });
+
+    expect(storage.save).not.toHaveBeenCalled();
+    expect(inner.execute).not.toHaveBeenCalled();
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
+  it('实际字节数超上限：UPLOAD_FILE_TOO_LARGE，不触存储不落库（大小以 buffer.byteLength 为准）', async () => {
     const { storage, inner, usecase } = makeUsecase();
 
     await expect(
       usecase.execute(
         makeCommand({
           file: {
-            buffer: Buffer.alloc(8),
-            size: UPLOAD_MAX_BYTES + 1,
+            buffer: Buffer.alloc(UPLOAD_MAX_BYTES + 1),
             originalFilename: '报告.pdf',
           },
         }),
@@ -150,7 +177,7 @@ describe('CreateReferenceDocumentWithFileUsecase', () => {
 
     await expect(
       usecase.execute(
-        makeCommand({ file: { buffer: Buffer.from('MZ'), size: 2, originalFilename: 'evil.exe' } }),
+        makeCommand({ file: { buffer: Buffer.from('MZ'), originalFilename: 'evil.exe' } }),
       ),
     ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.UPLOAD_FILE_TYPE_NOT_ALLOWED });
 
@@ -163,7 +190,7 @@ describe('CreateReferenceDocumentWithFileUsecase', () => {
 
     await expect(
       usecase.execute(
-        makeCommand({ file: { buffer: Buffer.from('x'), size: 1, originalFilename: 'noext' } }),
+        makeCommand({ file: { buffer: Buffer.from('x'), originalFilename: 'noext' } }),
       ),
     ).rejects.toMatchObject({ code: REFERENCE_DOCUMENT_ERROR.UPLOAD_FILE_TYPE_NOT_ALLOWED });
 

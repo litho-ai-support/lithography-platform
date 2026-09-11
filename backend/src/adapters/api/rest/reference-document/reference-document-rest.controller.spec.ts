@@ -32,7 +32,6 @@ describe('ReferenceDocumentRestController（REST 边界只解析协议与组装�
   describe('upload', () => {
     const validFile = {
       buffer: Buffer.from('file-bytes'),
-      size: 32,
       originalname: 'E2E 报告.pdf',
     };
 
@@ -63,7 +62,6 @@ describe('ReferenceDocumentRestController（REST 边界只解析协议与组装�
         contentText: '正文',
         file: {
           buffer: validFile.buffer,
-          size: 32,
           originalFilename: 'E2E 报告.pdf',
         },
       });

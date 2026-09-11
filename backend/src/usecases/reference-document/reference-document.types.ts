@@ -79,11 +79,11 @@ export type CreateReferenceDocumentWithFileCommand = {
   contentText: string | null;
   /**
    * multipart 文件载荷（协议解析产物）：原始文件名已由 adapter 完成 latin1 还原与
-   * 展示清洗；扩展名 → MIME 映射、大小上限、存储保存与补偿归本用例层。
+   * 展示清洗；大小上限以 buffer 实际字节数判定（负责人 0911：不信任声明值）；
+   * 扩展名 → MIME 映射、存储保存与补偿归本用例层。
    */
   file: {
     buffer: Buffer;
-    size: number;
     originalFilename: string;
   };
 };

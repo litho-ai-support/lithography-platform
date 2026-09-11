@@ -6,6 +6,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { DomainError, REFERENCE_DOCUMENT_ERROR } from '@core/common/errors/domain-error';
 import { CreateReferenceDocumentUsecase } from './create-reference-document.usecase';
+import { assertReferenceDocumentWriteRole } from './reference-document-roles';
 import {
   EXTENSION_TO_MIME,
   REFERENCE_DOCUMENT_ALLOWED_MIME_TYPES,
@@ -24,13 +25,15 @@ import {
  * 负责人 0910 架构要求：文件保存 → 数据库落库 → 失败补偿的完整写编排归 usecase 层
  * 统一持有，REST adapter 只做 multipart 协议解析与命令组装，不注入存储契约。
  *
- * 业务流程：
- * 1. 上传策略单一真源：大小上限（UPLOAD_FILE_TOO_LARGE）与扩展名 → MIME 白名单
- *    （UPLOAD_FILE_TYPE_NOT_ALLOWED）在本层判定，与 GraphQL 纯文本路径无交叉；
- * 2. 先写存储文件（服务端随机引用），save 失败不触库（CREATION_FAILED）；
- * 3. 委托 CreateReferenceDocumentUsecase 完成业务校验与事务落库（角色、字段规范化、
+ * 业务流程（顺序即安全边界，不得重排）
+ * 1. 流程级授权最外层兜底：assertReferenceDocumentWriteRole 必须发生在任何文件 I/O
+ *    之前（负责人 0911 要求）——否则非管理员入口可先触发磁盘写入再依赖补偿删除；
+ * 2. 上传策略单一真源：大小上限（以 buffer 实际字节数为准，不信任声明值）
+ *    （UPLOAD_FILE_TOO_LARGE）与扩展名 → MIME 白名单（UPLOAD_FILE_TYPE_NOT_ALLOWED）；
+ * 3. 先写存储文件（服务端随机引用），save 失败不触库（CREATION_FAILED）；
+ * 4. 委托 CreateReferenceDocumentUsecase 完成业务校验与事务落库（字段规范化、
  *    双空拒绝、型号存在性均保持其单一真源地位）；
- * 4. 落库失败补偿删除本次生成的精确引用；补偿删除失败不静默——记入错误日志并附上
+ * 5. 落库失败补偿删除本次生成的精确引用；补偿删除失败不静默——记入错误日志并附上
  *    可重试/可清理的精确 storageReference（服务端生成、无路径语义），不向客户端泄露。
  */
 @Injectable()
@@ -55,7 +58,11 @@ export class CreateReferenceDocumentWithFileUsecase {
   async execute(
     command: CreateReferenceDocumentWithFileCommand,
   ): Promise<ReferenceDocumentMutationResult> {
-    if (command.file.size > this.uploadMaxBytes) {
+    // 流程级授权最外层兜底：先于任何文件 I/O，复用既有角色断言不另设第二套判断（负责人 0911）
+    assertReferenceDocumentWriteRole(command.session.roles);
+
+    // 大小上限以服务端实际字节数为准（不信任客户端声明的 size）
+    if (command.file.buffer.byteLength > this.uploadMaxBytes) {
       throw new DomainError(REFERENCE_DOCUMENT_ERROR.UPLOAD_FILE_TOO_LARGE, '上传文件超过大小限制');
     }
 
