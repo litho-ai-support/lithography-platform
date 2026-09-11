@@ -335,39 +335,39 @@ describe('RolesGuard (e2e)', () => {
     });
   });
 
-  // 只需要 emptyRoles 的场景
+  // 合法 CUSTOMER 账号访问无角色要求查询
   describe('@Roles() 空数组场景', () => {
-    let emptyRolesToken: string;
+    let guestToken: string;
 
     beforeEach(async () => {
-      await seedTestAccounts({ dataSource, createAccountUsecase, includeKeys: ['emptyRoles'] });
-      emptyRolesToken = await loginUser(
-        testAccountsConfig.emptyRoles.loginName,
-        testAccountsConfig.emptyRoles.loginPassword,
+      await seedTestAccounts({ dataSource, createAccountUsecase, includeKeys: ['guest'] });
+      guestToken = await loginUser(
+        testAccountsConfig.guest.loginName,
+        testAccountsConfig.guest.loginPassword,
       );
     });
 
-    it('应该允许空 accessGroup 账号以 CUSTOMER 规范化结果访问空角色查询', async () => {
-      const response = await executeQuery('query { emptyRolesQuery }', emptyRolesToken).expect(200);
+    it('应该允许合法 CUSTOMER 账号访问无角色要求查询', async () => {
+      const response = await executeQuery('query { emptyRolesQuery }', guestToken).expect(200);
 
       expect(response.body.errors).toBeUndefined();
       expect(response.body.data.emptyRolesQuery).toBe('empty roles access');
     });
   });
 
-  // 需要 staff + emptyRoles 的脏数据场景
+  // 角色脏数据在 Session 校验阶段失败关闭的场景
   describe('脏数据处理测试', () => {
-    let emptyRolesToken: string;
+    let guestToken: string;
 
     beforeEach(async () => {
       await seedTestAccounts({
         dataSource,
         createAccountUsecase,
-        includeKeys: ['staff', 'emptyRoles'],
+        includeKeys: ['staff', 'guest'],
       });
-      emptyRolesToken = await loginUser(
-        testAccountsConfig.emptyRoles.loginName,
-        testAccountsConfig.emptyRoles.loginPassword,
+      guestToken = await loginUser(
+        testAccountsConfig.guest.loginName,
+        testAccountsConfig.guest.loginPassword,
       );
     });
 
@@ -400,15 +400,22 @@ describe('RolesGuard (e2e)', () => {
       expect(updateError?.message).toContain('cannot be null');
     });
 
-    it('应该正确处理 RolesGuard 中 accessGroup 为空数组的情况', async () => {
-      // 使用现有的 emptyRoles 账户，它的 accessGroup 就是空数组
-      const response = await executeQuery('query { staffQuery }', emptyRolesToken).expect(200);
+    it('应该在旧 Token 对应角色 accessGroup 为空时拒绝受保护查询', async () => {
+      const userInfoRepository = dataSource.getRepository(UserInfoEntity);
+      const accountRepository = dataSource.getRepository(AccountEntity);
+
+      const account = await accountRepository.findOne({
+        where: { loginName: testAccountsConfig.guest.loginName },
+      });
+      expect(account).toBeDefined();
+
+      await userInfoRepository.update({ accountId: account!.id }, { accessGroup: [] });
+
+      const response = await executeQuery('query { staffQuery }', guestToken).expect(200);
 
       expect(response.body.errors).toBeDefined();
-      expect(response.body.errors[0].extensions.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
-      expect(response.body.errors[0].message).toContain('缺少所需角色');
-      expect(response.body.errors[0].extensions.details.requiredRoles).toEqual(['ENGINEER']);
-      expect(response.body.errors[0].extensions.details.userRoles).toEqual(['CUSTOMER']);
+      expect(response.body.errors[0].extensions.code).toBe('UNAUTHENTICATED');
+      expect(response.body.errors[0].extensions.errorCode).toBe('JWT_AUTHENTICATION_FAILED');
     });
   });
 });

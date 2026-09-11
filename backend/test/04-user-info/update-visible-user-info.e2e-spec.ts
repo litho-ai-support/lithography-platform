@@ -127,19 +127,6 @@ async function queryAccount(app: INestApplication, token: string, accountId: num
 }
 
 /**
- * 读取账户的 identityHint
- */
-async function getAccountIdentityHint(
-  dataSource: DataSource,
-  accountId: number,
-): Promise<string | null> {
-  const accountRepo = dataSource.getRepository(AccountEntity);
-  const account = await accountRepo.findOne({ where: { id: accountId } });
-  if (!account) throw new Error('读取 account.identityHint 失败：账户不存在');
-  return account.identityHint ?? null;
-}
-
-/**
  * 创建第二个 CUSTOMER 账号（用于跨账号权限测试）
  * - 保证 `user_info.metaDigest` 与 `accessGroup` 一致，避免安全检查暂停账号
  */
@@ -198,7 +185,6 @@ describe('UpdateVisibleUserInfo (e2e)', () => {
   let guestPrimaryToken: string;
   let guestSecondaryToken: string;
 
-  let adminAccountId: number;
   let staffPrimaryAccountId: number;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   let staffSecondaryAccountId: number;
@@ -250,7 +236,6 @@ describe('UpdateVisibleUserInfo (e2e)', () => {
       testAccountsConfig.guestSecondary.loginPassword,
     );
 
-    adminAccountId = await getAccountIdByLoginName(dataSource, testAccountsConfig.admin.loginName);
     staffPrimaryAccountId = await getAccountIdByLoginName(
       dataSource,
       testAccountsConfig.staffPrimary.loginName,
@@ -283,16 +268,6 @@ describe('UpdateVisibleUserInfo (e2e)', () => {
       expect(res.body.errors).toBeUndefined();
       expect(res.body.data.updateUserInfo.isUpdated).toBe(true);
       expect(res.body.data.updateUserInfo.userInfo.nickname).toBe(newNickname);
-    });
-
-    it('自己改自己：更新登录 hint', async () => {
-      const res = await updateUserInfo(app, adminToken, {
-        identityHint: IdentityTypeEnum.SUPER_ADMIN,
-      });
-      expect(res.body.errors).toBeUndefined();
-      expect(res.body.data.updateUserInfo.isUpdated).toBe(true);
-      const updatedHint = await getAccountIdentityHint(dataSource, adminAccountId);
-      expect(updatedHint).toBe(IdentityTypeEnum.SUPER_ADMIN);
     });
 
     it('SUPER_ADMIN 改任意 CUSTOMER：改 signature', async () => {
@@ -395,25 +370,6 @@ describe('UpdateVisibleUserInfo (e2e)', () => {
       expect(res.body.errors).toBeDefined();
       const code = res.body.errors?.[0]?.extensions?.errorCode;
       expect(code).toBe('ACCESS_DENIED');
-    });
-
-    it('非本人修改登录 hint → 拒绝', async () => {
-      const res = await updateUserInfo(app, adminToken, {
-        accountId: guestSecondaryAccountId,
-        identityHint: IdentityTypeEnum.CUSTOMER,
-      });
-      expect(res.body.errors).toBeDefined();
-      const code = res.body.errors?.[0]?.extensions?.errorCode;
-      expect(code).toBe('INSUFFICIENT_PERMISSIONS');
-    });
-
-    it('登录 hint 不在访问组内应报错', async () => {
-      const res = await updateUserInfo(app, guestPrimaryToken, {
-        identityHint: IdentityTypeEnum.ENGINEER,
-      });
-      expect(res.body.errors).toBeDefined();
-      const code = res.body.errors?.[0]?.extensions?.errorCode;
-      expect(code).toBe('OPERATION_NOT_SUPPORTED');
     });
 
     it('CUSTOMER 修改工程师账号 → 拒绝', async () => {

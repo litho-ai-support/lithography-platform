@@ -1,88 +1,31 @@
 // 文件位置：test/04-user-info/update-access-group.e2e-spec.ts
-import { IdentityTypeEnum } from '@app-types/models/account.types';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import request, { type Response } from 'supertest';
-import { DataSource } from 'typeorm';
+import request from 'supertest';
 import { initGraphQLSchema } from '../../src/adapters/api/graphql/schema/schema.init';
 import { ApiModule } from '../../src/bootstraps/api/api.module';
-import { AccountEntity } from '../../src/modules/account/base/entities/account.entity';
-import { UserInfoEntity } from '../../src/modules/account/base/entities/user-info.entity';
-import { getAccountIdByLoginName, login } from '../utils/e2e-graphql-utils';
-import { cleanupTestAccounts, seedTestAccounts, testAccountsConfig } from '../utils/test-accounts';
 
-type UpdateAccessGroupInput = {
-  accountId: number;
-  accessGroup: IdentityTypeEnum[];
-  identityHint?: IdentityTypeEnum;
+type MutationRootResponse = {
+  data?: {
+    // eslint-disable-next-line @typescript-eslint/naming-convention
+    __schema?: {
+      mutationType?: {
+        fields?: Array<{ name: string }>;
+      };
+    };
+  };
+  errors?: Array<{ message: string }>;
 };
 
-type UpdateAccessGroupResult = {
-  accountId: number;
-  accessGroup: IdentityTypeEnum[];
-  identityHint: IdentityTypeEnum;
-  isUpdated: boolean;
-};
-
-type GqlError = {
-  message: string;
-  extensions?: { code?: string; errorCode?: string };
-};
-
-type UpdateAccessGroupResponse = {
-  data?: { updateAccessGroup?: UpdateAccessGroupResult };
-  errors?: GqlError[];
-};
-
-/**
- * 执行 updateAccessGroup GraphQL 变更
- */
-async function executeUpdateAccessGroup(params: {
-  app: INestApplication;
-  token: string;
-  input: UpdateAccessGroupInput;
-}): Promise<Response> {
-  const { app, token, input } = params;
-  return await request(app.getHttpServer())
-    .post('/graphql')
-    .set('Authorization', `Bearer ${token}`)
-    .send({
-      query: `
-        mutation UpdateAccessGroup($input: UpdateAccessGroupInput!) {
-          updateAccessGroup(input: $input) {
-            accountId
-            accessGroup
-            identityHint
-            isUpdated
-          }
-        }
-      `,
-      variables: { input },
-    })
-    .expect(200);
-}
-
-/**
- * 读取 updateAccessGroup 响应体
- */
-function readUpdateAccessGroupBody(params: { response: Response }): UpdateAccessGroupResponse {
-  return params.response.body as UpdateAccessGroupResponse;
-}
-
-describe('UpdateAccessGroup (e2e)', () => {
+describe('UpdateAccessGroup schema removal (e2e)', () => {
   let app: INestApplication;
-  let dataSource: DataSource;
-
-  let adminToken: string;
-  let staffToken: string;
-  let guestPrimaryToken: string;
-
-  let adminAccountId: number;
-  let staffAccountId: number;
-  let guestPrimaryAccountId: number;
-  let guestSecondaryAccountId: number;
+  let previousIntrospectionEnabled: string | undefined;
 
   beforeAll(async () => {
+    // E2E 基线默认关闭 introspection；本 spec 只在 API 初始化期间临时开启，用于核验
+    // Mutation root 的公开契约，不修改任何 .env 或运行时生产配置。
+    previousIntrospectionEnabled = process.env.GRAPHQL_INTROSPECTION_ENABLED;
+    process.env.GRAPHQL_INTROSPECTION_ENABLED = 'true';
     initGraphQLSchema();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -90,215 +33,37 @@ describe('UpdateAccessGroup (e2e)', () => {
     }).compile();
     app = moduleFixture.createNestApplication();
     await app.init();
-
-    dataSource = moduleFixture.get<DataSource>(DataSource);
-
-    await cleanupTestAccounts(dataSource);
-    await seedTestAccounts({
-      dataSource,
-      includeKeys: ['admin', 'staff', 'guestPrimary', 'guestSecondary'],
-    });
-
-    adminToken = await login({
-      app,
-      loginName: testAccountsConfig.admin.loginName,
-      loginPassword: testAccountsConfig.admin.loginPassword,
-    });
-    staffToken = await login({
-      app,
-      loginName: testAccountsConfig.staff.loginName,
-      loginPassword: testAccountsConfig.staff.loginPassword,
-    });
-    guestPrimaryToken = await login({
-      app,
-      loginName: testAccountsConfig.guestPrimary.loginName,
-      loginPassword: testAccountsConfig.guestPrimary.loginPassword,
-    });
-
-    adminAccountId = await getAccountIdByLoginName(dataSource, testAccountsConfig.admin.loginName);
-    staffAccountId = await getAccountIdByLoginName(dataSource, testAccountsConfig.staff.loginName);
-    guestPrimaryAccountId = await getAccountIdByLoginName(
-      dataSource,
-      testAccountsConfig.guestPrimary.loginName,
-    );
-    guestSecondaryAccountId = await getAccountIdByLoginName(
-      dataSource,
-      testAccountsConfig.guestSecondary.loginName,
-    );
   });
 
   afterAll(async () => {
     if (app) await app.close();
+    if (previousIntrospectionEnabled === undefined) {
+      delete process.env.GRAPHQL_INTROSPECTION_ENABLED;
+    } else {
+      process.env.GRAPHQL_INTROSPECTION_ENABLED = previousIntrospectionEnabled;
+    }
   });
 
-  describe('正例', () => {
-    it('SUPER_ADMIN 更新访客为 staff 并自动生成身份提示', async () => {
-      const input: UpdateAccessGroupInput = {
-        accountId: guestSecondaryAccountId,
-        accessGroup: [IdentityTypeEnum.ENGINEER],
-      };
-      const res = await executeUpdateAccessGroup({ app, token: adminToken, input });
-      const body = readUpdateAccessGroupBody({ response: res });
+  it('Mutation root 不暴露 updateAccessGroup', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/graphql')
+      .send({
+        query: `
+          query MutationRoot {
+            __schema {
+              mutationType {
+                fields { name }
+              }
+            }
+          }
+        `,
+      })
+      .expect(200);
+    const body = response.body as MutationRootResponse;
 
-      expect(body.errors).toBeUndefined();
-      const result = body.data?.updateAccessGroup;
-      if (!result) throw new Error('更新访问组失败：缺少返回数据');
-      expect(result.accessGroup).toEqual([IdentityTypeEnum.ENGINEER]);
-      expect(result.identityHint).toBe(IdentityTypeEnum.ENGINEER);
-      expect(result.isUpdated).toBe(true);
-
-      const accountRepo = dataSource.getRepository(AccountEntity);
-      const userInfoRepo = dataSource.getRepository(UserInfoEntity);
-      const updatedUserInfo = await userInfoRepo.findOne({
-        where: { accountId: guestSecondaryAccountId },
-      });
-      if (!updatedUserInfo) throw new Error('用户信息不存在');
-      expect(updatedUserInfo.accessGroup).toEqual([IdentityTypeEnum.ENGINEER]);
-      expect(updatedUserInfo.metaDigest).toEqual([IdentityTypeEnum.ENGINEER]);
-
-      const updatedAccount = await accountRepo.findOne({ where: { id: guestSecondaryAccountId } });
-      if (!updatedAccount) throw new Error('账户不存在');
-      expect(updatedAccount.identityHint).toBe(IdentityTypeEnum.ENGINEER);
-    });
-
-    it('ENGINEER 指定身份提示更新访客访问组', async () => {
-      const input: UpdateAccessGroupInput = {
-        accountId: guestPrimaryAccountId,
-        accessGroup: [IdentityTypeEnum.CUSTOMER, IdentityTypeEnum.ENGINEER],
-        identityHint: IdentityTypeEnum.ENGINEER,
-      };
-      const res = await executeUpdateAccessGroup({ app, token: staffToken, input });
-      const body = readUpdateAccessGroupBody({ response: res });
-
-      expect(body.errors).toBeUndefined();
-      const result = body.data?.updateAccessGroup;
-      if (!result) throw new Error('更新访问组失败：缺少返回数据');
-      expect(result.accessGroup).toEqual([IdentityTypeEnum.CUSTOMER, IdentityTypeEnum.ENGINEER]);
-      expect(result.identityHint).toBe(IdentityTypeEnum.ENGINEER);
-      expect(result.isUpdated).toBe(true);
-
-      const accountRepo = dataSource.getRepository(AccountEntity);
-      const userInfoRepo = dataSource.getRepository(UserInfoEntity);
-      const updatedUserInfo = await userInfoRepo.findOne({
-        where: { accountId: guestPrimaryAccountId },
-      });
-      if (!updatedUserInfo) throw new Error('用户信息不存在');
-      expect(updatedUserInfo.accessGroup).toEqual([
-        IdentityTypeEnum.CUSTOMER,
-        IdentityTypeEnum.ENGINEER,
-      ]);
-      expect(updatedUserInfo.metaDigest).toEqual([
-        IdentityTypeEnum.CUSTOMER,
-        IdentityTypeEnum.ENGINEER,
-      ]);
-
-      const updatedAccount = await accountRepo.findOne({ where: { id: guestPrimaryAccountId } });
-      if (!updatedAccount) throw new Error('账户不存在');
-      expect(updatedAccount.identityHint).toBe(IdentityTypeEnum.ENGINEER);
-    });
-
-    it('幂等：重复访问组不触发更新', async () => {
-      const prepare = await executeUpdateAccessGroup({
-        app,
-        token: staffToken,
-        input: {
-          accountId: guestPrimaryAccountId,
-          accessGroup: [IdentityTypeEnum.CUSTOMER],
-          identityHint: IdentityTypeEnum.CUSTOMER,
-        },
-      });
-      const prepareBody = readUpdateAccessGroupBody({ response: prepare });
-      if (prepareBody.errors) throw new Error('前置失败：无法准备访问组');
-
-      const res = await executeUpdateAccessGroup({
-        app,
-        token: staffToken,
-        input: {
-          accountId: guestPrimaryAccountId,
-          accessGroup: [IdentityTypeEnum.CUSTOMER, IdentityTypeEnum.CUSTOMER],
-        },
-      });
-      const body = readUpdateAccessGroupBody({ response: res });
-
-      expect(body.errors).toBeUndefined();
-      const result = body.data?.updateAccessGroup;
-      if (!result) throw new Error('更新访问组失败：缺少返回数据');
-      expect(result.accessGroup).toEqual([IdentityTypeEnum.CUSTOMER]);
-      expect(result.identityHint).toBe(IdentityTypeEnum.CUSTOMER);
-      expect(result.isUpdated).toBe(false);
-    });
-  });
-
-  describe('负例', () => {
-    it('CUSTOMER 更新访问组应拒绝', async () => {
-      const res = await executeUpdateAccessGroup({
-        app,
-        token: guestPrimaryToken,
-        input: {
-          accountId: guestSecondaryAccountId,
-          accessGroup: [IdentityTypeEnum.CUSTOMER],
-        },
-      });
-      const body = readUpdateAccessGroupBody({ response: res });
-      expect(body.errors).toBeDefined();
-      expect(body.errors?.[0]?.extensions?.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
-    });
-
-    it('CUSTOMER 更新 staff 访问组应拒绝', async () => {
-      const res = await executeUpdateAccessGroup({
-        app,
-        token: guestPrimaryToken,
-        input: {
-          accountId: staffAccountId,
-          accessGroup: [IdentityTypeEnum.ENGINEER],
-        },
-      });
-      const body = readUpdateAccessGroupBody({ response: res });
-      expect(body.errors).toBeDefined();
-      expect(body.errors?.[0]?.extensions?.errorCode).toBe('INSUFFICIENT_PERMISSIONS');
-    });
-
-    it('访问组为空应返回校验错误', async () => {
-      const res = await executeUpdateAccessGroup({
-        app,
-        token: adminToken,
-        input: {
-          accountId: adminAccountId,
-          accessGroup: [],
-        },
-      });
-      const body = readUpdateAccessGroupBody({ response: res });
-      expect(body.errors).toBeDefined();
-      expect(body.errors?.[0]?.extensions?.code).toBe('BAD_USER_INPUT');
-    });
-
-    it('身份提示不在访问组内应报错', async () => {
-      const res = await executeUpdateAccessGroup({
-        app,
-        token: adminToken,
-        input: {
-          accountId: guestSecondaryAccountId,
-          accessGroup: [IdentityTypeEnum.CUSTOMER],
-          identityHint: IdentityTypeEnum.ENGINEER,
-        },
-      });
-      const body = readUpdateAccessGroupBody({ response: res });
-      expect(body.errors).toBeDefined();
-      expect(body.errors?.[0]?.extensions?.errorCode).toBe('OPERATION_NOT_SUPPORTED');
-    });
-
-    it('目标账户不存在应报错', async () => {
-      const res = await executeUpdateAccessGroup({
-        app,
-        token: adminToken,
-        input: {
-          accountId: 999999,
-          accessGroup: [IdentityTypeEnum.CUSTOMER],
-        },
-      });
-      const body = readUpdateAccessGroupBody({ response: res });
-      expect(body.errors).toBeDefined();
-      expect(body.errors?.[0]?.extensions?.errorCode).toBe('ACCOUNT_NOT_FOUND');
-    });
+    expect(body.errors).toBeUndefined();
+    const fieldNames = body.data?.__schema?.mutationType?.fields?.map((field) => field.name);
+    expect(fieldNames).toBeDefined();
+    expect(fieldNames).not.toContain('updateAccessGroup');
   });
 });

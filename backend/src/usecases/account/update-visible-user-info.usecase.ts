@@ -46,7 +46,7 @@ export type UserInfoPatch = {
 
 type UserInfoUpdatePatch = UserInfoUpdateData;
 
-type UserInfoUpdateField = keyof UserInfoUpdatePatch;
+type UserInfoUpdateField = keyof UserInfoUpdatePatch & keyof UserInfoView;
 
 export interface UpdateVisibleUserInfoParams {
   session: UsecaseSession;

@@ -24,11 +24,6 @@ export class UpdateUserInfoInput {
   @IsInt()
   accountId?: number;
 
-  @Field(() => IdentityTypeEnum, { nullable: true, description: '登录提示身份' })
-  @IsOptional()
-  @IsEnum(IdentityTypeEnum)
-  identityHint?: IdentityTypeEnum;
-
   @Field(() => String, { nullable: true, description: '昵称' })
   @IsOptional()
   @IsString()
