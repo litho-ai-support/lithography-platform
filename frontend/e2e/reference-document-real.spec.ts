@@ -76,7 +76,7 @@ async function findE2EDocumentIds(env: Record<string, string>): Promise<number[]
 }
 
 /**
- * 兑底清理（仅以本次运行的精确 ID 为边界，负责人 0909 修复要求）：
+ * 兜底清理（仅以本次运行的精确 ID 为边界，负责人 0909 修复要求）：
  * 1. 合并「页面创建时从详情 URL 捕获的精确 ID」与「按运行唯一标题反查的 ID」；
  * 2. 逐个经 API 软删（幂等：已删/不存在返回 NOT_FOUND，忽略即可）；
  * 3. 物理删除精确 ID 列表（helper 安全门：显式 opt-in + 测试库命名，
@@ -101,7 +101,7 @@ async function cleanupE2EDocuments(
     deleteE2EReferenceDocumentRowsByIds([...targetIds]);
   } catch (error) {
     // 安全门拒绝（未 opt-in 或非测试库命名）：物理清理安全跳过，
-    // 软删兑底已保证列表/详情不可见；残留软删行需按库策略另行清理。
+    // 软删兜底已保证列表/详情不可见；残留软删行需按库策略另行清理。
     console.warn(`[e2e] 物理清理跳过：${(error as Error).message}`);
   }
 }
@@ -142,7 +142,7 @@ test.describe('real backend reference document flow', () => {
     await expect(page.getByText('参考资料库')).toBeVisible();
 
     // 本次运行创建的资料精确 ID（页面创建后从详情 URL 捕获，供 finally 按精确 ID 清理；
-    // 作用域须覆盖 try/finally，主链路在任何一步失败都能兑底清理）
+    // 作用域须覆盖 try/finally，主链路在任何一步失败都能兜底清理）
     const createdIdsFromUi: number[] = [];
 
     try {
@@ -208,7 +208,7 @@ test.describe('real backend reference document flow', () => {
       const remainingIds = await findE2EDocumentIds(env);
       expect(remainingIds).toEqual([]);
     } finally {
-      // 兑底清理无条件执行：以本次运行的精确 ID 为边界（页面捕获 + 唯一标题反查），
+      // 兜底清理无条件执行：以本次运行的精确 ID 为边界（页面捕获 + 唯一标题反查），
       // 无论主链路中途失败还是页面内已软删，都能清理本次创建的行；
       // 安全门未 opt-in 时物理清理安全跳过（console.warn），不误删他人数据。
       await cleanupE2EDocuments(env, createdIdsFromUi);
