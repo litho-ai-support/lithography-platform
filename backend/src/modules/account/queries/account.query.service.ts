@@ -20,12 +20,29 @@ import { Repository, In } from 'typeorm';
 import type {
   AccountCredentialSnapshot,
   AccountLoginBootstrapSnapshot,
+  AccountSessionAuthoritySnapshot,
   AccountSnapshot,
 } from '../account.types';
 import { AccountEntity } from '../base/entities/account.entity';
 import { UserInfoEntity } from '../base/entities/user-info.entity';
 
 export type VisibleDetailMode = 'BASIC' | 'FULL';
+
+/**
+ * 把实体上的角色数组原值转为快照值（`AccountSessionAuthoritySnapshot` 的字段口径）。
+ *
+ * - 数组：显式拷贝（`[...]`），断开 ORM 实体别名，避免消费方的原地修改被 TypeORM
+ *   脏检查持久化（该类型注释的强制要求）；
+ * - 非数组：**原样透传**，不做补全、猜测或修复——`meta_digest` 实际是 varchar(1024)
+ *   加密列，解密失败时水合会保留密文字符串（遗留数据可能不是数组），运行时形状的
+ *   裁决统一由消费方的三源收敛纯函数失败关闭；此处仅把非空原值收窄为声明类型
+ *   以通过编译，不改变任何运行时语义。
+ */
+const toRoleArraySnapshot = (value: unknown): ReadonlyArray<IdentityTypeEnum> | null => {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value)) return value as ReadonlyArray<IdentityTypeEnum>;
+  return Array.from(value as ReadonlyArray<IdentityTypeEnum>);
+};
 
 @Injectable()
 export class AccountQueryService {
@@ -77,6 +94,65 @@ export class AccountQueryService {
       throw new DomainError(ACCOUNT_ERROR.ACCOUNT_NOT_FOUND, '账户不存在');
     }
     return account;
+  }
+
+  /**
+   * 受保护请求的账号权限事实快照（P0-7，单一语义读取，query-side projection）。
+   *
+   * 为 `ValidateAccessTokenSessionUsecase` 提供数据库当前授权事实，用于把
+   * 「Token 签发时的声明」与「请求时的数据库事实」比对。形状与缺失语义见
+   * `AccountSessionAuthoritySnapshot`：
+   * - 账号行缺失 → `accountStatus: null` 且 `identityHint: null`、`userInfo: null`；
+   *   资料行缺失 → 仅 `userInfo: null`（结构上不可漏判）；缺失不在此抛错，
+   *   错误口径（失败关闭为 `UNAUTHENTICATED`）归调用方 Usecase；
+   * - `identityHint` 是账号侧列（`base_user_account.identity_hint`）；
+   *   `accessGroup` / `metaDigest` 按数据库原值透传（经 `toRoleArraySnapshot()`），
+   *   不做任何补全或修复。
+   *
+   * 刻意走 entity 水合路径（`findOne` + relation）：`meta_digest` 是加密列，只有
+   * 水合路径（`FieldEncryptionSubscriber.afterLoad`）才解密并 `JSON.parse`；与
+   * `AdminUserQueryService` 文件头的「必须走 entity 水合路径、禁止 `getRawMany()`」
+   * 强制约束同源，不新增第二套绕过订阅者的查询路径。
+   *
+   * 不接受事务上下文：JWT 校验发生在每个受保护请求的认证阶段，不在任何事务内，
+   * 读到的就是请求时刻的已提交事实。
+   *
+   * 快照仅供服务端内部复核，任何字段（尤其 `metaDigest`）不得经 View / DTO 外泄
+   * （`AccountSessionAuthoritySnapshot` 注释）。数据库异常按既有链路冒泡，不在本方法
+   * 包装改写：数据库不可用不是「会话无效」。
+   *
+   * @returns 快照；账号行缺失时返回缺省事实（不返回 `null`，由调用方统一判字段）。
+   */
+  async findSessionAuthoritySnapshot(params: {
+    accountId: number;
+  }): Promise<AccountSessionAuthoritySnapshot> {
+    const account = await this.accountRepository.findOne({
+      where: { id: params.accountId },
+      relations: { userInfo: true },
+    });
+
+    if (!account) {
+      return {
+        accountId: params.accountId,
+        accountStatus: null,
+        identityHint: null,
+        userInfo: null,
+      };
+    }
+
+    const userInfo = account.userInfo;
+    return {
+      accountId: account.id,
+      accountStatus: account.status,
+      identityHint: account.identityHint,
+      userInfo: userInfo
+        ? {
+            userState: userInfo.userState,
+            accessGroup: toRoleArraySnapshot(userInfo.accessGroup),
+            metaDigest: toRoleArraySnapshot(userInfo.metaDigest),
+          }
+        : null,
+    };
   }
 
   async findCredentialByLoginName(params: {

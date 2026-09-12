@@ -52,6 +52,8 @@ export const ACCOUNT_ERROR = {
   EMAIL_TAKEN: 'EMAIL_TAKEN',
   USER_INFO_NOT_FOUND: 'USER_INFO_NOT_FOUND',
   ACCOUNT_SUSPENDED: 'ACCOUNT_SUSPENDED',
+  /** 创建入口：account.status 与 userInfo.userState 不一致，或 status 无对应 UserState（BANNED / DELETED） */
+  ACCOUNT_STATUS_STATE_MISMATCH: 'ACCOUNT_STATUS_STATE_MISMATCH',
 } as const;
 Object.freeze(ACCOUNT_ERROR);
 
@@ -200,6 +202,46 @@ export const REFERENCE_DOCUMENT_ERROR = {
   FILE_NOT_AVAILABLE: 'REFERENCE_DOCUMENT_FILE_NOT_AVAILABLE',
 } as const;
 Object.freeze(REFERENCE_DOCUMENT_ERROR);
+// 管理员用户管理相关错误码（管理员列表读取、管理员创建普通用户等）
+// 刻意不复用 `AUTH_ERROR.*` / `JWT_ERROR.*`：那些码被全局过滤器映射为 `UNAUTHENTICATED`，
+// 会让前端把「管理员输入/目标问题」误判为 Session 失效并清理会话跳转登录页
+// （`docs/api/graphql-error-contract-current.md`：input / not-found 不得塌缩为 `UNAUTHENTICATED`）。
+// 也不复用 `ACCOUNT_ERROR.ACCOUNT_NOT_FOUND`（与 `AUTH_ERROR.ACCOUNT_NOT_FOUND` 同码值→ `UNAUTHENTICATED`）
+// 与 `ACCOUNT_ERROR.ACCOUNT_ALREADY_EXISTS`（未入映射表，会落默认 `BAD_USER_INPUT`）。
+export const ADMIN_USER_ERROR = {
+  // 创建：登录名/登录邮箱命中数据库唯一索引（`uk_login_name` / `uk_login_email`）的并发竞争，
+  // 不向客户端泄露驱动错误与索引名（对外大类 CONFLICT）
+  CREDENTIAL_CONFLICT: 'ADMIN_USER_CREDENTIAL_CONFLICT',
+  // 读/写：系统侧读取失败或读到的账号资料不变量被破坏（对外大类 INTERNAL_SERVER_ERROR）
+  READ_FAILED: 'ADMIN_USER_READ_FAILED',
+  // 创建：系统侧写入失败（非唯一冲突），不向客户端泄露数据库细节（对外大类 INTERNAL_SERVER_ERROR）
+  WRITE_FAILED: 'ADMIN_USER_WRITE_FAILED',
+  // 读取：`identity_hint` / `access_group` / `meta_digest` 不能收敛为同一个唯一角色。
+  // 按负责人裁决失败关闭：整次查询失败，不返回部分列表、不排除异常行、不兜底、不静默修复；
+  // 对外只表达通用大类 INTERNAL_SERVER_ERROR，且 `details` 必须为空，
+  // 不得泄露异常账号 ID、三源角色原值或内部错误细节
+  ROLE_DATA_INCONSISTENT: 'ADMIN_USER_ROLE_DATA_INCONSISTENT',
+  // 资料编辑 / 状态修改（P0-4 起的写用例共用）：目标账号不存在。
+  // 不复用 ACCOUNT_ERROR.ACCOUNT_NOT_FOUND（与 AUTH_ERROR.ACCOUNT_NOT_FOUND 同码值，
+  // 会被过滤器映射为 UNAUTHENTICATED，违反错误契约「not-found 不得塌缩为 UNAUTHENTICATED」）；
+  // 对外大类 NOT_FOUND，details 留空，目标 ID 由调用方已知，无需回显
+  TARGET_NOT_FOUND: 'ADMIN_USER_TARGET_NOT_FOUND',
+  // 状态修改（P0-5）：目标账号的当前双字段状态不允许进入请求的目标状态
+  // 当前状态为 PENDING / SUSPENDED / BANNED / DELETED 等不可转换值（含无法识别的值）、
+  // account.status 与 userInfo.user_state 不一致。对外大类 CONFLICT：
+  // 请求的目标状态本身合法（非 BAD_USER_INPUT）、管理员权限无问题（非 FORBIDDEN）、
+  // 这是明确的当前状态冲突（非系统侧 5xx）。details 留空，
+  // 当前状态事实只进 cause.diagnostic 供服务端排查，不进对外响应
+  STATUS_TRANSITION_NOT_ALLOWED: 'ADMIN_USER_STATUS_TRANSITION_NOT_ALLOWED',
+  // 密码重置（P0-6 / R11-2）：目标账号的当前双字段状态不允许重置密码。只允许双字段
+  // SUSPENDED / BANNED / DELETED 等不可重置值（含无法识别的值）与双字段不一致。
+  // 刻意不复用 STATUS_TRANSITION_NOT_ALLOWED：该码专指启停状态转换矩阵，不是密码重置。
+  // 对外大类 CONFLICT（口径与 STATUS_TRANSITION_NOT_ALLOWED 同源：请求动作本身合法、
+  // 管理员权限无问题、这是明确的当前状态冲突）；details 留空，
+  // 当前状态事实只进 cause.diagnostic 供服务端排查，不进对外响应
+  PASSWORD_RESET_TARGET_STATUS_NOT_ALLOWED: 'ADMIN_USER_PASSWORD_RESET_TARGET_STATUS_NOT_ALLOWED',
+} as const;
+Object.freeze(ADMIN_USER_ERROR);
 
 export const INPUT_NORMALIZE_ERROR = {
   INVALID_TEXT: 'INPUT_NORMALIZE_INVALID_TEXT',
@@ -232,6 +274,7 @@ export type RepairRequestErrorCode =
   (typeof REPAIR_REQUEST_ERROR)[keyof typeof REPAIR_REQUEST_ERROR];
 export type ReferenceDocumentErrorCode =
   (typeof REFERENCE_DOCUMENT_ERROR)[keyof typeof REFERENCE_DOCUMENT_ERROR];
+export type AdminUserErrorCode = (typeof ADMIN_USER_ERROR)[keyof typeof ADMIN_USER_ERROR];
 export type InputNormalizeErrorCode =
   (typeof INPUT_NORMALIZE_ERROR)[keyof typeof INPUT_NORMALIZE_ERROR];
 
@@ -258,6 +301,7 @@ export type DomainErrorCode =
   | TimeErrorCode
   | RepairRequestErrorCode
   | ReferenceDocumentErrorCode
+  | AdminUserErrorCode
   | InputNormalizeErrorCode
   | PaginationErrorCode;
 

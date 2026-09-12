@@ -3,7 +3,7 @@
 import { type UsecaseSession } from '@app-types/auth/session.types';
 import { IdentityTypeEnum } from '@app-types/models/account.types';
 import { UserInfoView } from '@app-types/models/auth.types';
-import { Gender, UserState, type GeographicInfo } from '@app-types/models/user-info.types';
+import { Gender, type GeographicInfo } from '@app-types/models/user-info.types';
 import { hasRole } from '@core/account/policy/role-access.policy';
 import { ACCOUNT_ERROR, DomainError, PERMISSION_ERROR } from '@core/common/errors/domain-error';
 import { Inject, Injectable } from '@nestjs/common';
@@ -25,7 +25,6 @@ import {
   normalizeVisibleLimitedNullableTextInput,
   normalizeVisibleNonNegativeIntInput,
   normalizeVisibleTagsInput,
-  normalizeVisibleUserStateInput,
 } from './update-visible-user-info.input.normalize';
 
 export type UserInfoPatch = {
@@ -39,14 +38,13 @@ export type UserInfoPatch = {
   phone?: string | null;
   tags?: string[] | null;
   geographic?: GeographicInfo | null;
-  userState?: UserState;
   notifyCount?: number;
   unreadCount?: number;
 };
 
 type UserInfoUpdatePatch = UserInfoUpdateData;
 
-type UserInfoUpdateField = keyof UserInfoUpdatePatch;
+type UserInfoUpdateField = keyof UserInfoUpdatePatch & keyof UserInfoView;
 
 export interface UpdateVisibleUserInfoParams {
   session: UsecaseSession;
@@ -168,14 +166,12 @@ export class UpdateVisibleUserInfoUsecase {
   }
 
   /**
-   * 清洗并验证更新字段
-   */
-  /**
    * 清洗并验证更新字段（支持 isSelf / isStaff / isAdmin 开关）
    * - admin：允许除敏感系统字段外的全部白名单（等同于 staff 自改）
-   * - staff 自改：允许更广的白名单（包含 userState/notifyCount/unreadCount）
+   * - staff 自改：允许更广的白名单（包含 notifyCount/unreadCount）
    * - staff 改他人：仅允许极少字段（nickname / avatarUrl / phone）
-   * - 非 staff：允许基础与联系白名单，不允许用户状态与计数
+   * - 非 staff：允许基础与联系白名单，不允许计数
+   * - userState 不在任何白名单：启用/停用统一走 AdminSetUserStatusUsecase（双字段同事务同步）
    */
   private async sanitizePatch(
     patch: UserInfoPatch,
@@ -322,15 +318,6 @@ export class UpdateVisibleUserInfoUsecase {
     assignIfChanged: <K extends UserInfoUpdateField>(key: K, next: UserInfoUpdatePatch[K]) => void,
     _flags: { isStaff: boolean; isSelf: boolean; isAdmin: boolean },
   ): void {
-    if (typeof patch.userState !== 'undefined') {
-      if (!allow('userState')) {
-        throw new DomainError(
-          PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS,
-          '仅在 staff 自改或 admin 时可修改用户状态',
-        );
-      }
-      assignIfChanged('userState', normalizeVisibleUserStateInput(patch.userState));
-    }
     if (typeof patch.notifyCount !== 'undefined') {
       if (!allow('notifyCount')) {
         throw new DomainError(
@@ -392,9 +379,10 @@ export class UpdateVisibleUserInfoUsecase {
 
   /**
    * 字段允许策略（isSelf / isStaff）
-   * - staff 自改：允许 nickname / gender / birthDate / avatarUrl / email / signature / address / phone / tags / geographic / userState
+   * - staff 自改：允许 nickname / gender / birthDate / avatarUrl / email / signature / address / phone / tags / geographic
    * - staff 改他人：仅允许 nickname / avatarUrl / phone
-   * - 非 staff：允许基础与联系白名单（不含 userState）
+   * - 非 staff：允许基础与联系白名单
+   * - userState 不在任何白名单：状态写入统一走 AdminSetUserStatusUsecase
    */
   private isFieldAllowed(
     key: UserInfoUpdateField,
@@ -411,7 +399,6 @@ export class UpdateVisibleUserInfoUsecase {
       'phone',
       'tags',
       'geographic',
-      'userState',
       'notifyCount',
       'unreadCount',
     ];
