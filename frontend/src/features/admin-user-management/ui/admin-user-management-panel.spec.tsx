@@ -57,7 +57,6 @@ vi.mock('../infrastructure/admin-user-adapter', async (importOriginal) => {
 
   return {
     ...actual,
-    adminChangeUserRole: vi.fn(),
     adminCreateUser: vi.fn(),
     adminResetUserPassword: vi.fn(),
     adminSetUserStatus: vi.fn(),
@@ -69,7 +68,6 @@ vi.mock('../infrastructure/admin-user-adapter', async (importOriginal) => {
 const fetchUsersMock = vi.mocked(adminUserAdapter.fetchAdminUsers);
 const createMock = vi.mocked(adminUserAdapter.adminCreateUser);
 const updateProfileMock = vi.mocked(adminUserAdapter.adminUpdateUserProfile);
-const changeRoleMock = vi.mocked(adminUserAdapter.adminChangeUserRole);
 const setStatusMock = vi.mocked(adminUserAdapter.adminSetUserStatus);
 const resetPasswordMock = vi.mocked(adminUserAdapter.adminResetUserPassword);
 
@@ -215,7 +213,7 @@ async function openCreateDialogAndFill(draft: { loginName: string; nickname: str
 }
 
 /**
- * 四个行级弹窗的面板侧守卫用例参数化：会话代次与 accountId 双重核对的代码路径同构，
+ * 三个行级弹窗的面板侧守卫用例参数化：会话代次与 accountId 双重核对的代码路径同构，
  * 但每个弹窗各有一条独立代次，逐个覆盖才能抓住「用错了 key」这类接线错误。
  */
 type RowDialogCase = {
@@ -282,48 +280,6 @@ const ROW_DIALOG_CASES: RowDialogCase[] = [
     },
     stubResolvedSuccess: () => {
       updateProfileMock.mockResolvedValue({ ok: true });
-    },
-  },
-  {
-    actionName: /角\s*色/,
-    adapterCallCount: () => changeRoleMock.mock.calls.length,
-    assertDraftPreserved: (dialog) => {
-      expect(within(dialog).getByRole('radio', { name: '客户' })).toBeChecked();
-    },
-    assertFreshSuccessFeedback: () => {
-      expect(message.success).toHaveBeenCalledWith('角色已修改。');
-    },
-    assertStaleSuccessFeedback: () => {
-      expect(message.success).toHaveBeenCalledWith('「用户A」的角色已修改。');
-      expect(message.success).not.toHaveBeenCalledWith('角色已修改。');
-    },
-    dialogTitleOf: (nickname) => `修改角色：${nickname}`,
-    name: '角色修改',
-    okButtonName: /确\s*认\s*修\s*改/,
-    prepareSubmit: (dialog) => {
-      fireEvent.click(within(dialog).getByRole('radio', { name: '客户' }));
-    },
-    stubPendingSuccess: () => {
-      const pending = deferred<AdminUserCommandResult>();
-      changeRoleMock.mockReturnValue(pending.promise);
-
-      return {
-        resolve: async () => {
-          await act(async () => {
-            pending.resolve({ ok: true });
-          });
-        },
-      };
-    },
-    stubResolvedFailure: (failureMessage) => {
-      changeRoleMock.mockResolvedValue({
-        ok: false,
-        reason: 'forbidden',
-        message: failureMessage,
-      });
-    },
-    stubResolvedSuccess: () => {
-      changeRoleMock.mockResolvedValue({ ok: true });
     },
   },
   {
@@ -430,7 +386,6 @@ describe('管理员用户管理面板的弹窗会话代次守卫', () => {
     fetchUsersMock.mockResolvedValue(makePage());
     createMock.mockReset();
     updateProfileMock.mockReset();
-    changeRoleMock.mockReset();
     setStatusMock.mockReset();
     resetPasswordMock.mockReset();
   });

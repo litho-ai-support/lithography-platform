@@ -1,11 +1,11 @@
 // src/features/admin-user-management/ui/admin-user-row-command-modals.tsx
 
 /**
- * 行级写命令弹窗：资料编辑、角色修改、启停、密码重置。
- * 四个弹窗共用同一提交契约：onSubmit 返回显式业务结果，ok 时由父组件关闭弹窗并刷新列表；
+ * 行级写命令弹窗：资料编辑、启停、密码重置。
+ * 三个弹窗共用同一提交契约：onSubmit 返回显式业务结果，ok 时由父组件关闭弹窗并刷新列表；
  * 业务失败展示在弹窗内（不关闭、不清空已填草稿）；密码字段不回填、不进入任何成功提示。
  *
- * 四个弹窗都恒定挂载在 panel 中、只切换 `row`，因此每一个都接入 `useStaleSubmitGuard`：
+ * 三个弹窗都恒定挂载在 panel 中、只切换 `row`，因此每一个都接入 `useStaleSubmitGuard`：
  * 会话在提交续体回来之前被推进过（切换目标行、关闭后重新打开，含同一个 accountId），
  * 在途提交的续体就属于上一代会话，不得写进当前弹窗的错误区。
  * 注：antd 6.4.3 的 `Modal.handleCancel` 在 `confirmLoading` 为真时会直接 `return`，
@@ -19,16 +19,12 @@ import type {
   AdminUserProfileEditDraft,
   AdminUserRow,
   AdminUserStatusFilter,
-  AdminUserWritableRole,
 } from '../application/admin-user-management.types';
 import {
   ADMIN_USER_NICKNAME_MAX_LENGTH,
-  ADMIN_USER_ROLE_LABELS,
   ADMIN_USER_STATUS_FILTER_OPTIONS,
   ADMIN_USER_STATUS_LABELS,
-  ADMIN_USER_WRITABLE_ROLES,
   isAdminUserStatusWritable,
-  isAdminUserWritableRole,
 } from '../application/admin-user-management-policy';
 
 import { useStaleSubmitGuard } from './use-stale-submit-guard';
@@ -191,107 +187,6 @@ export function AdminUserProfileEditModal({
           rules={[{ type: 'email', message: '联系邮箱格式不正确' }]}
         >
           <Input autoComplete="off" />
-        </Form.Item>
-
-        {submitError ? <Alert message={submitError} showIcon type="error" /> : null}
-      </Form>
-    </Modal>
-  );
-}
-
-// ---- 角色修改 ----
-
-type AdminUserRoleModalProps = SubmittingModalProps & {
-  onCancel: () => void;
-  onSubmit: (input: {
-    accountId: number;
-    role: AdminUserWritableRole;
-  }) => Promise<AdminUserCommandResult>;
-  row: AdminUserRow | null;
-};
-
-type RoleFormValues = {
-  role: AdminUserWritableRole;
-};
-
-export function AdminUserRoleModal({
-  onCancel,
-  onSubmit,
-  row,
-  submitting,
-}: AdminUserRoleModalProps) {
-  const [form] = Form.useForm<RoleFormValues>();
-  const {
-    captureSubmitSeq,
-    invalidateInFlightSubmit,
-    isCurrentSubmitSeq,
-    setSubmitError,
-    submitError,
-  } = useStaleSubmitGuard(row === null ? null : row.accountId);
-
-  const handleFinish = async (values: RoleFormValues) => {
-    if (!row) {
-      return;
-    }
-
-    const submitSeq = captureSubmitSeq();
-
-    setSubmitError(null);
-
-    const result = await onSubmit({ accountId: row.accountId, role: values.role });
-
-    if (!isCurrentSubmitSeq(submitSeq)) {
-      return;
-    }
-
-    if (!result.ok && result.message) {
-      setSubmitError(result.message);
-    }
-  };
-
-  return (
-    <Modal
-      cancelText="取消"
-      confirmLoading={submitting}
-      destroyOnHidden
-      okText="确认修改"
-      open={row !== null}
-      title={`修改角色：${row?.nickname ?? ''}`}
-      onCancel={() => {
-        // 同步推进代次：关闭与「立刻重开同一个 accountId」可能落在同一个事件循环窗口内
-        invalidateInFlightSubmit();
-        onCancel();
-      }}
-      onOk={() => void form.submit()}
-    >
-      {row ? (
-        <p>
-          当前角色：{ADMIN_USER_ROLE_LABELS[row.role]}
-          。修改后，目标用户的下一次受保护请求将按新角色生效。
-        </p>
-      ) : null}
-
-      <Form
-        form={form}
-        initialValues={{
-          role: row && isAdminUserWritableRole(row.role) ? row.role : undefined,
-        }}
-        key={toRowFormKey(row)}
-        layout="vertical"
-        preserve={false}
-        onFinish={(values) => void handleFinish(values)}
-      >
-        <Form.Item<RoleFormValues>
-          label="目标角色"
-          name="role"
-          rules={[{ required: true, message: '请选择目标角色' }]}
-        >
-          <Radio.Group
-            options={ADMIN_USER_WRITABLE_ROLES.map((role) => ({
-              value: role,
-              label: ADMIN_USER_ROLE_LABELS[role],
-            }))}
-          />
         </Form.Item>
 
         {submitError ? <Alert message={submitError} showIcon type="error" /> : null}

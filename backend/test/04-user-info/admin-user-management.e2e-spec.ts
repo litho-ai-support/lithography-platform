@@ -17,7 +17,7 @@ import { getAccountIdByLoginName, login, postGql } from '../utils/e2e-graphql-ut
 import { cleanupTestAccounts, seedTestAccounts, testAccountsConfig } from '../utils/test-accounts';
 
 /**
- * P2-1B：管理员用户管理六个 GraphQL 操作的真实 MySQL E2E。
+ * P2-1B：管理员用户管理五个 GraphQL 操作（adminUsers + 四个写操作）的真实 MySQL E2E。
  *
  * 与定向单测（`src/usecases/account/*.spec.ts` / `src/modules/account/queries/*.spec.ts`）的分工：
  * - 单测断言**协作契约**（写入顺序、事务边界、单元素数组、盐口径、日志脱敏）；
@@ -34,11 +34,15 @@ import { cleanupTestAccounts, seedTestAccounts, testAccountsConfig } from '../ut
  *   只读的 `staffPrimary`。跨 describe 仍可任意调序或单独 `.only`。
  * - `SUPER_ADMIN` 目标只读保护在 E2E 上有一处不可达：本文件只 seed 一个 SUPER_ADMIN，
  *   它同时是发起方自己，故 `adminSetUserStatus` 命中的是「不能停用自己」这条先行显式拒绝，
- *   而非目标保护分支（另外三个写操作命中的是真·目标保护）。补齐它需要第二个 SUPER_ADMIN，
+ *   而非目标保护分支（其余写操作命中的是真·目标保护）。补齐它需要第二个 SUPER_ADMIN，
  *   而改 Seed 与直接改库都在禁止清单内，故该分支由
  *   `src/usecases/account/admin-set-user-status.usecase.spec.ts` 覆盖，不在此违规造数。
  * - 同理，「资料缺失或三源无法收敛时整次查询失败关闭」需要脏行才能触发，而造脏行只能
  *   绕过业务入口直接改库，故该分支由 `admin-user.query.service.spec.ts` 覆盖，不在本文件重现。
+ *
+ * 角色口径：普通用户角色只在管理员创建账号时单选一次，创建后角色只读；
+ * 不存在任何公开角色修改 Mutation（`adminChangeUserRole` / `updateAccessGroup` 均已下线），
+ * 角色只作列表展示与筛选。
  */
 
 type GqlError = {
@@ -114,12 +118,6 @@ const ADMIN_UPDATE_USER_PROFILE_MUTATION = `
   }
 `;
 
-const ADMIN_CHANGE_USER_ROLE_MUTATION = `
-  mutation AdminChangeUserRole($input: AdminChangeUserRoleInput!) {
-    adminChangeUserRole(input: $input) { ${ADMIN_USER_FIELDS} }
-  }
-`;
-
 const ADMIN_SET_USER_STATUS_MUTATION = `
   mutation AdminSetUserStatus($input: AdminSetUserStatusInput!) {
     adminSetUserStatus(input: $input) { ${ADMIN_USER_FIELDS} }
@@ -155,7 +153,6 @@ const SCHEMA_ROOT_QUERY = `
 const ADMIN_WRITE_MUTATIONS = [
   'adminCreateUser',
   'adminUpdateUserProfile',
-  'adminChangeUserRole',
   'adminSetUserStatus',
   'adminResetUserPassword',
 ] as const;
@@ -198,7 +195,6 @@ describe('管理员用户管理 (e2e)', () => {
   let adminAccountId: number;
   let guestAccountId: number;
   let guestSecondaryAccountId: number;
-  let staffSecondaryAccountId: number;
 
   beforeAll(async () => {
     // E2E 基线默认关闭 introspection；本 spec 只在 API 初始化期间临时开启，用于核验公开契约面，
@@ -246,10 +242,6 @@ describe('管理员用户管理 (e2e)', () => {
       dataSource,
       testAccountsConfig.guestSecondary.loginName,
     );
-    staffSecondaryAccountId = await getAccountIdByLoginName(
-      dataSource,
-      testAccountsConfig.staffSecondary.loginName,
-    );
   });
 
   afterAll(async () => {
@@ -287,7 +279,7 @@ describe('管理员用户管理 (e2e)', () => {
   };
 
   /**
-   * 六个 operation 的调用入口：`token` 一律为**必填首参**，刻意不提供 `?? adminToken` 默认值。
+   * 五个 operation 的调用入口：`token` 一律为**必填首参**，刻意不提供 `?? adminToken` 默认值。
    *
    * 授权类用例一旦漏传 token 就会静默以管理员身份执行，把「应被拒绝」变成「成功」，
    * 而失败信息只表现为 code 不匹配，极难定位到「token 没传」这个真因；
@@ -329,16 +321,6 @@ describe('管理员用户管理 (e2e)', () => {
   ): Promise<GqlBody<{ adminUpdateUserProfile?: AdminUserPayload }>> =>
     gql({
       query: ADMIN_UPDATE_USER_PROFILE_MUTATION,
-      variables: { input },
-      token,
-    });
-
-  const changeUserRole = (
-    token: string,
-    input: Record<string, unknown>,
-  ): Promise<GqlBody<{ adminChangeUserRole?: AdminUserPayload }>> =>
-    gql({
-      query: ADMIN_CHANGE_USER_ROLE_MUTATION,
       variables: { input },
       token,
     });
@@ -433,15 +415,8 @@ describe('管理员用户管理 (e2e)', () => {
     expect(body.data?.adminSetUserStatus?.status).toBe(status);
   };
 
-  /** 幂等自建前置：同角色时 Usecase 零写入，故可无条件调用 */
-  const ensureRole = async (accountId: number, role: IdentityTypeEnum): Promise<void> => {
-    const body = await changeUserRole(adminToken, { accountId, role });
-    expect(body.errors).toBeUndefined();
-    expect(body.data?.adminChangeUserRole?.role).toBe(role);
-  };
-
   /**
-   * 六个管理员 operation 的调用闭包表：授权准入用例共用，避免漏测某个 operation。
+   * 五个管理员 operation 的调用闭包表：授权准入用例共用，避免漏测某个 operation。
    * token 位于首参且无默认值，确保「谁在调用」在用例里一目了然。
    */
   const allAdminOperations = (params: {
@@ -469,14 +444,6 @@ describe('管理员用户管理 (e2e)', () => {
         }),
     ],
     [
-      'adminChangeUserRole',
-      () =>
-        changeUserRole(params.token, {
-          accountId: params.targetAccountId,
-          role: IdentityTypeEnum.CUSTOMER,
-        }),
-    ],
-    [
       'adminSetUserStatus',
       () =>
         setUserStatus(params.token, {
@@ -494,20 +461,12 @@ describe('管理员用户管理 (e2e)', () => {
     ],
   ];
 
-  /** 四个写操作对不存在目标的调用闭包表 */
+  /** 三个写操作对不存在目标的调用闭包表 */
   const missingTargetOperations = (): Array<[string, () => Promise<GqlBody<unknown>>]> => [
     [
       'adminUpdateUserProfile',
       () =>
         updateUserProfile(adminToken, { accountId: MISSING_ACCOUNT_ID, nickname: '不存在目标' }),
-    ],
-    [
-      'adminChangeUserRole',
-      () =>
-        changeUserRole(adminToken, {
-          accountId: MISSING_ACCOUNT_ID,
-          role: IdentityTypeEnum.CUSTOMER,
-        }),
     ],
     [
       'adminSetUserStatus',
@@ -558,7 +517,7 @@ describe('管理员用户管理 (e2e)', () => {
     ];
 
     it.each(unauthorizedSessions)(
-      '%s 会话调用全部六个管理员接口均返回 FORBIDDEN 且不产生任何写入',
+      '%s 会话调用全部五个管理员接口均返回 FORBIDDEN 且不产生任何写入',
       async (_label, tokenOf) => {
         const operations = allAdminOperations({
           token: tokenOf(),
@@ -1009,89 +968,6 @@ describe('管理员用户管理 (e2e)', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 角色切换
-  // ---------------------------------------------------------------------------
-
-  describe('角色切换 adminChangeUserRole（三源同步）', () => {
-    it('ENGINEER → CUSTOMER：identity_hint / access_group / meta_digest 三源一致', async () => {
-      await ensureRole(staffSecondaryAccountId, IdentityTypeEnum.ENGINEER);
-
-      const body = await changeUserRole(adminToken, {
-        accountId: staffSecondaryAccountId,
-        role: IdentityTypeEnum.CUSTOMER,
-      });
-      expect(body.errors).toBeUndefined();
-      expect(body.data?.adminChangeUserRole).toMatchObject({
-        id: staffSecondaryAccountId,
-        role: IdentityTypeEnum.CUSTOMER,
-        status: AccountStatus.ACTIVE,
-      });
-      expect(await readRoleSources(staffSecondaryAccountId)).toEqual({
-        identityHint: IdentityTypeEnum.CUSTOMER,
-        accessGroup: [IdentityTypeEnum.CUSTOMER],
-        metaDigest: [IdentityTypeEnum.CUSTOMER],
-      });
-    });
-
-    it('CUSTOMER → ENGINEER：三源一致（回到 seed 角色）', async () => {
-      await ensureRole(staffSecondaryAccountId, IdentityTypeEnum.CUSTOMER);
-
-      const body = await changeUserRole(adminToken, {
-        accountId: staffSecondaryAccountId,
-        role: IdentityTypeEnum.ENGINEER,
-      });
-      expect(body.errors).toBeUndefined();
-      expect(body.data?.adminChangeUserRole?.role).toBe(IdentityTypeEnum.ENGINEER);
-      expect(await readRoleSources(staffSecondaryAccountId)).toEqual({
-        identityHint: IdentityTypeEnum.ENGINEER,
-        accessGroup: [IdentityTypeEnum.ENGINEER],
-        metaDigest: [IdentityTypeEnum.ENGINEER],
-      });
-    });
-
-    it('幂等：目标角色等于当前角色时零写入（updatedAt 不变）且三源保持一致', async () => {
-      const prepared = await changeUserRole(adminToken, {
-        accountId: staffSecondaryAccountId,
-        role: IdentityTypeEnum.ENGINEER,
-      });
-      expect(prepared.errors).toBeUndefined();
-      // `AdminUserDTO` 不含 isUpdated，updatedAt 是 E2E 层唯一能区分「幂等短路」与
-      // 「又写了一遍相同值」的可观察事实：零写入则 updated_at 不被 bump。
-      // 少了这条断言，本用例无法与「重复写入相同角色」区分，幂等就只是用例名上的幂等。
-      const updatedAtBefore = prepared.data?.adminChangeUserRole?.updatedAt;
-      expect(updatedAtBefore).toBeDefined();
-
-      const body = await changeUserRole(adminToken, {
-        accountId: staffSecondaryAccountId,
-        role: IdentityTypeEnum.ENGINEER,
-      });
-      expect(body.errors).toBeUndefined();
-      expect(body.data?.adminChangeUserRole?.role).toBe(IdentityTypeEnum.ENGINEER);
-      expect(body.data?.adminChangeUserRole?.updatedAt).toBe(updatedAtBefore);
-      expect(await readRoleSources(staffSecondaryAccountId)).toEqual({
-        identityHint: IdentityTypeEnum.ENGINEER,
-        accessGroup: [IdentityTypeEnum.ENGINEER],
-        metaDigest: [IdentityTypeEnum.ENGINEER],
-      });
-    });
-
-    it('请求 SUPER_ADMIN 角色被拒（BAD_USER_INPUT）且三源零变化', async () => {
-      await ensureRole(staffSecondaryAccountId, IdentityTypeEnum.ENGINEER);
-
-      const body = await changeUserRole(adminToken, {
-        accountId: staffSecondaryAccountId,
-        role: IdentityTypeEnum.SUPER_ADMIN,
-      });
-      expectSingleError(body, 'BAD_USER_INPUT', 'INPUT_NORMALIZE_INVALID_ENUM_VALUE');
-      expect(await readRoleSources(staffSecondaryAccountId)).toEqual({
-        identityHint: IdentityTypeEnum.ENGINEER,
-        accessGroup: [IdentityTypeEnum.ENGINEER],
-        metaDigest: [IdentityTypeEnum.ENGINEER],
-      });
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // 状态切换
   // ---------------------------------------------------------------------------
 
@@ -1238,7 +1114,7 @@ describe('管理员用户管理 (e2e)', () => {
      * 因此 `adminSetUserStatus` 命中的是「不能停用自己」这一先行显式拒绝；
      * 两者对外同为 FORBIDDEN，本用例只锁定「全部拒绝 + 数据库零变化」这一不变量。
      */
-    it('资料编辑 / 角色修改 / 启停 / 重置密码全部拒绝且数据库零变化', async () => {
+    it('资料编辑 / 启停 / 重置密码全部拒绝且数据库零变化', async () => {
       const operations: Array<[string, () => Promise<GqlBody<unknown>>]> = [
         [
           'adminUpdateUserProfile',
@@ -1246,14 +1122,6 @@ describe('管理员用户管理 (e2e)', () => {
             updateUserProfile(adminToken, {
               accountId: adminAccountId,
               nickname: 'E2E 管理员改名',
-            }),
-        ],
-        [
-          'adminChangeUserRole',
-          () =>
-            changeUserRole(adminToken, {
-              accountId: adminAccountId,
-              role: IdentityTypeEnum.CUSTOMER,
             }),
         ],
         [
@@ -1312,7 +1180,7 @@ describe('管理员用户管理 (e2e)', () => {
   // ---------------------------------------------------------------------------
 
   describe('目标不存在（错误契约）', () => {
-    it('四个写操作均返回 NOT_FOUND，不塌缩为 UNAUTHENTICATED 且 details 留空', async () => {
+    it('三个写操作均返回 NOT_FOUND，不塌缩为 UNAUTHENTICATED 且 details 留空', async () => {
       const operations = missingTargetOperations();
       const collected = await collectErrors(operations);
 
@@ -1411,8 +1279,8 @@ describe('管理员用户管理 (e2e)', () => {
   // 契约面
   // ---------------------------------------------------------------------------
 
-  describe('契约面：updateAccessGroup 已下线、管理员操作已上线', () => {
-    it('Mutation root 不暴露 updateAccessGroup，但暴露五个管理员写操作', async () => {
+  describe('契约面：角色修改入口已下线、管理员现行操作已上线', () => {
+    it('Mutation root 不暴露 updateAccessGroup / adminChangeUserRole，但暴露四个管理员写操作', async () => {
       const body = await gql<SchemaRootPayload>({ query: SCHEMA_ROOT_QUERY });
       expect(body.errors).toBeUndefined();
 
@@ -1420,6 +1288,7 @@ describe('管理员用户管理 (e2e)', () => {
         body.data?.__schema?.mutationType?.fields?.map((field) => field.name) ?? [];
       expect(mutationNames.length).toBeGreaterThan(0);
       expect(mutationNames).not.toContain('updateAccessGroup');
+      expect(mutationNames).not.toContain('adminChangeUserRole');
       expect(mutationNames).toEqual(expect.arrayContaining([...ADMIN_WRITE_MUTATIONS]));
     });
 

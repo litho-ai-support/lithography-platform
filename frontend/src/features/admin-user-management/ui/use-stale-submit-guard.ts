@@ -1,7 +1,7 @@
 // src/features/admin-user-management/ui/use-stale-submit-guard.ts
 
 /**
- * 弹窗提交代次守卫：五个管理员写弹窗（创建 / 资料编辑 / 角色修改 / 启停 / 密码重置）共用的唯一实现。
+ * 弹窗提交代次守卫：四个管理员写弹窗（创建 / 资料编辑 / 启停 / 密码重置）共用的唯一实现。
  *
  * 为什么需要它：弹窗的会话可以在提交续体回来之前被推进——关闭、重新打开、切换目标行都算。
  * 而弹窗组件在 panel 里恒定挂载、只切换 `open` / `row`，`destroyOnHidden` 只销毁 Modal 子树（Form），

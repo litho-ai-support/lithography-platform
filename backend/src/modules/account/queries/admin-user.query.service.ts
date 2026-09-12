@@ -389,7 +389,7 @@ export class AdminUserQueryService {
 
   /**
    * `updatedAt` 取账号侧与资料侧 `updated_at` 的较新值，
-   * 使资料编辑、角色修改与状态修改都反映为同一个「最近变更时间」。
+   * 使资料编辑与状态修改都反映为同一个「最近变更时间」。
    *
    * 自动维护，假定为合法 `Date`；若出现 `Invalid Date`（`getTime()` 返回 `NaN`），
    * 本比较会静默取账号侧值，不在此做额外校验——该形态属系统侧故障，应由写入链路

@@ -34,7 +34,7 @@ import {
 } from './admin-user-permission';
 
 /**
- * 管理员用户管理场景输入语义：`usecases/account` 内列表、创建、资料编辑、角色修改、
+ * 管理员用户管理场景输入语义：`usecases/account` 内列表、创建、资料编辑、
  * 状态修改与管理员重置密码等用例共享的单一收敛入口，不各写一份。
  *
  * 分层边界（见 `docs/project-convention/input-field-design.md`）：
@@ -447,7 +447,7 @@ export function normalizeAdminUserKeyword(input: unknown): string | undefined {
 }
 
 /**
- * 目标账号 ID 收敛：必须为正整数，供资料编辑、角色修改、状态修改与管理员重置密码共用。
+ * 目标账号 ID 收敛：必须为正整数，供资料编辑、状态修改与管理员重置密码共用。
  *
  * 刻意不使用 `normalizeLimit()`：该 primitive 会把越界值 clamp 到边界，
  * 对分页参数是期望行为，对标识符则会把非法 ID 静默改写成另一个合法 ID，

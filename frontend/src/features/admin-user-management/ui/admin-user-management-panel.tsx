@@ -3,7 +3,7 @@
 /**
  * 管理员用户管理面板。
  *
- * 五个写弹窗都恒定挂载在本组件中、只切换 `open` / `row`，因此弹窗归属判定集中在这一层：
+ * 四个写弹窗都恒定挂载在本组件中、只切换 `open` / `row`，因此弹窗归属判定集中在这一层：
  * 每个弹窗一条**会话代次**（`useDialogSessionSeq`），打开 / 关闭 / 切换目标时在事件处理器里
  * 同步推进，提交入口捕获代次与目标 accountId，成功续体回来后代次与 accountId 都仍一致才允许关闭。
  * 弹窗内部的错误区另由弹窗侧的 `useStaleSubmitGuard` 把守，两层互不代替。
@@ -20,7 +20,6 @@ import type {
   AdminUserRole,
   AdminUserRow,
   AdminUserStatusFilter,
-  AdminUserWritableRole,
 } from '../application/admin-user-management.types';
 import {
   ADMIN_USER_ROLE_FILTER_OPTIONS,
@@ -28,7 +27,6 @@ import {
   ADMIN_USER_ROW_READ_ONLY_REASON,
   ADMIN_USER_STATUS_FILTER_OPTIONS,
   ADMIN_USER_STATUS_LABELS,
-  canChangeAdminUserRole,
   canEditAdminUserProfile,
   canResetAdminUserPassword,
   canToggleAdminUserStatus,
@@ -41,7 +39,6 @@ import { AdminUserCreateModal } from './admin-user-create-modal';
 import {
   AdminUserProfileEditModal,
   AdminUserResetPasswordModal,
-  AdminUserRoleModal,
   AdminUserStatusModal,
 } from './admin-user-row-command-modals';
 import { useDialogSessionSeq } from './use-dialog-session-seq';
@@ -52,11 +49,8 @@ const ROLE_TAG_COLORS: Record<AdminUserRole, string> = {
   SUPER_ADMIN: 'gold',
 };
 
-/** 四个行级弹窗的会话标识（都以目标 accountId 为身份） */
-type AdminUserRowDialogKey = 'profile' | 'role' | 'status' | 'reset-password';
-
-/** 五个弹窗的会话标识：创建弹窗没有 accountId，会话代次就是它的完整身份 */
-type AdminUserDialogKey = AdminUserRowDialogKey | 'create';
+/** 四个弹窗的会话标识：创建弹窗没有 accountId，会话代次就是它的完整身份；行级弹窗都以目标 accountId 为身份 */
+type AdminUserDialogKey = 'create' | 'profile' | 'status' | 'reset-password';
 
 type AdminUserRowSetter = Dispatch<SetStateAction<AdminUserRow | null>>;
 
@@ -87,13 +81,11 @@ export function AdminUserManagementPanel() {
   const [keywordDraft, setKeywordDraft] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [profileRow, setProfileRow] = useState<AdminUserRow | null>(null);
-  const [roleRow, setRoleRow] = useState<AdminUserRow | null>(null);
   const [statusRow, setStatusRow] = useState<AdminUserRow | null>(null);
   const [resetPasswordRow, setResetPasswordRow] = useState<AdminUserRow | null>(null);
 
   const isCreateSubmitting = commands.isPending('create');
   const isProfileSubmitting = commands.isPending('profile');
-  const isRoleSubmitting = commands.isPending('role');
   const isStatusSubmitting = commands.isPending('status');
   const isResetPasswordSubmitting = commands.isPending('reset-password');
 
@@ -104,7 +96,7 @@ export function AdminUserManagementPanel() {
    * 旧请求的成功续体就能把新一代弹窗关掉。
    *
    * 边界说明：antd 6.4.3 的 `Modal.handleCancel` 在 `confirmLoading` 为真时直接 `return`，
-   * 取消按钮、右上角 X、遮罩点击与 Esc 四条关闭路径共用它，而下面五个弹窗的
+   * 取消按钮、右上角 X、遮罩点击与 Esc 四条关闭路径共用它，而下面四个弹窗的
    * `submitting` 都接到了 `commands.isPending(key)`。也就是说当前接线下用户在提交期间
    * 关不掉弹窗，本层守卫拦的是「提交期间切换目标」以及宿主接线一旦放松后的
    * 「关闭 / 重开」，而不是一个当前可复现的用户操作序列。
@@ -126,7 +118,7 @@ export function AdminUserManagementPanel() {
   };
 
   const openRowDialog = (
-    key: AdminUserRowDialogKey,
+    key: AdminUserDialogKey,
     currentRow: AdminUserRow | null,
     setRow: AdminUserRowSetter,
     row: AdminUserRow,
@@ -140,7 +132,7 @@ export function AdminUserManagementPanel() {
     setRow(row);
   };
 
-  const closeRowDialog = (key: AdminUserRowDialogKey, setRow: AdminUserRowSetter) => {
+  const closeRowDialog = (key: AdminUserDialogKey, setRow: AdminUserRowSetter) => {
     dialogSession.advance(key);
     setRow(null);
   };
@@ -174,7 +166,7 @@ export function AdminUserManagementPanel() {
    * @returns 本次成功是否属于当前会话；false ⇒ 陈旧，调用方据此改用点名目标的反馈措辞
    */
   const closeRowDialogOnSuccess = (
-    key: AdminUserRowDialogKey,
+    key: AdminUserDialogKey,
     sessionSeq: number,
     targetAccountId: number,
     setRow: AdminUserRowSetter,
@@ -246,34 +238,6 @@ export function AdminUserManagementPanel() {
     }
 
     // in-flight：同类命令进行中，OK 按钮已 loading，静默忽略不叠加任何提示
-    return { ok: false, reason: 'update-failed', message: '' };
-  };
-
-  const submitRoleChange = async (input: {
-    accountId: number;
-    role: AdminUserWritableRole;
-  }): Promise<AdminUserCommandResult> => {
-    const sessionSeq = dialogSession.capture('role');
-    const targetNickname = roleRow?.accountId === input.accountId ? roleRow.nickname : null;
-
-    const execution = await commands.changeUserRole(input);
-
-    if (execution.kind === 'ok') {
-      if (execution.result.ok) {
-        if (closeRowDialogOnSuccess('role', sessionSeq, input.accountId, setRoleRow)) {
-          message.success('角色已修改。');
-        } else {
-          message.success(toTargetedSuccessMessage(targetNickname, '角色', '已修改'));
-        }
-      }
-
-      return execution.result;
-    }
-
-    if (execution.kind === 'unhandled-error') {
-      return { ok: false, reason: 'update-failed', message: execution.message };
-    }
-
     return { ok: false, reason: 'update-failed', message: '' };
   };
 
@@ -406,12 +370,6 @@ export function AdminUserManagementPanel() {
             key: 'profile',
             label: '编辑资料',
             onClick: () => openRowDialog('profile', profileRow, setProfileRow, row),
-          },
-          {
-            disabled: !canChangeAdminUserRole(row),
-            key: 'role',
-            label: '角色',
-            onClick: () => openRowDialog('role', roleRow, setRoleRow, row),
           },
           {
             disabled: !canToggleAdminUserStatus(row),
@@ -557,13 +515,6 @@ export function AdminUserManagementPanel() {
         submitting={isProfileSubmitting}
         onCancel={() => closeRowDialog('profile', setProfileRow)}
         onSubmit={submitProfileEdit}
-      />
-
-      <AdminUserRoleModal
-        row={roleRow}
-        submitting={isRoleSubmitting}
-        onCancel={() => closeRowDialog('role', setRoleRow)}
-        onSubmit={submitRoleChange}
       />
 
       <AdminUserStatusModal

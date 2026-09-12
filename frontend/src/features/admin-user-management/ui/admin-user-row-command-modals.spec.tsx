@@ -2,9 +2,9 @@
 // @vitest-environment jsdom
 
 /**
- * 四个行级写弹窗（资料编辑 / 角色修改 / 启停 / 密码重置）的提交代次守卫。
+ * 三个行级写弹窗（资料编辑 / 启停 / 密码重置）的提交代次守卫。
  *
- * 这四个弹窗在 panel 里恒定挂载、只切换 `row`，`destroyOnHidden` 只销毁 Modal 子树（Form），
+ * 这三个弹窗在 panel 里恒定挂载、只切换 `row`，`destroyOnHidden` 只销毁 Modal 子树（Form），
  * 不会重置弹窗自己的 `useState`。一旦会话在提交续体回来之前被推进（关闭 / 重开 / 切换目标），
  * 旧续体就会把失败写进不属于它的弹窗。
  *
@@ -13,7 +13,7 @@
  * `Modal.handleCancel` 在 `confirmLoading` 为真时会直接 return，所以四条关闭路径在面板里
  * 暂时被 antd 锁住；那是宿主接线的副作用，不是弹窗组件可以依赖的契约。）
  *
- * 四个弹窗的守卫语义完全一致，用同一套 harness 参数化覆盖，避免把同一段并发不变量抄四遍。
+ * 三个弹窗的守卫语义完全一致，用同一套 harness 参数化覆盖，避免把同一段并发不变量抄三遍。
  * 时序全部由可控 deferred 推进：不使用 sleep，不扩大 timeout。
  */
 
@@ -26,13 +26,11 @@ import type {
   AdminUserProfileEditDraft,
   AdminUserRow,
   AdminUserStatusFilter,
-  AdminUserWritableRole,
 } from '../application/admin-user-management.types';
 
 import {
   AdminUserProfileEditModal,
   AdminUserResetPasswordModal,
-  AdminUserRoleModal,
   AdminUserStatusModal,
 } from './admin-user-row-command-modals';
 
@@ -245,19 +243,6 @@ describeRowModalSubmitGuard<AdminUserProfileEditDraft>({
   },
   render: (props) => <AdminUserProfileEditModal submitting={false} {...props} />,
   titleOfRow: (row) => `编辑资料：${row.nickname}`,
-});
-
-describeRowModalSubmitGuard<{ accountId: number; role: AdminUserWritableRole }>({
-  assertDraftPreserved: () => {
-    expect(screen.getByRole('radio', { name: '客户' })).toBeChecked();
-  },
-  name: '角色修改',
-  okButtonName: /确\s*认\s*修\s*改/,
-  prepareSubmit: () => {
-    fireEvent.click(screen.getByRole('radio', { name: '客户' }));
-  },
-  render: (props) => <AdminUserRoleModal submitting={false} {...props} />,
-  titleOfRow: (row) => `修改角色：${row.nickname}`,
 });
 
 describeRowModalSubmitGuard<{ accountId: number; status: AdminUserStatusFilter }>({

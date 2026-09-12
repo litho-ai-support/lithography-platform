@@ -52,7 +52,7 @@ export const ADMIN_USER_LIST_STATUS_FILTERS: ReadonlyArray<AdminUserListStatusFi
 ];
 
 /**
- * 管理员用户管理精确权限断言（列表、创建、资料编辑、角色修改、状态修改、
+ * 管理员用户管理精确权限断言（列表、创建、资料编辑、状态修改、
  * 管理员重置密码等全部管理员用例的单一实现，不各写一份）。
  *
  * 业务规则：仅 roles 含 SUPER_ADMIN 且可信 JWT activeRole 精确为 SUPER_ADMIN 可执行。
@@ -109,7 +109,7 @@ export function assertAdminUserManagementPermission(
  * （`FORBIDDEN`），不使用 `NOT_FOUND` 伪装管理员账号不存在。
  *
  * @param targetRole 目标账号当前的单一业务角色
- * @param actionLabel 管理动作文案（如「编辑资料」「修改角色」「停用」），仅用于拒绝提示
+ * @param actionLabel 管理动作文案（如「编辑资料」「修改状态」「重置密码」），仅用于拒绝提示
  */
 export function assertWritableAdminUserTargetRole(
   targetRole: IdentityTypeEnum,

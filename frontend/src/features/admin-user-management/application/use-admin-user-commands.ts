@@ -3,7 +3,7 @@
 /**
  * 管理员用户管理写命令的执行入口（use case / command，收束在 feature application）。
  *
- * - 五个独立命令（创建 / 资料编辑 / 角色修改 / 状态修改 / 密码重置）各持有自己的
+ * - 四个独立命令（创建 / 资料编辑 / 状态修改 / 密码重置）各持有自己的
  *   in-flight 键：同类命令进行中拒绝重复提交，不同命令互不阻塞；
  * - 命令的显式业务结果（成功 / 业务拒绝）由 adapter 归一后原样透传给调用方；
  * - transport / auth / 网络类未处理失败统一收敛为 unhandled-error（附兜底文案），
@@ -17,7 +17,6 @@ import { useCallback, useRef, useState } from 'react';
 import { isGraphQLIngressError } from '@/shared/graphql';
 
 import {
-  adminChangeUserRole,
   adminCreateUser,
   adminResetUserPassword,
   adminSetUserStatus,
@@ -30,16 +29,9 @@ import type {
   AdminUserPasswordResetResult,
   AdminUserProfileEditDraft,
   AdminUserStatusFilter,
-  AdminUserWritableRole,
 } from './admin-user-management.types';
 
-export const ADMIN_USER_COMMAND_KEYS = [
-  'create',
-  'profile',
-  'role',
-  'status',
-  'reset-password',
-] as const;
+export const ADMIN_USER_COMMAND_KEYS = ['create', 'profile', 'status', 'reset-password'] as const;
 
 export type AdminUserCommandKey = (typeof ADMIN_USER_COMMAND_KEYS)[number];
 
@@ -131,15 +123,6 @@ export function useAdminUserCommands(reload: () => void) {
     [runReloadingCommand],
   );
 
-  const changeUserRole = useCallback(
-    (input: {
-      accountId: number;
-      role: AdminUserWritableRole;
-    }): Promise<AdminUserCommandExecution<AdminUserCommandResult>> =>
-      runReloadingCommand('role', () => adminChangeUserRole(input)),
-    [runReloadingCommand],
-  );
-
   const setUserStatus = useCallback(
     (input: {
       accountId: number;
@@ -161,7 +144,6 @@ export function useAdminUserCommands(reload: () => void) {
   const isPending = useCallback((key: AdminUserCommandKey) => pendingKeys.has(key), [pendingKeys]);
 
   return {
-    changeUserRole,
     createUser,
     isPending,
     resetUserPassword,

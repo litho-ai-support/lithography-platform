@@ -19,8 +19,8 @@ import {
  * - `accountId` 为目标账号 ID；正整数收敛由 Usecase 的
  *   `normalizeAdminUserTargetAccountId()` 统一裁决，本层只做协议级整数校验；
  * - 资料字段只接受昵称、公司名称、电话、联系邮箱四个白名单成员；
- *   刻意**不含**登录名、登录邮箱、角色、状态与密码——那些是各自专用
- *   mutation（`adminChangeUserRole` / `adminSetUserStatus` /
+ *   刻意**不含**登录名、登录邮箱、角色、状态与密码——角色只在管理员创建账号时
+ *   写入，创建后只读；状态由 `adminSetUserStatus` 处理，密码由 `adminResetUserPassword` 处理；
  * - 昵称可省略但不可为空：不传 = 不修改，string = 修改，显式 `null` / 空字符串 /
  *   纯空白均拒绝；
  * - 其余三个可选字段保持三态：不传 = 不修改该列，传 `null` = 明确清空；

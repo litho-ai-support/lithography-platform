@@ -43,8 +43,9 @@ type AdminUpdateUserProfilePhase = 'LOCK_TARGET' | 'WRITE_PROFILE' | 'READ_BACK_
  * 3. Usecase 持有的单一事务内：锁定目标 → 读取收敛 View → 目标角色保护 → 更新资料 → 回读 View。
  *
  * `contactEmail` 四个成员。**不接收**登录名、登录邮箱、角色、账号状态与密码——
- * 命令类型在结构上就不含这些字段，它们是各自专用用例（P0-5 角色与状态、P0-6 密码重置）
- * 的入参，不存在宽泛的混合 update mutation。
+ * 命令类型在结构上就不含这些字段：角色只在管理员创建账号时写入，创建后只读；
+ * 状态与密码分别由专用用例（`adminSetUserStatus` / `adminResetUserPassword`）处理，
+ * 不存在宽泛的混合 update mutation。
  *
  * 空值语义（`AdminUserProfileUpdateNormalizeOutput`）：
  * - `undefined` = 未提供 → 不进入 patch，该列保持原值；

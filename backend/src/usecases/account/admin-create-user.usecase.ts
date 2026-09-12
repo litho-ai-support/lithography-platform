@@ -80,7 +80,8 @@ type AdminCreateUserPhase =
  * `PasswordPolicyService`、`hashPasswordWithTimestamp()` 与 `createUserInfoEntity()` 路径，
  * 密码策略与哈希算法没有任何第二套实现。
  *
- * 资料编辑、角色修改、状态修改、密码重置；也不创建 SUPER_ADMIN。
+ * 本用例职责不含资料编辑、状态修改与密码重置；也不创建 SUPER_ADMIN；
+ * 普通用户角色只在创建时单选一次，创建后角色只读。
  *
  * 不含数据库复核。已停用或已降级的账号在旧 Access Token 到期前仍可能通过该断言，
  * 即时失效由 `ValidateAccessTokenSessionUsecase`（P0-7）承担。

@@ -117,7 +117,8 @@ export class UserInfoResolver {
   /**
    * 更新用户信息（按可见性与权限策略）
    *
-   * `UpdateUserInfoInput` 不再暴露 `identityHint`（角色修改走 `adminChangeUserRole`），
+   * `UpdateUserInfoInput` 不含 `identityHint`（普通用户角色只在管理员创建账号时
+   * 单选一次，创建后角色只读，无公开角色修改 Mutation），
    * 也不再暴露 `userState`（启用/停用走 `adminSetUserStatus`，双字段同事务同步）。
    *
    * @param user 当前登录用户

@@ -1,7 +1,7 @@
 <!-- docs/api/account-write-current.md -->
 
 Purpose: Snapshot the current account / userInfo write and read contract for this repository.
-Read when: You change registration, account query, userInfo updates, public password reset, or admin user management (list / create / profile / role / status / password reset) flows.
+Read when: You change registration, account query, userInfo updates, public password reset, or admin user management (list / create / profile / status / password reset) flows.
 Do not read when: You only change unrelated APIs.
 Source of truth: Current resolver/usecase/type code remains executable truth; this file records the stable contract agents must preserve.
 
@@ -35,11 +35,12 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 - `adminUsers(pagination: PaginationArgs!, keyword: String, role: IdentityTypeEnum, status: AccountStatus): AdminUserListPageDTO`
 - `adminCreateUser(input: AdminCreateUserInput): AdminUserDTO`
 - `adminUpdateUserProfile(input: AdminUpdateUserProfileInput): AdminUserDTO`
-- `adminChangeUserRole(input: AdminChangeUserRoleInput): AdminUserDTO`
 - `adminSetUserStatus(input: AdminSetUserStatusInput): AdminUserDTO`
 - `adminResetUserPassword(input: AdminResetUserPasswordInput): AdminResetUserPasswordResultDTO`
 
 `updateAccessGroup` 已下线：不再是公开 GraphQL 入口，也不存在任何 adapter 调用入口。
+
+`adminChangeUserRole` 已下线：不再是公开 GraphQL 入口，也不存在任何 adapter 调用入口。普通用户角色只在管理员创建账号时单选一次写入，创建后角色只读，当前不存在任何公开角色修改 Mutation。
 
 `login` 详细契约见 `docs/api/auth-session-current.md`。
 
@@ -99,21 +100,22 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 - 不传 `accountId` 时默认更新当前登录账户。
 - 可更新昵称、性别、生日、头像、邮箱、签名、地址、电话、标签、地理信息等资料字段。
 - `userState` 不属于本 mutation 的可更新字段：启用/停用由管理员入口 `adminSetUserStatus` 承担，由其同事务同步 `account.status` 与 `userInfo.userState`。
-- `identityHint` 不属于本 mutation 输入：角色/访问语义变更由管理员入口 `adminChangeUserRole` 承担。
+- `identityHint` 不属于本 mutation 输入：普通用户角色只在管理员创建账号时单选一次写入，创建后角色只读，无公开角色修改 Mutation。
 - Usecase 负责权限、可见性和写语义。
 - Resolver 只做输入 shape 到 usecase 参数的映射。
 
-## AccessGroup 更新（已下线）
+## 角色修改入口（已下线）
 
-`updateAccessGroup` 不再是公开 GraphQL 入口，当前已无任何 GraphQL / adapter 调用入口：
+`updateAccessGroup` 与 `adminChangeUserRole` 均不在当前 Schema（Mutation root 不暴露两者），当前已无任何 GraphQL / adapter 调用入口：
 
-- Resolver 未接线，`src/schema.graphql` 不暴露该 mutation，并有下线验证 E2E 守护。
-- 角色 / 访问组写入由管理员入口 `adminChangeUserRole` 承担；它是当前唯一公开的角色写入口。
-- `UpdateAccessGroupInput` / `UpdateAccessGroupResult` 与 `UpdateAccessGroupUsecase` 仅作为遗留内部代码保留：无任何 adapter 引用，`UpdateAccessGroupUsecase` 仍是 `account-usecases.module.ts` 的 provider / export，但它是一套独立的既有实现（自持权限判定、输入规范化、事务边界与写入逻辑），**并未**委派 `AdminChangeUserRoleUsecase`。这些残留的清理属合并后的独立 cleanup 事项，不在本 current 契约内。
+- Resolver 未接线，`src/schema.graphql` 不暴露这两个 mutation，并有下线验证 E2E 守护（`update-access-group.e2e-spec.ts`）。
+- `UpdateUserInfoInput` 不包含 `identityHint`。
+- 普通用户角色只在管理员创建账号时单选一次写入：`adminCreateUser` 在同一创建事务内同步三处角色字段（见「写入语义」）；创建后角色只读，仅作列表展示与筛选。
+- `UpdateAccessGroupInput` / `UpdateAccessGroupResult` 与 `UpdateAccessGroupUsecase` 仅作为遗留内部代码保留：无任何 adapter 引用，`UpdateAccessGroupUsecase` 仍是 `account-usecases.module.ts` 的 provider / export，但它是一套独立的既有实现（自持权限判定、输入规范化、事务边界与写入逻辑）。这些残留的清理属独立 cleanup 事项，不在本 current 契约内。
 
 ## 管理员用户管理
 
-六个入口全部在 `AdminUserResolver`，按 `docs/api/adapters.rules.md` 只做「协议输入映射 + Usecase 调用 + View → DTO 薄映射」；业务规则、事务、目标保护与白名单全部归 Usecase，DomainError 不在 Resolver 捕获，直接上抛进全局 GraphQL exception filter。
+五个入口全部在 `AdminUserResolver`（adminUsers + 四个写 mutation），按 `docs/api/adapters.rules.md` 只做「协议输入映射 + Usecase 调用 + View → DTO 薄映射」；业务规则、事务、目标保护与白名单全部归 Usecase，DomainError 不在 Resolver 捕获，直接上抛进全局 GraphQL exception filter。
 
 ### 权限矩阵
 
@@ -122,7 +124,6 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 | `adminUsers`             | 可信 SUPER_ADMIN | 无写目标                                                          | `role` 筛选含 SUPER_ADMIN（只读展示）；`status` 筛选仅 ACTIVE / INACTIVE |
 | `adminCreateUser`        | 可信 SUPER_ADMIN | 新建账号                                                          | `role` 仅 ENGINEER / CUSTOMER；创建固定 `ACTIVE`                         |
 | `adminUpdateUserProfile` | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读                                         | `nickname` / `companyName` / `phone` / `contactEmail`                    |
-| `adminChangeUserRole`    | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读                                         | `role` 仅 ENGINEER / CUSTOMER                                            |
 | `adminSetUserStatus`     | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读，含「不能停用自己」                     | `status` 仅 ACTIVE / INACTIVE                                            |
 | `adminResetUserPassword` | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读，且双字段状态须一致为 ACTIVE / INACTIVE | `newPassword` 明文                                                       |
 
@@ -145,8 +146,7 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 ### 写入语义
 
 - `adminCreateUser`：登录名 / 登录邮箱至少提供一个；同一事务内写 `base_user_account.identity_hint = role`、`base_user_info.access_group = [role]`、`base_user_info.meta_digest = [role]` 与 `user_state = ACTIVE`，账号 `status` 固定 `ACTIVE`；凭据唯一索引冲突对外 `CONFLICT`，不泄露驱动错误与索引名。
-- `adminUpdateUserProfile`：昵称不传 = 不修改、传 string = 修改，`null` / 空字符串 / 纯空白一律拒绝；`companyName` / `phone` / `contactEmail` 三态——不传 = 不修改，`null` = 清空。不得经由资料编辑改写角色事实（`identityHint`）。本用例已复用 `loadWritableAdminUserTarget()` 先锁 account 行并按锁内三源角色事实保护目标，随后才读写 userInfo。
-- `adminChangeUserRole`：同一事务内三源同步——`base_user_account.identity_hint = role`（`AccountService.updateAccount()`），`base_user_info.access_group = [role]` 与 `meta_digest = [role]`（`AccountService.updateUserInfoAccessGroup()` 一次写两源，`meta_digest` 由 `FieldEncryptionSubscriber` 落库时自动加密）；最终三处表达同一个唯一角色。回读 View 的角色由 `convergeAccountRole()` 重新收敛得出，必须精确等于本次请求角色，否则按系统侧失败关闭。锁内事实已等于目标角色时**幂等零写入**：不执行 UPDATE、不 bump `updated_at`，返回 `isUpdated: false`。
+- `adminUpdateUserProfile`：昵称不传 = 不修改、传 string = 修改，`null` / 空字符串 / 纯空白一律拒绝；`companyName` / `phone` / `contactEmail` 三态——不传 = 不修改，`null` = 清空。不得经由资料编辑改写角色事实（`identityHint`）；角色在创建后只读，不存在公开角色修改入口。本用例已复用 `loadWritableAdminUserTarget()` 先锁 account 行并按锁内三源角色事实保护目标，随后才读写 userInfo。
 - `adminSetUserStatus`：同一事务内双字段同步——`base_user_account.status`（`updateAccount()`）与 `base_user_info.user_state`（`updateUserInfoFields()`）写为同值，启用即两处同为 `ACTIVE`、停用即两处同为 `INACTIVE`。`AccountStatus` 与 `UserState` 是两个不同枚举类型（成员字符串当前逐字相同），映射刻意显式书写而非断言复用。转换矩阵只允许两行：当前双字段同为 `ACTIVE` → 改 `INACTIVE`；当前双字段同为 `INACTIVE` → 改 `ACTIVE`。同状态请求幂等成功，不执行任何 UPDATE、不 bump 任何时间列。其余全部失败关闭（当前值为 `PENDING` / `SUSPENDED` / `BANNED` / `DELETED` 或任何无法识别的值、双字段不一致、当前状态缺失），不自动修复、不选任一字段为真源、不继续执行双字段 UPDATE；不做硬删除。
 - `adminResetUserPassword`：独立的管理员链路，不接触任何 verification token / 验证记录 / token 预读能力，不复用其 usecase、错误码或 GraphQL 流程；两条链路只在密码**哈希与策略原语**上汇合（`PasswordPolicyService` / `hashPasswordWithTimestamp()` / `updateAccountPasswordHash()`，全仓单一实现），流程编排零共享。目标双字段状态裁决在哈希生成与任何写入之前执行，只允许双字段一致的 `ACTIVE` / `INACTIVE`；本用例不写状态字段，`INACTIVE` 账号重置后仍是 `INACTIVE`（不存在顺带启用），拒绝路径不操作 Token / Session。结果只返回 `accountId` / `isUpdated`（恒为 `true`）/ 固定 `notice`，不含新密码、旧密码、哈希或任何密码派生物。
 - 密码策略：管理员创建的初始密码与管理员重置的新密码共用 `assertAdminUserPasswordPolicy()`（内部复用全仓单一 `PasswordPolicyService`），失败抛 `INPUT_NORMALIZE_ERROR.INVALID_TEXT`（对外 `BAD_USER_INPUT`），**不使用** `AUTH_ERROR.INVALID_PASSWORD`——后者映射为 `UNAUTHENTICATED`，会让「管理员填了弱密码」被前端误判为会话失效并清理 Session 跳转登录页。
@@ -156,7 +156,7 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 - 事务边界由 Usecase 经 `TransactionRunner` 持有，同一个 `transactionContext` 显式传给全部下游；Resolver 与 modules(service) 不持有事务。
 - 写用例执行顺序固定：精确权限断言 → 场景输入规范化（含密码策略，先于任何数据库访问，输入错误不应在占用行锁之后才暴露）→ 事务内 `lockByIdForUpdate()` 悲观行锁 → 锁内读取收敛 View → 目标角色保护 → 业务裁决 → 写入 → 回读 View 并校验后置条件。
 - 先取 `base_user_account` 的行锁，各用例随后才写 `base_user_info`；新增管理员写用例必须沿用本顺序，不得再次分叉。锁串行化针对同一目标账号的并发管理写，目标保护基于锁内事实而非锁前过期快照。
-- 事务内阶段标记（如 `LOCK_TARGET` / `WRITE_ROLE` / `READ_BACK_VIEW` / `WRITE_PASSWORD_HASH`）只用于服务端日志定位，不出现在任何对外响应中。
+- 事务内阶段标记（如 `LOCK_TARGET` / `WRITE_PROFILE` / `WRITE_PASSWORD_HASH`）只用于服务端日志定位，不出现在任何对外响应中。
 - 失败日志脱敏：非领域异常只记错误类型名与驱动错误码；绑定参数嵌密码派生哈希的阶段（`WRITE_PASSWORD_HASH` / `UPDATE_PASSWORD_HASH`）必须抑制 `message`，抑制清单以阶段联合类型约束，避免阶段重命名时抑制静默失效。预期业务结果（目标不存在、权限拒绝、状态转换不允许、重置目标状态不允许、凭据冲突）记 warn 而非 error。
 
 ### 主要 GraphQL 错误类别
@@ -178,8 +178,8 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 
 ### 旧 Token 复核语义
 
-- 角色变更与启用 / 停用都**不**直接操作 Session 或 JWT：不写 Token 黑名单、不改 `tokenVersion`、不引入 Refresh Token 或服务端 Session。Access Token 在 `JWT_EXPIRES_IN` 内是静态的。
-- 精确权限断言与目标保护断言只裁决可信 JWT 声明（`roles` / `activeRole`）与锁内数据库事实，**不含数据库复核**。因此仅靠它们，一个已被停用或已降级的账号仍可在旧 Token 到期前继续执行创建、改角色、改状态、重置密码，这与「停用即时失效」直接冲突。
+- 启用 / 停用**不**直接操作 Session 或 JWT：不写 Token 黑名单、不改 `tokenVersion`、不引入 Refresh Token 或服务端 Session。Access Token 在 `JWT_EXPIRES_IN` 内是静态的。
+- 精确权限断言与目标保护断言只裁决可信 JWT 声明（`roles` / `activeRole`）与锁内数据库事实，**不含数据库复核**。因此仅靠它们，一个已被停用或已降级的账号仍可在旧 Token 到期前继续执行创建、改状态、重置密码，这与「停用即时失效」直接冲突。
 - 即时失效由 `ValidateAccessTokenSessionUsecase`（P0-7，`JwtStrategy` 的唯一数据库 Session 复核入口）在每个受保护请求上承担。二者必须**同时生效**，不得以管理员断言代替 P0-7。
 - 密码重置后：旧密码立即失效（下一次登录验证必然不匹配）；已签发的 Access Token **不**立即失效，按 `JWT_EXPIRES_IN` 自然过期。固定 `notice` 逐字为「密码已重置，旧密码立即失效；已签发的登录态不会立即失效，将在 Access Token 过期后自然退出」，由后端单一持有、不是调用方可控的自由文本，不含目标账号的任何身份信息、密码策略细节或验证状态。
 - MySQL REPEATABLE READ 下，在本事务提交前已建立一致性快照、仍在进行的登录读取，可能读到旧 `login_password` 并以旧密码通过验证（极短窗口，快照隔离固有语义）；消除它需要给登录链路加锁，不可取。

@@ -79,11 +79,6 @@ export function canEditAdminUserProfile(row: AdminUserRow): boolean {
   return !isAdminUserRowReadOnly(row);
 }
 
-/** 角色修改要求目标行处于可写角色值域（SUPER_ADMIN 行不可降级/改角色） */
-export function canChangeAdminUserRole(row: AdminUserRow): boolean {
-  return !isAdminUserRowReadOnly(row);
-}
-
 /** 启停要求目标行状态在 ACTIVE / INACTIVE 两态内（与后端转换矩阵的展示镜像一致） */
 export function canToggleAdminUserStatus(row: AdminUserRow): boolean {
   return !isAdminUserRowReadOnly(row) && isAdminUserStatusWritable(row.status);
@@ -96,14 +91,6 @@ export function canResetAdminUserPassword(row: AdminUserRow): boolean {
 
 export function isKnownAdminUserRole(value: unknown): value is AdminUserRole {
   return value === 'SUPER_ADMIN' || value === 'ENGINEER' || value === 'CUSTOMER';
-}
-
-/**
- * 可写角色守卫（运行时判断）：SUPER_ADMIN 不是可写角色值域成员。
- * UI 展示当前角色的可写形态时必须经此守卫，不得使用类型断言。
- */
-export function isAdminUserWritableRole(role: AdminUserRole): role is AdminUserWritableRole {
-  return role === 'ENGINEER' || role === 'CUSTOMER';
 }
 
 export type AdminUserCreateCredentialIssue = 'login-identifier-missing' | 'login-name-invalid';

@@ -28,7 +28,6 @@ import type {
   AdminUserProfileEditDraft,
   AdminUserRole,
   AdminUserStatusFilter,
-  AdminUserWritableRole,
 } from '../application/admin-user-management.types';
 
 import type {
@@ -76,14 +75,6 @@ const ADMIN_UPDATE_USER_PROFILE_MUTATION = `
   }
 `;
 
-const ADMIN_CHANGE_USER_ROLE_MUTATION = `
-  mutation AdminChangeUserRole($input: AdminChangeUserRoleInput!) {
-    adminChangeUserRole(input: $input) {
-      id
-    }
-  }
-`;
-
 const ADMIN_SET_USER_STATUS_MUTATION = `
   mutation AdminSetUserStatus($input: AdminSetUserStatusInput!) {
     adminSetUserStatus(input: $input) {
@@ -112,10 +103,6 @@ type AdminCreateUserData = {
 
 type AdminUpdateUserProfileData = {
   adminUpdateUserProfile: { id: number };
-};
-
-type AdminChangeUserRoleData = {
-  adminChangeUserRole: { id: number };
 };
 
 type AdminSetUserStatusData = {
@@ -186,14 +173,6 @@ const CREATE_REASON_BY_CATEGORY_CODE: CommandReasonMap = {
 
 const PROFILE_REASON_BY_CATEGORY_CODE: CommandReasonMap = {
   NOT_FOUND: 'not-found',
-  BAD_USER_INPUT: 'invalid-input',
-  FORBIDDEN: 'forbidden',
-  INTERNAL_SERVER_ERROR: 'update-failed',
-};
-
-const ROLE_REASON_BY_CATEGORY_CODE: CommandReasonMap = {
-  NOT_FOUND: 'not-found',
-  CONFLICT: 'status-conflict',
   BAD_USER_INPUT: 'invalid-input',
   FORBIDDEN: 'forbidden',
   INTERNAL_SERVER_ERROR: 'update-failed',
@@ -342,22 +321,6 @@ export async function adminUpdateUserProfile(
     return { ok: true };
   } catch (error) {
     return toCommandFailure(error, PROFILE_REASON_BY_CATEGORY_CODE);
-  }
-}
-
-export async function adminChangeUserRole(input: {
-  accountId: number;
-  role: AdminUserWritableRole;
-}): Promise<AdminUserCommandResult> {
-  try {
-    await executeGraphQL<
-      AdminChangeUserRoleData,
-      { input: { accountId: number; role: AdminUserWritableRole } }
-    >(ADMIN_CHANGE_USER_ROLE_MUTATION, { input });
-
-    return { ok: true };
-  } catch (error) {
-    return toCommandFailure(error, ROLE_REASON_BY_CATEGORY_CODE);
   }
 }
 

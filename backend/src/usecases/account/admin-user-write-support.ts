@@ -110,7 +110,7 @@ export const extractDriverErrorCode = (error: unknown): string | number | undefi
  * `graphql-error-contract-current.md`「not-found 不得塌缩为 UNAUTHENTICATED」的契约。
  *
  * @param params.accountService 锁能力由既有域内方法提供，本层不直接访问 ORM API
- * @param params.actionLabel 管理动作文案（如「编辑资料」「修改角色」「修改状态」），
+ * @param params.actionLabel 管理动作文案（如「编辑资料」「修改状态」「重置密码」），
  *   仅用于目标保护拒绝提示
  */
 export async function loadWritableAdminUserTarget(params: {

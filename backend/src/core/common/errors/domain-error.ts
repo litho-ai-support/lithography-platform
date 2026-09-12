@@ -221,7 +221,7 @@ export const ADMIN_USER_ERROR = {
   // 对外只表达通用大类 INTERNAL_SERVER_ERROR，且 `details` 必须为空，
   // 不得泄露异常账号 ID、三源角色原值或内部错误细节
   ROLE_DATA_INCONSISTENT: 'ADMIN_USER_ROLE_DATA_INCONSISTENT',
-  // 资料编辑 / 角色修改 / 状态修改（P0-4 起的写用例共用）：目标账号不存在。
+  // 资料编辑 / 状态修改（P0-4 起的写用例共用）：目标账号不存在。
   // 不复用 ACCOUNT_ERROR.ACCOUNT_NOT_FOUND（与 AUTH_ERROR.ACCOUNT_NOT_FOUND 同码值，
   // 会被过滤器映射为 UNAUTHENTICATED，违反错误契约「not-found 不得塌缩为 UNAUTHENTICATED」）；
   // 对外大类 NOT_FOUND，details 留空，目标 ID 由调用方已知，无需回显

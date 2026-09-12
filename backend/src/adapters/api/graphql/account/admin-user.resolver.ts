@@ -8,7 +8,6 @@ import { UseGuards } from '@nestjs/common';
 import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { mapGqlToCoreParams } from '@src/adapters/api/graphql/pagination.mapper';
 import { PaginationArgs } from '@src/adapters/api/graphql/pagination.args';
-import { AdminChangeUserRoleInput } from '@src/adapters/api/graphql/account/dto/admin-change-user-role.input';
 import { AdminCreateUserInput } from '@src/adapters/api/graphql/account/dto/admin-create-user.input';
 import { AdminResetUserPasswordInput } from '@src/adapters/api/graphql/account/dto/admin-reset-user-password.input';
 import {
@@ -23,7 +22,6 @@ import { currentUser } from '@src/adapters/api/graphql/decorators/current-user.d
 import { Roles } from '@src/adapters/api/graphql/decorators/roles.decorator';
 import { JwtAuthGuard } from '@src/adapters/api/graphql/guards/jwt-auth.guard';
 import { RolesGuard } from '@src/adapters/api/graphql/guards/roles.guard';
-import { AdminChangeUserRoleUsecase } from '@src/usecases/account/admin-change-user-role.usecase';
 import { AdminCreateUserUsecase } from '@src/usecases/account/admin-create-user.usecase';
 import { AdminResetUserPasswordUsecase } from '@src/usecases/account/admin-reset-user-password.usecase';
 import { AdminSetUserStatusUsecase } from '@src/usecases/account/admin-set-user-status.usecase';
@@ -51,7 +49,6 @@ export class AdminUserResolver {
     private readonly listAdminUsersUsecase: ListAdminUsersUsecase,
     private readonly adminCreateUserUsecase: AdminCreateUserUsecase,
     private readonly adminUpdateUserProfileUsecase: AdminUpdateUserProfileUsecase,
-    private readonly adminChangeUserRoleUsecase: AdminChangeUserRoleUsecase,
     private readonly adminSetUserStatusUsecase: AdminSetUserStatusUsecase,
     private readonly adminResetUserPasswordUsecase: AdminResetUserPasswordUsecase,
   ) {}
@@ -155,27 +152,6 @@ export class AdminUserResolver {
       companyName: input.companyName,
       phone: input.phone,
       contactEmail: input.contactEmail,
-    });
-    return toAdminUserDTO(view);
-  }
-
-  /**
-   * 管理员在 ENGINEER / CUSTOMER 间修改单一角色。
-   * 目标含 SUPER_ADMIN 拒绝；目标当前角色已等于目标角色时幂等零写入。
-   */
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(IdentityTypeEnum.SUPER_ADMIN)
-  @Mutation(() => AdminUserDTO, { name: 'adminChangeUserRole', description: '管理员修改用户角色' })
-  @ValidateInput()
-  async adminChangeUserRole(
-    @Args('input') input: AdminChangeUserRoleInput,
-    @currentUser() user: JwtPayload,
-  ): Promise<AdminUserDTO> {
-    const session: UsecaseSession = mapJwtToUsecaseSession(user);
-    const view = await this.adminChangeUserRoleUsecase.execute({
-      session,
-      accountId: input.accountId,
-      role: input.role,
     });
     return toAdminUserDTO(view);
   }

@@ -2,7 +2,6 @@
 import { Module } from '@nestjs/common';
 import { AccountInstallerModule } from '@src/modules/account/account-installer.module';
 import { PasswordModule } from '@src/modules/common/password/password.module';
-import { AdminChangeUserRoleUsecase } from '@src/usecases/account/admin-change-user-role.usecase';
 import { AdminCreateUserUsecase } from '@src/usecases/account/admin-create-user.usecase';
 import { AdminResetUserPasswordUsecase } from '@src/usecases/account/admin-reset-user-password.usecase';
 import { AdminSetUserStatusUsecase } from '@src/usecases/account/admin-set-user-status.usecase';
@@ -21,7 +20,6 @@ import {
 @Module({
   imports: [AccountInstallerModule, PasswordModule],
   providers: [
-    AdminChangeUserRoleUsecase,
     AdminCreateUserUsecase,
     AdminResetUserPasswordUsecase,
     AdminSetUserStatusUsecase,
@@ -36,7 +34,6 @@ import {
     UpdateAccessGroupUsecase,
   ],
   exports: [
-    AdminChangeUserRoleUsecase,
     AdminCreateUserUsecase,
     AdminResetUserPasswordUsecase,
     AdminSetUserStatusUsecase,

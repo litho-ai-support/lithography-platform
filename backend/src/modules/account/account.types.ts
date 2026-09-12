@@ -135,7 +135,7 @@ export type AdminUserListStatusFilter = AccountStatus.ACTIVE | AccountStatus.INA
  * - 刻意不含 `userState`：`user_state` 由 P0-5 与 `status` 同事务双写保持一致，
  *   不作为管理员可独立操作的字段暴露，避免出现第二个状态真源；
  * - `createdAt` 取账号创建时间；`updatedAt` 取账号侧与资料侧 `updated_at` 的较新值，
- *   使资料编辑、角色修改与状态修改都能反映为同一个「最近变更时间」；
+ *   使资料编辑与状态修改都能反映为同一个「最近变更时间」；
  *   两者均为 `TIMESTAMP(3)` 系统事件时间，按时间字段规范映射为 `Date`；
  * - 只读语义不在本视图内冗余表达：`role === SUPER_ADMIN` 即只读，
  *   由前端 application 单点派生展示策略（R1 裁决：不设 `readOnly` 字段），

@@ -20,7 +20,6 @@
 
 import type { UsecaseSession } from '@app-types/auth/session.types';
 import type { PaginationParams } from '@core/pagination/pagination.types';
-import type { AdminUserView } from '@src/modules/account/account.types';
 
 /**
  * 管理员用户列表用例的执行入参。
@@ -141,8 +140,9 @@ export interface AdminUserProfileUpdateNormalizeOutput {
  * - `accountId` 为目标账号 ID，语义上必填，类型刻意保持 `unknown`：
  *   协议 shape 由 adapter 的 class-validator 负责，正整数收敛由
  *   `normalizeAdminUserTargetAccountId()` 统一裁决（标识符只校验、不修复）；
- *   刻意**不含**登录名、登录邮箱、角色、状态与密码——那些是各自专用用例的入参，
- *   `checkNicknameExists()`；
+ *   刻意**不含**登录名、登录邮箱、角色、状态与密码——角色只在创建时写入、创建后只读，
+ *   状态与密码由各自专用用例处理；
+ *   昵称允许重复，不调用昵称唯一性检查 `checkNicknameExists()`；
  * - 四个资料字段全部省略时由用例在事务前明确拒绝，不产生数据库写入。
  */
 export interface AdminUpdateUserProfileCommand {
@@ -152,31 +152,6 @@ export interface AdminUpdateUserProfileCommand {
   readonly companyName?: unknown;
   readonly phone?: unknown;
   readonly contactEmail?: unknown;
-}
-
-/**
- * 管理员修改用户角色用例的执行入参（P0-5）。
- *
- * `role` 刻意保持 `unknown`：单值 `ENGINEER` / `CUSTOMER` 白名单由
- * `normalizeAdminUserWritableRole()` 统一裁决，SUPER_ADMIN、空值与非字符串
- * （含数组形式的多角色）在此被拒绝；目标含 SUPER_ADMIN 的写保护由用例依数据库事实裁决。
- */
-export interface AdminChangeUserRoleCommand {
-  readonly session: UsecaseSession;
-  readonly accountId: unknown;
-  readonly role?: unknown;
-}
-
-/**
- *
- * `execute()` 只返回 View；`executeWithWriteOutcome()` 额外暴露「本次是否发生真实
- * 角色写入」（当前角色已等于目标角色时零写入并返回 `isUpdated: false`）。
- * 该事实由本用例自身与单测消费，不出现在任何对外 GraphQL 响应中；
- * 旧 `UpdateAccessGroupUsecase` 是独立的遗留实现，并未消费该结果。
- */
-export interface AdminChangeUserRoleOutcome {
-  readonly view: AdminUserView;
-  readonly isUpdated: boolean;
 }
 
 /**

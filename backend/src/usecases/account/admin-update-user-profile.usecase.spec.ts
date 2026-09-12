@@ -401,7 +401,7 @@ describe('AdminUpdateUserProfileUsecase', () => {
 
     await executeAsSuperAdmin({ nickname: 'new_nickname' });
 
-    // 角色变更属 adminChangeUserRole、启用停用属 adminSetUserStatus：
+    // 角色在创建后只读、启用停用属 adminSetUserStatus：
     // 本用例的 patch 不得携带任何访问语义或状态字段
     const patch = capturedPatch();
     expect(patch).not.toHaveProperty('accessGroup');
