@@ -4,9 +4,14 @@
  * 行级写命令弹窗：资料编辑、角色修改、启停、密码重置。
  * 四个弹窗共用同一提交契约：onSubmit 返回显式业务结果，ok 时由父组件关闭弹窗并刷新列表；
  * 业务失败展示在弹窗内（不关闭、不清空已填草稿）；密码字段不回填、不进入任何成功提示。
+ *
+ * 四个弹窗都恒定挂载在 panel 中、只切换 `row`，因此每一个都接入 `useStaleSubmitGuard`：
+ * 会话在提交续体回来之前被推进过（切换目标行、关闭后重新打开，含同一个 accountId），
+ * 在途提交的续体就属于上一代会话，不得写进当前弹窗的错误区。
+ * 注：antd 6.4.3 的 `Modal.handleCancel` 在 `confirmLoading` 为真时会直接 `return`，
+ * 而 `submitting` 由宿主传入；守卫不依赖宿主的 loading 接线，详见 `use-stale-submit-guard.ts`。
  */
 
-import { useState } from 'react';
 import { Alert, Form, Input, Modal, Radio } from 'antd';
 
 import type {
@@ -25,6 +30,8 @@ import {
   isAdminUserStatusWritable,
   isAdminUserWritableRole,
 } from '../application/admin-user-management-policy';
+
+import { useStaleSubmitGuard } from './use-stale-submit-guard';
 
 // 弹窗内表单以行 accountId 为 key：快速切换行时强制重挂载，
 // 避免 initialValues 在 Form 未卸载时不生效导致字段残留上一行草稿
@@ -58,12 +65,21 @@ export function AdminUserProfileEditModal({
   submitting,
 }: AdminUserProfileEditModalProps) {
   const [form] = Form.useForm<ProfileEditFormValues>();
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  // 目标 accountId 就是本弹窗的会话身份：切换行、关闭后重开都会推进代次
+  const {
+    captureSubmitSeq,
+    invalidateInFlightSubmit,
+    isCurrentSubmitSeq,
+    setSubmitError,
+    submitError,
+  } = useStaleSubmitGuard(row === null ? null : row.accountId);
 
   const handleFinish = async (values: ProfileEditFormValues) => {
     if (!row) {
       return;
     }
+
+    const submitSeq = captureSubmitSeq();
 
     setSubmitError(null);
 
@@ -101,6 +117,12 @@ export function AdminUserProfileEditModal({
 
     const result = await onSubmit(draft);
 
+    // 提交期间弹窗被关闭 / 重开 / 切换目标 ⇒ 本次结果属于上一会话，整体丢弃：
+    // 既不把旧失败写进新目标的弹窗，也不清除新会话已有的错误
+    if (!isCurrentSubmitSeq(submitSeq)) {
+      return;
+    }
+
     if (!result.ok && result.message) {
       setSubmitError(result.message);
     }
@@ -115,7 +137,8 @@ export function AdminUserProfileEditModal({
       open={row !== null}
       title={`编辑资料：${row?.nickname ?? ''}`}
       onCancel={() => {
-        setSubmitError(null);
+        // 同步推进代次：关闭与「立刻重开同一个 accountId」可能落在同一个事件循环窗口内
+        invalidateInFlightSubmit();
         onCancel();
       }}
       onOk={() => void form.submit()}
@@ -198,16 +221,28 @@ export function AdminUserRoleModal({
   submitting,
 }: AdminUserRoleModalProps) {
   const [form] = Form.useForm<RoleFormValues>();
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const {
+    captureSubmitSeq,
+    invalidateInFlightSubmit,
+    isCurrentSubmitSeq,
+    setSubmitError,
+    submitError,
+  } = useStaleSubmitGuard(row === null ? null : row.accountId);
 
   const handleFinish = async (values: RoleFormValues) => {
     if (!row) {
       return;
     }
 
+    const submitSeq = captureSubmitSeq();
+
     setSubmitError(null);
 
     const result = await onSubmit({ accountId: row.accountId, role: values.role });
+
+    if (!isCurrentSubmitSeq(submitSeq)) {
+      return;
+    }
 
     if (!result.ok && result.message) {
       setSubmitError(result.message);
@@ -223,7 +258,8 @@ export function AdminUserRoleModal({
       open={row !== null}
       title={`修改角色：${row?.nickname ?? ''}`}
       onCancel={() => {
-        setSubmitError(null);
+        // 同步推进代次：关闭与「立刻重开同一个 accountId」可能落在同一个事件循环窗口内
+        invalidateInFlightSubmit();
         onCancel();
       }}
       onOk={() => void form.submit()}
@@ -286,16 +322,28 @@ export function AdminUserStatusModal({
   submitting,
 }: AdminUserStatusModalProps) {
   const [form] = Form.useForm<StatusFormValues>();
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const {
+    captureSubmitSeq,
+    invalidateInFlightSubmit,
+    isCurrentSubmitSeq,
+    setSubmitError,
+    submitError,
+  } = useStaleSubmitGuard(row === null ? null : row.accountId);
 
   const handleFinish = async (values: StatusFormValues) => {
     if (!row) {
       return;
     }
 
+    const submitSeq = captureSubmitSeq();
+
     setSubmitError(null);
 
     const result = await onSubmit({ accountId: row.accountId, status: values.status });
+
+    if (!isCurrentSubmitSeq(submitSeq)) {
+      return;
+    }
 
     if (!result.ok && result.message) {
       setSubmitError(result.message);
@@ -311,7 +359,8 @@ export function AdminUserStatusModal({
       open={row !== null}
       title={`启用 / 停用：${row?.nickname ?? ''}`}
       onCancel={() => {
-        setSubmitError(null);
+        // 同步推进代次：关闭与「立刻重开同一个 accountId」可能落在同一个事件循环窗口内
+        invalidateInFlightSubmit();
         onCancel();
       }}
       onOk={() => void form.submit()}
@@ -375,16 +424,28 @@ export function AdminUserResetPasswordModal({
   submitting,
 }: AdminUserResetPasswordModalProps) {
   const [form] = Form.useForm<ResetPasswordFormValues>();
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const {
+    captureSubmitSeq,
+    invalidateInFlightSubmit,
+    isCurrentSubmitSeq,
+    setSubmitError,
+    submitError,
+  } = useStaleSubmitGuard(row === null ? null : row.accountId);
 
   const handleFinish = async (values: ResetPasswordFormValues) => {
     if (!row) {
       return;
     }
 
+    const submitSeq = captureSubmitSeq();
+
     setSubmitError(null);
 
     const result = await onSubmit({ accountId: row.accountId, newPassword: values.newPassword });
+
+    if (!isCurrentSubmitSeq(submitSeq)) {
+      return;
+    }
 
     if (!result.ok && result.message) {
       setSubmitError(result.message);
@@ -400,7 +461,8 @@ export function AdminUserResetPasswordModal({
       open={row !== null}
       title={`重置密码：${row?.nickname ?? ''}`}
       onCancel={() => {
-        setSubmitError(null);
+        // 同步推进代次：关闭与「立刻重开同一个 accountId」可能落在同一个事件循环窗口内
+        invalidateInFlightSubmit();
         onCancel();
       }}
       onOk={() => void form.submit()}

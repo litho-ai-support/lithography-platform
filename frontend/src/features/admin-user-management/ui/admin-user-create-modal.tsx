@@ -1,6 +1,5 @@
 // src/features/admin-user-management/ui/admin-user-create-modal.tsx
 
-import { useState } from 'react';
 import { Alert, Form, Input, Modal, Select } from 'antd';
 
 import type {
@@ -16,6 +15,8 @@ import {
   ADMIN_USER_WRITABLE_ROLES,
   findAdminUserCreateCredentialIssue,
 } from '../application/admin-user-management-policy';
+
+import { useStaleSubmitGuard } from './use-stale-submit-guard';
 
 type AdminUserCreateModalProps = {
   open: boolean;
@@ -46,9 +47,18 @@ export function AdminUserCreateModal({
   submitting,
 }: AdminUserCreateModalProps) {
   const [form] = Form.useForm<AdminUserCreateFormValues>();
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  // 创建弹窗没有目标 accountId，`open` 的每一次翻转就是一次新会话
+  const {
+    captureSubmitSeq,
+    invalidateInFlightSubmit,
+    isCurrentSubmitSeq,
+    setSubmitError,
+    submitError,
+  } = useStaleSubmitGuard(open);
 
   const handleFinish = async (values: AdminUserCreateFormValues) => {
+    const submitSeq = captureSubmitSeq();
+
     setSubmitError(null);
 
     const result = await onSubmit({
@@ -61,6 +71,12 @@ export function AdminUserCreateModal({
       phone: values.phone ?? '',
       role: values.role,
     });
+
+    // 提交期间弹窗被关闭或重开 ⇒ 本次结果属于上一会话，整体丢弃：
+    // 既不把旧失败写进重开后的表单，也不清除新会话已有的错误
+    if (!isCurrentSubmitSeq(submitSeq)) {
+      return;
+    }
 
     if (!result.ok && result.message) {
       setSubmitError(result.message);
@@ -76,7 +92,8 @@ export function AdminUserCreateModal({
       open={open}
       title="创建用户"
       onCancel={() => {
-        setSubmitError(null);
+        // 同步推进代次，不等 effect：关闭与「立刻重开」可能落在同一事件循环窗口内
+        invalidateInFlightSubmit();
         onCancel();
       }}
       onOk={() => void form.submit()}
