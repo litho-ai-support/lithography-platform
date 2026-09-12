@@ -10,6 +10,8 @@ const GROUPS = {
       'test/03-roles-guard/roles-guard.e2e-spec.ts',
       'test/04-user-info/update-access-group.e2e-spec.ts',
       'test/04-user-info/update-visible-user-info.e2e-spec.ts',
+      'test/04-user-info/user-state-write-guard.e2e-spec.ts',
+      'test/04-user-info/admin-user-management.e2e-spec.ts',
       'test/05-verification-record/verification-record-types.e2e-spec.ts',
       'test/05-verification-record/verification-record-invite.e2e-spec.ts',
       'test/06-repair-request/repair-request-auth.e2e-spec.ts',

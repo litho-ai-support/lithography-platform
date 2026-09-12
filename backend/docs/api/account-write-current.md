@@ -28,7 +28,6 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 - `userInfo(accountId: Int!): UserInfoDTO`
 - `basicUserInfo(accountId: Int!): BasicUserInfoDTO`
 - `updateUserInfo(input: UpdateUserInfoInput): UpdateUserInfoResult`
-- `updateAccessGroup(input: UpdateAccessGroupInput): UpdateAccessGroupResult`
 - `resetPassword(input: ResetPasswordInput): ResetPasswordResult`
 
 `login` 详细契约见 `docs/api/auth-session-current.md`。
@@ -85,20 +84,19 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 `updateUserInfo` 是受保护 mutation：
 
 - 不传 `accountId` 时默认更新当前登录账户。
-- 可更新昵称、性别、生日、头像、邮箱、签名、地址、电话、标签、地理信息、用户状态等资料字段。
-- `identityHint` 可作为账号访问语义摘要的一部分传入。
+- 可更新昵称、性别、生日、头像、邮箱、签名、地址、电话、标签、地理信息等资料字段。
+- `userState` 不属于本 mutation 的可更新字段：启用/停用由管理员入口 `adminSetUserStatus` 承担，由其同事务同步 `account.status` 与 `userInfo.userState`。
+- `identityHint` 不属于本 mutation 输入：角色/访问语义变更由管理员入口 `adminChangeUserRole` 承担。
 - Usecase 负责权限、可见性和写语义。
 - Resolver 只做输入 shape 到 usecase 参数的映射。
 
-## AccessGroup 更新
+## AccessGroup 更新（已下线）
 
-`updateAccessGroup` 是受保护 mutation：
+`updateAccessGroup` 不再是公开 GraphQL 入口：
 
-- 使用 `JwtAuthGuard` 与 `RolesGuard`。
-- 当前 Resolver 允许 `ENGINEER` 或 `SUPER_ADMIN` 调用；Usecase 仍需执行目标账号和变更内容的权限规则。
-- 输入包含 `accountId`、`accessGroup`、可选 `identityHint`。
-- `accessGroup` 只允许使用 `IdentityTypeEnum` 当前通用值。
-- 写入由 `UpdateAccessGroupUsecase` 编排。
+- Resolver 未接线，schema 不暴露该 mutation，并有下线验证 E2E 守护。
+- `UpdateAccessGroupInput` / `UpdateAccessGroupResult` 与 `UpdateAccessGroupUsecase` 作为遗留内部代码保留，不接入任何适配器。
+- 角色/访问组写入由管理员入口 `adminChangeUserRole` 承担。
 
 ## 密码重置
 

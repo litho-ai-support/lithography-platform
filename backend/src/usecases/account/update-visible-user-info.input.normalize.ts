@@ -1,6 +1,6 @@
 // 文件位置：src/usecases/account/update-visible-user-info.input.normalize.ts
 
-import { Gender, UserState, type GeographicInfo } from '@app-types/models/user-info.types';
+import { Gender, type GeographicInfo } from '@app-types/models/user-info.types';
 import {
   ACCOUNT_ERROR,
   DomainError,
@@ -116,13 +116,6 @@ export function normalizeVisibleGenderInput(input: unknown): Gender {
     return Gender.SECRET;
   }
   return input as Gender;
-}
-
-export function normalizeVisibleUserStateInput(input: unknown): UserState {
-  if (typeof input === 'undefined') {
-    return UserState.PENDING;
-  }
-  return input as UserState;
 }
 
 export function normalizeVisibleNonNegativeIntInput(input: unknown): number {
