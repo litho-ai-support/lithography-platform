@@ -170,9 +170,9 @@ export interface AdminChangeUserRoleCommand {
 /**
  *
  * `execute()` 只返回 View；`executeWithWriteOutcome()` 额外暴露「本次是否发生真实
- * 角色写入」——旧 `updateAccessGroup` 兼容门面需要把该事实映射回既有 `isUpdated`
- * 幂等语义（当前角色已等于目标角色时零写入并返回 `isUpdated: false`）。
- * 仅供同模块的兼容门面消费，不出现在任何对外 GraphQL 响应中。
+ * 角色写入」（当前角色已等于目标角色时零写入并返回 `isUpdated: false`）。
+ * 该事实由本用例自身与单测消费，不出现在任何对外 GraphQL 响应中；
+ * 旧 `UpdateAccessGroupUsecase` 是独立的遗留实现，并未消费该结果。
  */
 export interface AdminChangeUserRoleOutcome {
   readonly view: AdminUserView;

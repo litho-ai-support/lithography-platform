@@ -52,6 +52,8 @@ export const ACCOUNT_ERROR = {
   EMAIL_TAKEN: 'EMAIL_TAKEN',
   USER_INFO_NOT_FOUND: 'USER_INFO_NOT_FOUND',
   ACCOUNT_SUSPENDED: 'ACCOUNT_SUSPENDED',
+  /** 创建入口：account.status 与 userInfo.userState 不一致，或 status 无对应 UserState（BANNED / DELETED） */
+  ACCOUNT_STATUS_STATE_MISMATCH: 'ACCOUNT_STATUS_STATE_MISMATCH',
 } as const;
 Object.freeze(ACCOUNT_ERROR);
 

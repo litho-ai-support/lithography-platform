@@ -48,9 +48,13 @@ type AdminChangeUserRolePhase = 'LOCK_TARGET' | 'WRITE_ROLE' | 'READ_BACK_VIEW';
  * 资料编辑与状态修改是各自独立用例。旧 Token 的失效由 P0-7 的公共受保护请求校验统一
  * 执行，本用例不直接操作 Session 或 JWT。
  *
- * 兼容门面（`UpdateAccessGroupUsecase`）把单元素输入收敛为单值角色后委派本用例，
- * 本用例是其唯一的事务、权限、目标保护与三源写入实现；门面消费
- * `executeWithWriteOutcome()` 的内部结果映射旧 `isUpdated` 语义，不保留第二套写入逻辑。
+ * 旧公共 `updateAccessGroup` 入口（`UpdateAccessGroupUsecase`）已无任何 GraphQL /
+ * adapter 调用入口，仅作为内部遗留实现保留：它仍是一套独立的既有实现，**并未**
+ * 委派本用例，保留自己的权限判定、输入规范化、事务边界与
+ * `access_group` / `identity_hint` 两源写入，不消费本用例的任何内部结果；
+ * `executeWithWriteOutcome()` 中的 `isUpdated` 语义是本用例自身的事务内事实
+ * （目标角色已等于目标角色时零写入），并非旧入口映射。本用例是当前唯一公开的
+ * GraphQL 角色写入口，旧入口仅为内部遗留实现保留，不在本用例内静默合并。
  *
  * 依赖方向：事务边界由本用例经 `TransactionRunner` 持有，同一个 `transactionContext`
  * 显式传给全部下游；只调用 modules 细粒度方法与 QueryService，不访问 Repository、
@@ -76,10 +80,10 @@ export class AdminChangeUserRoleUsecase {
   }
 
   /**
-   *
-   * 旧公共 `updateAccessGroup` 兼容门面（`UpdateAccessGroupUsecase`）消费本方法，
-   * 把 `isUpdated` 映射回既有幂等契约；`execute()` 只返回 View。两条入口共享同一
-   * 权限断言、输入规范化与事务实现，不存在第二套角色写入逻辑。
+   * 事务内角色写入 + 回读校验的完整结果：`view` 为稳定管理员视图，
+   * `isUpdated` 表示本次是否发生真实角色写入（目标角色已等于目标值时零写入、
+   * 返回 `false`）。`execute()` 只消费 `view`；该事实当前仅供本用例内部与
+   * 测试消费，`UpdateAccessGroupUsecase` 并未接入（现状见类注释）。
    */
   async executeWithWriteOutcome(
     command: AdminChangeUserRoleCommand,

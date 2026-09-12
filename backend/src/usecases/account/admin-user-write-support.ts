@@ -34,12 +34,15 @@ import { PinoLogger } from 'nestjs-pino';
  * `loadWritableAdminUserTarget()` 先取 `base_user_account` 的悲观行锁，各用例随后才写
  * `base_user_info`；依据是 `usecase-write-flow-boundaries.rules.md` 第 78-79 行「usecase 先开启
  * 事务，再显式调用 `lockByIdForUpdate(accountId, transactionContext)`」的表述，以及
- * `UpdateAccessGroupUsecase` 的既有同序实现。新增管理员写用例必须沿用本顺序，不得第三次分叉。
+ * `UpdateAccessGroupUsecase` 的既有同序实现。新增管理员写用例必须沿用本顺序，不得第三次分叉
+ * （`UpdateVisibleUserInfoUsecase` 的既有现状例外见下方 R14 说明）。
  *
- * **R14 锁顺序收口**：既有 `UpdateVisibleUserInfoUsecase`（已发布的 `updateUserInfo` mutation）
- * 已改为在任何 userInfo 写入前复用 `loadWritableAdminUserTarget()`，先锁 account 行并按锁内
- * 三源角色事实保护目标，随后才读取/更新 userInfo；`identityHint` 已在事务前禁止，原先写完
- * userInfo 后再次锁 account 并单独更新身份提示的可达分支已删除。管理员资料写入口现统一为
+ * **R14 锁顺序说明（现状记录，非已完成收口）**：`UpdateVisibleUserInfoUsecase`（已发布的
+ * `updateUserInfo` mutation）**尚未**复用 `loadWritableAdminUserTarget()`：它先经
+ * `FetchUserInfoUsecase.executeStrict()` 读取并更新 userInfo，仅在需要更新 `identityHint`
+ * 时才对 account 行取悲观锁；`identityHint` 也未在事务前禁止，仍保留锁内比对后单字段更新。
+ * 因此「管理员写入口先锁 account 行再写 userInfo」的收口对该用例**尚未达成**，上述顺序目前
+ * 只约束新增管理员写用例；若后续收口，应让该用例改走本文件共享实现，而不是在本文件外分叉。
  *
  * 本文件只被 `usecases/account` 内的写用例引用，不下沉 modules、不进 core：
  * 它编排的是 usecase 层的写流程步骤（锁、读、断言、日志），不是通用输入收敛。

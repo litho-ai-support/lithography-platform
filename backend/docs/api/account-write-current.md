@@ -39,7 +39,7 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 - `adminSetUserStatus(input: AdminSetUserStatusInput): AdminUserDTO`
 - `adminResetUserPassword(input: AdminResetUserPasswordInput): AdminResetUserPasswordResultDTO`
 
-`updateAccessGroup` 已下线，不再是公开入口。
+`updateAccessGroup` 已下线：不再是公开 GraphQL 入口，也不存在任何 adapter 调用入口。
 
 `login` 详细契约见 `docs/api/auth-session-current.md`。
 
@@ -59,6 +59,8 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 `type` 默认是 `CUSTOMER`，且公开注册只允许创建 `CUSTOMER`。工程师和超级管理员账号由受控管理流程或 Seed 创建。
 
 `thirdPartyRegister` 当前走第三方注册 usecase，属于通用第三方账号能力，不代表具体业务域身份。
+
+公开注册成功语义：`register`（`RegisterWithEmailUsecase`）与 `thirdPartyRegister`（`WeappRegisterUsecase`）返回成功时，必须在**同一个创建事务内**显式写入 `account.status = ACTIVE` 与 `userInfo.userState = ACTIVE`（同提交同回滚，任一步失败不得返回成功，也不做事务外补救写）。`UserInfoEntity.user_state` 列与数据库默认值 `PENDING` 保留原样，不新增 Migration；所有新建 UserInfo 的生产入口必须显式提供 `userState`，不依赖 Entity 默认值。
 
 ## 账号读取
 
@@ -103,11 +105,11 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 
 ## AccessGroup 更新（已下线）
 
-`updateAccessGroup` 不再是公开 GraphQL 入口：
+`updateAccessGroup` 不再是公开 GraphQL 入口，当前已无任何 GraphQL / adapter 调用入口：
 
 - Resolver 未接线，`src/schema.graphql` 不暴露该 mutation，并有下线验证 E2E 守护。
-- 角色 / 访问组写入由管理员入口 `adminChangeUserRole` 承担。
-- `UpdateAccessGroupInput` / `UpdateAccessGroupResult` 与 `UpdateAccessGroupUsecase` 作为遗留内部代码保留：无任何 adapter 引用，但 `UpdateAccessGroupUsecase` 仍是 `account-usecases.module.ts` 的 provider / export，并作为兼容门面把单元素输入收敛为单值角色后委派 `AdminChangeUserRoleUsecase`，不持有第二套写入逻辑。这些残留的清理属合并后的独立 cleanup 事项，不在本 current 契约内。
+- 角色 / 访问组写入由管理员入口 `adminChangeUserRole` 承担；它是当前唯一公开的角色写入口。
+- `UpdateAccessGroupInput` / `UpdateAccessGroupResult` 与 `UpdateAccessGroupUsecase` 仅作为遗留内部代码保留：无任何 adapter 引用，`UpdateAccessGroupUsecase` 仍是 `account-usecases.module.ts` 的 provider / export，但它是一套独立的既有实现（自持权限判定、输入规范化、事务边界与写入逻辑），**并未**委派 `AdminChangeUserRoleUsecase`。这些残留的清理属合并后的独立 cleanup 事项，不在本 current 契约内。
 
 ## 管理员用户管理
 
@@ -115,14 +117,14 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 
 ### 权限矩阵
 
-| operation | 会话准入 | 目标约束 | 可写 / 可筛选值域 |
-| --- | --- | --- | --- |
-| `adminUsers` | 可信 SUPER_ADMIN | 无写目标 | `role` 筛选含 SUPER_ADMIN（只读展示）；`status` 筛选仅 ACTIVE / INACTIVE |
-| `adminCreateUser` | 可信 SUPER_ADMIN | 新建账号 | `role` 仅 ENGINEER / CUSTOMER；创建固定 `ACTIVE` |
-| `adminUpdateUserProfile` | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读 | `nickname` / `companyName` / `phone` / `contactEmail` |
-| `adminChangeUserRole` | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读 | `role` 仅 ENGINEER / CUSTOMER |
-| `adminSetUserStatus` | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读，含「不能停用自己」 | `status` 仅 ACTIVE / INACTIVE |
-| `adminResetUserPassword` | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读，且双字段状态须一致为 ACTIVE / INACTIVE | `newPassword` 明文 |
+| operation                | 会话准入         | 目标约束                                                          | 可写 / 可筛选值域                                                        |
+| ------------------------ | ---------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `adminUsers`             | 可信 SUPER_ADMIN | 无写目标                                                          | `role` 筛选含 SUPER_ADMIN（只读展示）；`status` 筛选仅 ACTIVE / INACTIVE |
+| `adminCreateUser`        | 可信 SUPER_ADMIN | 新建账号                                                          | `role` 仅 ENGINEER / CUSTOMER；创建固定 `ACTIVE`                         |
+| `adminUpdateUserProfile` | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读                                         | `nickname` / `companyName` / `phone` / `contactEmail`                    |
+| `adminChangeUserRole`    | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读                                         | `role` 仅 ENGINEER / CUSTOMER                                            |
+| `adminSetUserStatus`     | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读，含「不能停用自己」                     | `status` 仅 ACTIVE / INACTIVE                                            |
+| `adminResetUserPassword` | 可信 SUPER_ADMIN | 现有 SUPER_ADMIN 目标只读，且双字段状态须一致为 ACTIVE / INACTIVE | `newPassword` 明文                                                       |
 
 ### 会话准入（两层）
 
@@ -159,18 +161,18 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 
 ### 主要 GraphQL 错误类别
 
-| 场景 | DomainError 码 | `extensions.code` |
-| --- | --- | --- |
-| 未登录 / Token 失效 / Session 失效 | 既有 JWT 认证链路（`JWT_ERROR.*`） | `UNAUTHENTICATED` |
-| 非可信 SUPER_ADMIN 会话 | `PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS` | `FORBIDDEN` |
-| 目标为 SUPER_ADMIN（含停用自己） | `PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS` | `FORBIDDEN` |
-| 目标账号不存在 | `ADMIN_USER_ERROR.TARGET_NOT_FOUND` | `NOT_FOUND` |
-| 创建凭据唯一冲突 | `ADMIN_USER_ERROR.CREDENTIAL_CONFLICT` | `CONFLICT` |
-| 启停转换不允许 | `ADMIN_USER_ERROR.STATUS_TRANSITION_NOT_ALLOWED` | `CONFLICT` |
-| 密码重置目标状态不允许 | `ADMIN_USER_ERROR.PASSWORD_RESET_TARGET_STATUS_NOT_ALLOWED` | `CONFLICT` |
-| 三源角色不收敛 / 锁内或回读读取失败 | `ADMIN_USER_ERROR.ROLE_DATA_INCONSISTENT` / `READ_FAILED` | `INTERNAL_SERVER_ERROR` |
-| 系统侧写入失败 / 后置校验不通过 | `ADMIN_USER_ERROR.WRITE_FAILED` | `INTERNAL_SERVER_ERROR` |
-| 输入规范化 / 密码策略不达标 | `INPUT_NORMALIZE_ERROR.*` | `BAD_USER_INPUT` |
+| 场景                                | DomainError 码                                              | `extensions.code`       |
+| ----------------------------------- | ----------------------------------------------------------- | ----------------------- |
+| 未登录 / Token 失效 / Session 失效  | 既有 JWT 认证链路（`JWT_ERROR.*`）                          | `UNAUTHENTICATED`       |
+| 非可信 SUPER_ADMIN 会话             | `PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS`                 | `FORBIDDEN`             |
+| 目标为 SUPER_ADMIN（含停用自己）    | `PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS`                 | `FORBIDDEN`             |
+| 目标账号不存在                      | `ADMIN_USER_ERROR.TARGET_NOT_FOUND`                         | `NOT_FOUND`             |
+| 创建凭据唯一冲突                    | `ADMIN_USER_ERROR.CREDENTIAL_CONFLICT`                      | `CONFLICT`              |
+| 启停转换不允许                      | `ADMIN_USER_ERROR.STATUS_TRANSITION_NOT_ALLOWED`            | `CONFLICT`              |
+| 密码重置目标状态不允许              | `ADMIN_USER_ERROR.PASSWORD_RESET_TARGET_STATUS_NOT_ALLOWED` | `CONFLICT`              |
+| 三源角色不收敛 / 锁内或回读读取失败 | `ADMIN_USER_ERROR.ROLE_DATA_INCONSISTENT` / `READ_FAILED`   | `INTERNAL_SERVER_ERROR` |
+| 系统侧写入失败 / 后置校验不通过     | `ADMIN_USER_ERROR.WRITE_FAILED`                             | `INTERNAL_SERVER_ERROR` |
+| 输入规范化 / 密码策略不达标         | `INPUT_NORMALIZE_ERROR.*`                                   | `BAD_USER_INPUT`        |
 
 `STATUS_TRANSITION_NOT_ALLOWED` 与 `PASSWORD_RESET_TARGET_STATUS_NOT_ALLOWED` 是两个独立码，不得互相复用：前者专指启停状态转换矩阵，后者专指密码重置的目标状态边界；两者对外同为 `CONFLICT`（请求动作本身合法非 `BAD_USER_INPUT`、权限无问题非 `FORBIDDEN`、是明确的当前状态冲突非系统侧 5xx）。错误细节契约见 `docs/api/graphql-error-contract-current.md`：上述 `CONFLICT` 与 `INTERNAL_SERVER_ERROR` 的 `details` 一律留空，当前状态事实、三源角色原值、异常账号 ID 只进 `cause.diagnostic` 供服务端排查，不进对外响应。
 

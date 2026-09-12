@@ -54,7 +54,13 @@ export interface UserInfoCreateData {
   metaDigest?: IdentityTypeEnum[] | null;
   notifyCount?: number;
   unreadCount?: number;
-  userState?: UserState;
+  /**
+   * 必填：所有新建 UserInfo 的生产入口必须显式提供，不依赖 Entity 列默认值
+   * （`base_user_info.user_state` 列默认 `PENDING`，静默默认值会让新建账号
+   *  落成 ACTIVE / PENDING 的不一致状态）。由 `CreateAccountUsecase` 做
+   * 账号状态与用户状态的一致性校验，BANNED / DELETED 无对应 UserState，失败关闭。
+   */
+  userState: UserState;
   createdAt?: Date;
   updatedAt?: Date;
 }

@@ -7,6 +7,8 @@ const GROUPS = {
       'test/01-auth/auth-identity.e2e-spec.ts',
       'test/01-auth/auth.e2e-spec.ts',
       'test/02-register/register.e2e-spec.ts',
+      'test/02-register/register-email-active.e2e-spec.ts',
+      'test/02-register/weapp-register-active.e2e-spec.ts',
       'test/03-roles-guard/roles-guard.e2e-spec.ts',
       'test/04-user-info/update-access-group.e2e-spec.ts',
       'test/04-user-info/update-visible-user-info.e2e-spec.ts',

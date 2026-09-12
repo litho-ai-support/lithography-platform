@@ -110,7 +110,7 @@ describe('AdminChangeUserRoleUsecase', () => {
       },
     );
 
-    it('兼容门面入口 executeWithWriteOutcome 走同一授权断言', async () => {
+    it('executeWithWriteOutcome 与 execute 走同一授权断言', async () => {
       const [, unauthorizedSession] = createUnauthorizedSessions()[0];
 
       await expect(

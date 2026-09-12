@@ -20,6 +20,8 @@ import {
   WeAppProviderContract,
 } from '@src/modules/third-party-auth/contracts/third-party-provider.contract';
 import { ThirdPartyAuthEntity } from '@src/modules/third-party-auth/third-party-auth.entity';
+import { UserInfoEntity } from '@src/modules/account/base/entities/user-info.entity';
+import { AccountService } from '@src/modules/account/base/services/account.service';
 import { CreateAccountUsecase } from '@src/usecases/account/create-account.usecase';
 import { initGraphQLSchema } from '../../src/adapters/api/graphql/schema/schema.init';
 import { cleanupTestAccounts, seedTestAccounts, testAccountsConfig } from '../utils/test-accounts';
@@ -159,38 +161,12 @@ describe('Auth (e2e)', () => {
         includeKeys: ['guest'], // 只创建 guest 账号作为 activeUser
       });
 
-      // 创建额外的特殊状态测试账号
+      // 创建额外的特殊状态测试账号。
+      // 这些 fixture 刻意保留「非 ACTIVE 账号状态 + userState=ACTIVE」的历史不一致形态，
+      // 而 CreateAccountUsecase 已对双状态一致性失败关闭（BANNED 无对应 UserState），
+      // 因此直接走 repo 造数，不经过 Usecase；登录拒绝断言只依赖 account.status。
       const specialAccounts = [bannedUser, pendingUser];
-      await Promise.all(
-        specialAccounts.map(async (account) => {
-          await createAccountUsecase.execute({
-            accountData: {
-              loginName: account.loginName,
-              loginEmail: account.loginEmail,
-              loginPassword: account.loginPassword,
-              status: account.status,
-              identityHint: account.identityType,
-            },
-            userInfoData: {
-              nickname: `${account.loginName}_nickname`,
-              gender: Gender.SECRET,
-              birthDate: null,
-              avatarUrl: null,
-              email: account.loginEmail,
-              signature: null,
-              accessGroup: account.accessGroup,
-              address: null,
-              phone: null,
-              tags: null,
-              geographic: null,
-              metaDigest: account.accessGroup,
-              notifyCount: 0,
-              unreadCount: 0,
-              userState: UserState.ACTIVE,
-            },
-          });
-        }),
-      );
+      await Promise.all(specialAccounts.map((account) => seedSpecialStatusAccount(account)));
 
       // 绑定 WeApp 第三方登录到 guest 账号
       await seedWeAppThirdPartyBinding();
@@ -198,6 +174,50 @@ describe('Auth (e2e)', () => {
       console.error('❌ 创建测试账户失败:', error);
       throw error;
     }
+  };
+
+  /**
+   * 直接经 repo 创建特殊状态 fixture（绕过 CreateAccountUsecase 的双状态一致性校验）
+   */
+  const seedSpecialStatusAccount = async (account: {
+    loginName: string;
+    loginEmail: string;
+    loginPassword: string;
+    status: AccountStatus;
+    accessGroup: IdentityTypeEnum[];
+    identityType: IdentityTypeEnum;
+  }): Promise<void> => {
+    const accountRepo = dataSource.getRepository(AccountEntity);
+    const userInfoRepo = dataSource.getRepository(UserInfoEntity);
+
+    // 1) 先插入占位账号拿到 createdAt
+    const temp = await accountRepo.save(
+      accountRepo.create({
+        loginName: account.loginName,
+        loginEmail: account.loginEmail,
+        loginPassword: 'temp',
+        status: account.status,
+        identityHint: account.identityType,
+      }),
+    );
+    // 2) 根据 createdAt 计算散列并回写
+    const hashed = AccountService.hashPasswordWithTimestamp(account.loginPassword, temp.createdAt);
+    await accountRepo.update(temp.id, { loginPassword: hashed });
+
+    // 3) 写 user_info（metaDigest 与 accessGroup 保持一致）
+    await userInfoRepo.save(
+      userInfoRepo.create({
+        accountId: temp.id,
+        nickname: `${account.loginName}_nickname`,
+        gender: Gender.SECRET,
+        email: account.loginEmail,
+        accessGroup: account.accessGroup,
+        metaDigest: account.accessGroup,
+        notifyCount: 0,
+        unreadCount: 0,
+        userState: UserState.ACTIVE,
+      }),
+    );
   };
 
   /**

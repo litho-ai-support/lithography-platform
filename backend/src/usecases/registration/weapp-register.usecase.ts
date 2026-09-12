@@ -7,6 +7,7 @@ import {
   ThirdPartyProviderEnum,
   UserAccountView,
 } from '@app-types/models/account.types';
+import { UserState } from '@app-types/models/user-info.types';
 import {
   DomainError,
   INPUT_NORMALIZE_ERROR,
@@ -110,10 +111,8 @@ export class WeappRegisterUsecase {
         session,
       });
 
-      if (account.status !== AccountStatus.ACTIVE) {
-        await this.accountService.updateAccount(account.id, { status: AccountStatus.ACTIVE });
-      }
-
+      // 账号与资料已在创建事务内写为 ACTIVE / ACTIVE，注册成功后立即可用；
+      // 此处不再有任何事务外的状态补救写。
       this.logger.info(`微信小程序注册成功: ${account.id}`);
 
       return {
@@ -207,12 +206,13 @@ export class WeappRegisterUsecase {
       identityHint: IdentityTypeEnum.CUSTOMER,
     };
 
-    // 准备用户信息数据
+    // 准备用户信息数据（userState 显式写 ACTIVE，不依赖 Entity 列默认值 PENDING）
     const userInfoData = {
       nickname,
       phone,
       accessGroup: [IdentityTypeEnum.CUSTOMER],
       metaDigest: [IdentityTypeEnum.CUSTOMER],
+      userState: UserState.ACTIVE,
     };
 
     return { accountData, userInfoData };
@@ -268,6 +268,7 @@ export class WeappRegisterUsecase {
       phone?: string;
       accessGroup: IdentityTypeEnum[];
       metaDigest: IdentityTypeEnum[];
+      userState: UserState;
     };
   }): Promise<UserAccountView> {
     const { accountData, userInfoData } = params;
