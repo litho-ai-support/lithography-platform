@@ -25,6 +25,17 @@ const STABLE_NAVIGATION_ITEMS: NavigationItem[] = [
     roles: ['ENGINEER', 'SUPER_ADMIN'],
     tags: ['reference', 'documents', 'knowledge', 'manual', '参考资料', '知识库', '手册'],
   },
+  {
+    description: 'SUPER_ADMIN 的用户管理页面。',
+    id: 'admin-users',
+    kind: 'stable',
+    label: 'Users',
+    // 仅对 SUPER_ADMIN 展示；ENGINEER / CUSTOMER 与未登录用户不显示管理员导航入口。
+    // 展示过滤不替代路由守卫：未授权角色直达 /admin/users 仍由路由层拒绝。
+    path: '/admin/users',
+    roles: ['SUPER_ADMIN'],
+    tags: ['admin', 'users', 'management', '管理员', '用户管理'],
+  },
 ];
 
 const LAB_NAVIGATION_ITEMS: NavigationItem[] = [

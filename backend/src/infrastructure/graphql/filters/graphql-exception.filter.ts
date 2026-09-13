@@ -2,6 +2,7 @@
 import { ExceptionPayload } from '@app-types/errors/exception-payload.types';
 import {
   ACCOUNT_ERROR,
+  ADMIN_USER_ERROR,
   AUTH_ERROR,
   CAPABILITY_ERROR,
   DomainError,
@@ -209,6 +210,23 @@ function mapDomainErrorToGqlCode(errorCode: string): string {
     [REFERENCE_DOCUMENT_ERROR.CONTENT_SOURCE_EMPTY]: 'BAD_USER_INPUT',
     // 存储对象缺失/不可读：统一按资源不存在归大类，不泄漏存储侧细节
     [REFERENCE_DOCUMENT_ERROR.FILE_NOT_AVAILABLE]: 'NOT_FOUND',
+    // 管理员用户管理相关错误（独立场景码，不复用会让前端误判 Session 失效的 AUTH/JWT 码）：
+    // 登录凭据命中数据库唯一索引属业务冲突；三源角色数据不能收敛、以及系统侧读写失败
+    // 均属服务端故障，不得误报为输入错误；
+    // 管理员目标不存在的统一场景码由 P0-4 写用例引入，映射 NOT_FOUND：
+    // lockByIdForUpdate() 原有的 ACCOUNT_NOT_FOUND 与 AUTH 同码值会塌缩为 UNAUTHENTICATED，
+    // 违反错误契约，故写目标不存在的场景不得复用它
+    [ADMIN_USER_ERROR.TARGET_NOT_FOUND]: 'NOT_FOUND',
+    [ADMIN_USER_ERROR.CREDENTIAL_CONFLICT]: 'CONFLICT',
+    // CONFLICT 而非 BAD_USER_INPUT：请求的目标状态本身合法；而非 FORBIDDEN：
+    // 管理员权限无问题；而非 INTERNAL_SERVER_ERROR：这是明确的当前状态冲突
+    [ADMIN_USER_ERROR.STATUS_TRANSITION_NOT_ALLOWED]: 'CONFLICT',
+    // 密码重置（P0-6 / R11-2）：目标账号当前双字段状态不允许重置（仅双字段一致的
+    // ACTIVE / INACTIVE 普通账号可重置）。CONFLICT 口径与 STATUS_TRANSITION_NOT_ALLOWED 同源
+    [ADMIN_USER_ERROR.PASSWORD_RESET_TARGET_STATUS_NOT_ALLOWED]: 'CONFLICT',
+    [ADMIN_USER_ERROR.READ_FAILED]: 'INTERNAL_SERVER_ERROR',
+    [ADMIN_USER_ERROR.WRITE_FAILED]: 'INTERNAL_SERVER_ERROR',
+    [ADMIN_USER_ERROR.ROLE_DATA_INCONSISTENT]: 'INTERNAL_SERVER_ERROR',
 
     [CAPABILITY_ERROR.UNAVAILABLE]: 'INTERNAL_SERVER_ERROR',
   };

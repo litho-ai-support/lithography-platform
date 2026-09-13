@@ -1,4 +1,4 @@
-import { Gender, UserState } from '@app-types/models/user-info.types';
+import { Gender } from '@app-types/models/user-info.types';
 import { ACCOUNT_ERROR } from '@core/common/errors/domain-error';
 import {
   normalizeVisibleBirthDateInput,
@@ -9,7 +9,6 @@ import {
   normalizeVisibleNonNegativeIntInput,
   normalizeVisibleNullableTextInput,
   normalizeVisibleTagsInput,
-  normalizeVisibleUserStateInput,
 } from './update-visible-user-info.input.normalize';
 
 describe('update visible user info input normalize', () => {
@@ -100,8 +99,6 @@ describe('update visible user info input normalize', () => {
   it('枚举与计数字段应提供稳定默认值和边界检查', () => {
     expect(normalizeVisibleGenderInput(undefined)).toBe(Gender.SECRET);
     expect(normalizeVisibleGenderInput(Gender.MALE)).toBe(Gender.MALE);
-    expect(normalizeVisibleUserStateInput(undefined)).toBe(UserState.PENDING);
-    expect(normalizeVisibleUserStateInput(UserState.ACTIVE)).toBe(UserState.ACTIVE);
     expect(normalizeVisibleNonNegativeIntInput(undefined)).toBe(0);
     expect(normalizeVisibleNonNegativeIntInput(3)).toBe(3);
 

@@ -1,6 +1,7 @@
 // src/usecases/registration/register-with-email.usecase.ts
 
 import { AccountStatus, IdentityTypeEnum, UserAccountView } from '@app-types/models/account.types';
+import { UserState } from '@app-types/models/user-info.types';
 import { ACCOUNT_ERROR, AUTH_ERROR, DomainError } from '@core/common/errors';
 import { PasswordPolicyService } from '@core/common/password/password-policy.service';
 import { Inject, Injectable } from '@nestjs/common';
@@ -82,10 +83,9 @@ export class RegisterWithEmailUsecase {
         );
       }
 
-      if (account.status !== AccountStatus.ACTIVE) {
-        await this.accountService.updateAccount(account.id, { status: AccountStatus.ACTIVE });
-      }
-
+      // 账号与资料在创建事务内即写为 ACTIVE / ACTIVE：注册成功返回后账号立即可用，
+      // 不存在事务提交后单独 updateAccount(...ACTIVE) 的补救写——任一步失败都在事务内
+      // 回滚，不返回成功，也不留下 ACTIVE / PENDING 的半成品状态组合。
       this.logger.info(`用户注册成功: ${account.id}，注册时 IP 为：${finalClientIp}`);
 
       return {
@@ -164,7 +164,7 @@ export class RegisterWithEmailUsecase {
       loginName,
       loginEmail,
       loginPassword,
-      status: AccountStatus.PENDING,
+      status: AccountStatus.ACTIVE,
       nickname: finalNickname,
       email: loginEmail,
       accessGroup: [role],
@@ -248,6 +248,7 @@ export class RegisterWithEmailUsecase {
           email,
           accessGroup,
           metaDigest,
+          userState: UserState.ACTIVE,
           createdAt: new Date(),
           updatedAt: new Date(),
         },

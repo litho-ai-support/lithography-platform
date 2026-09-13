@@ -11,6 +11,7 @@ import {
 import { AppLayout } from '@/app/layout';
 
 import { AdminPage } from '@/pages/admin';
+import { AdminUsersPage } from '@/pages/admin-users';
 import {
   CustomerPage,
   CustomerRepairRequestDetailRoute,
@@ -96,6 +97,13 @@ const router = createBrowserRouter([
         element: <AdminPage />,
         loader: protectedRouteLoader,
         path: 'admin',
+      },
+      {
+        // 用户管理页：路由治理完全复用 protectedRouteLoader 与既有 /admin/**
+        // 角色策略（SUPER_ADMIN 放行，ENGINEER/CUSTOMER 按角色路径表拒绝），
+        element: <AdminUsersPage />,
+        loader: protectedRouteLoader,
+        path: 'admin/users',
       },
       {
         element: <EngineerPage />,

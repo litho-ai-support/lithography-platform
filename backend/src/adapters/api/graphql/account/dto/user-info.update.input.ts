@@ -1,7 +1,7 @@
 // 文件位置：src/adapters/api/graphql/account/dto/user-info.update.input.ts
 
 import { IdentityTypeEnum } from '@app-types/models/account.types';
-import { Gender, UserState } from '@app-types/models/user-info.types';
+import { Gender } from '@app-types/models/user-info.types';
 import { Field, InputType, ObjectType } from '@nestjs/graphql';
 import {
   ArrayNotEmpty,
@@ -24,11 +24,6 @@ export class UpdateUserInfoInput {
   @IsInt()
   accountId?: number;
 
-  @Field(() => IdentityTypeEnum, { nullable: true, description: '登录提示身份' })
-  @IsOptional()
-  @IsEnum(IdentityTypeEnum)
-  identityHint?: IdentityTypeEnum;
-
   @Field(() => String, { nullable: true, description: '昵称' })
   @IsOptional()
   @IsString()
@@ -38,11 +33,6 @@ export class UpdateUserInfoInput {
   @Field(() => Gender, { nullable: true, description: '性别' })
   @IsOptional()
   gender?: Gender;
-
-  @Field(() => UserState, { nullable: true, description: '账户状态（仅管理员或工作人员可修改）' })
-  @IsOptional()
-  @IsEnum(UserState)
-  userState?: UserState;
 
   @Field(() => String, { nullable: true, description: '出生日期（YYYY-MM-DD）' })
   @IsOptional()
