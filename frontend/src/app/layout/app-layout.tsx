@@ -1,21 +1,54 @@
 // src/app/layout/app-layout.tsx
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { MoonOutlined, SunOutlined } from '@ant-design/icons';
-import { Button, Segmented, Tabs, Tooltip } from 'antd';
+import {
+  BookOutlined,
+  BugOutlined,
+  CodeOutlined,
+  ExperimentOutlined,
+  FormOutlined,
+  HomeOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  ProfileOutlined,
+  TeamOutlined,
+  UnorderedListOutlined,
+} from '@ant-design/icons';
+import { Button, Segmented } from 'antd';
 import type { ReactNode } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 
-import { getNavigationItems } from '@/app/navigation';
+import { getNavigationItems, resolveActiveNavigationPath } from '@/app/navigation';
 import { FONT_SCALE_OPTIONS, useTheme } from '@/app/providers';
 import { APP_THEME_CSS_VAR_KEY } from '@/app/theme';
 
 import { AigcSidecar } from '@/widgets/aigc-sidecar';
-import { useAuthSession } from '@/features/auth-session';
+import { type AuthSessionRole, LogoutButton, useAuthSession } from '@/features/auth-session';
 
 import type { AssistantRouteCandidate } from '@/entities/assistant-session';
 
 import { EntryAccentGlyph } from './entry-accent-glyph';
+
+// 侧栏用户卡的展示名映射：仅展示用途，角色判断一律走 auth-session 策略层。
+const ROLE_LABELS: Record<AuthSessionRole, string> = {
+  CUSTOMER: '客户',
+  ENGINEER: '工程师',
+  SUPER_ADMIN: '管理员',
+};
+
+// 导航图标：按 id 映射，折叠态靠图标辨识目标（审查 P1-04 修复）。
+// 键与 catalog 的 item.id 对应；未匹配项不渲染图标，文字仍是完整可访问名称。
+const NAV_ITEM_ICONS: Record<string, ReactNode> = {
+  'admin-users': <TeamOutlined />,
+  'customer-repair-request-new': <FormOutlined />,
+  'customer-repair-requests': <UnorderedListOutlined />,
+  'engineer-repair-requests': <ProfileOutlined />,
+  'error-preview': <BugOutlined />,
+  'game-2048-lab': <ExperimentOutlined />,
+  home: <HomeOutlined />,
+  'reference-documents': <BookOutlined />,
+  'sandbox-playground': <CodeOutlined />,
+};
 
 function toRouteCandidate(
   item: ReturnType<typeof getNavigationItems>[number],
@@ -29,18 +62,12 @@ function toRouteCandidate(
   };
 }
 
-function resolveActiveNavigationPath(
-  pathname: string,
-  items: ReturnType<typeof getNavigationItems>,
-) {
-  return items.find((item) => item.path === pathname)?.path;
-}
-
 type AppLayoutProps = {
   children?: ReactNode;
 };
 
 export function AppLayout({ children }: AppLayoutProps = {}) {
+  const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isSidecarOpen, setIsSidecarOpen] = useState(false);
   const triggerRef = useRef<HTMLAnchorElement | HTMLButtonElement | null>(null);
   const wasSidecarOpenRef = useRef(isSidecarOpen);
@@ -49,16 +76,15 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
       ? false
       : document.hasFocus() && document.visibilityState === 'visible',
   );
-  const { fontScale, isDark, setFontScale, setIsDark } = useTheme();
+  const { fontScale, setFontScale } = useTheme();
   const { session } = useAuthSession();
   const location = useLocation();
   const navigate = useNavigate();
   const activeRole = session?.role ?? null;
   const navigationItems = useMemo(() => getNavigationItems(undefined, activeRole), [activeRole]);
-  const activeNavigationPath = resolveActiveNavigationPath(location.pathname, navigationItems);
-  const navigationTabs = useMemo(
-    () => navigationItems.map((item) => ({ key: item.path, label: item.label })),
-    [navigationItems],
+  const activeNavigationPath = useMemo(
+    () => resolveActiveNavigationPath(location.pathname, navigationItems),
+    [location.pathname, navigationItems],
   );
   const routeCandidates = useMemo(
     () => navigationItems.map((item) => toRouteCandidate(item)),
@@ -107,23 +133,42 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
 
   return (
     <div className={`app-shell ${APP_THEME_CSS_VAR_KEY}`}>
-      <header className="app-header">
-        <div className="flex min-w-0 items-center">
-          <img alt="" className="brand-logo" src="/logo.svg" />
+      <aside className={`app-sidebar${isNavCollapsed ? ' app-sidebar--collapsed' : ''}`}>
+        <div className="app-sidebar-brand">
+          <Link className="app-sidebar-brand-link" to="/">
+            <img alt="" className="brand-logo" src="/logo.svg" />
+            {isNavCollapsed ? null : <span className="app-sidebar-brand-name">光刻维护平台</span>}
+          </Link>
+          <Button
+            aria-label={isNavCollapsed ? '展开导航' : '折叠导航'}
+            icon={isNavCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            size="small"
+            type="text"
+            onClick={() => setIsNavCollapsed((previousValue) => !previousValue)}
+          />
         </div>
 
-        <nav aria-label="主导航" className="app-nav">
-          <Tabs
-            activeKey={activeNavigationPath}
-            items={navigationTabs}
-            onChange={(path) => navigate(path)}
-            size="small"
-            tabBarGutter={32}
-          />
+        <nav aria-label="主导航" className="app-sidebar-nav">
+          {navigationItems.map((item) => (
+            <Link
+              key={item.id}
+              aria-current={item.path === activeNavigationPath ? 'page' : undefined}
+              className={`app-nav-item${
+                item.path === activeNavigationPath ? ' app-nav-item--active' : ''
+              }`}
+              title={item.description}
+              to={item.path}
+            >
+              {/* 图标装饰性：aria-hidden 隔离 antd 图标自带的 role=img aria-label，
+                  保证 Link 可访问名即菜单文字 */}
+              <span aria-hidden="true">{NAV_ITEM_ICONS[item.id]}</span>
+              <span className="app-nav-item-label">{item.label}</span>
+            </Link>
+          ))}
         </nav>
 
-        <div className="app-header-actions">
-          <div className="app-appearance-controls">
+        <div className="app-sidebar-footer">
+          {isNavCollapsed ? null : (
             <div className="app-font-scale-control">
               <Segmented
                 onChange={(value) => {
@@ -136,20 +181,22 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
                 value={fontScale}
               />
             </div>
-            <Tooltip title={isDark ? '切换浅色模式' : '切换深色模式'}>
-              <span className="app-color-scheme-control">
-                <Button
-                  aria-label={isDark ? '切换浅色模式' : '切换深色模式'}
-                  icon={isDark ? <SunOutlined /> : <MoonOutlined />}
-                  shape="circle"
-                  type="text"
-                  onClick={() => setIsDark((previousValue) => !previousValue)}
-                />
-              </span>
-            </Tooltip>
-          </div>
+          )}
+          {session ? (
+            <div className="app-user-card">
+              <div className="app-user-card-info">
+                <span className="app-user-card-name">
+                  {session.userInfo?.nickname ?? '当前用户'}
+                </span>
+                <span className="app-user-card-role">{ROLE_LABELS[session.role]}</span>
+              </div>
+              <div className="app-user-card-actions">
+                <LogoutButton iconOnly={isNavCollapsed} />
+              </div>
+            </div>
+          ) : null}
         </div>
-      </header>
+      </aside>
 
       <main className="app-main">{children ?? <Outlet />}</main>
 

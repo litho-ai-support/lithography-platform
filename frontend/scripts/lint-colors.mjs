@@ -8,13 +8,32 @@ const CHECKED_EXTENSIONS = new Set(['.css', '.ts', '.tsx']);
 const MAGIC_COLOR_PATTERN = /#[0-9a-fA-F]{3,8}\b|\b(?:rgb|hsl)a?\s*\(/gi;
 const INDEX_CSS_PATH = path.normalize('src/index.css');
 const THEME_PATH = path.normalize('src/app/theme/index.ts');
-const ALLOWED_INDEX_CSS_COLOR_TOKENS = new Set(['--color-ai-accent', '--color-ai-accent-hover']);
+// 白名单即「documented global token」：每一项都对应 gkj 视觉基准的映射记录，
+// 见 docs/plan/薛-PR1-S1现状与设计映射-20260914.md 第 3 节（Token/变量映射表）。
+const ALLOWED_INDEX_CSS_COLOR_TOKENS = new Set([
+  '--color-ai-accent',
+  '--color-ai-accent-hover',
+  '--nav-bg',
+  '--nav-border',
+  '--nav-shadow',
+  '--status-critical-text',
+  '--status-ok-text',
+  '--status-warn-text',
+]);
 const ALLOWED_THEME_TOKEN_NAMES = new Set([
-  'colorPrimary',
+  'colorBorderSecondary',
   'colorError',
+  'colorErrorBg',
   'colorLink',
-  'colorBgLayout',
   'colorBgContainer',
+  'colorBgLayout',
+  'colorPrimary',
+  'colorPrimaryActive',
+  'colorPrimaryBg',
+  'colorSuccess',
+  'colorSuccessBg',
+  'colorWarning',
+  'colorWarningBg',
 ]);
 
 async function collectFiles(directory) {

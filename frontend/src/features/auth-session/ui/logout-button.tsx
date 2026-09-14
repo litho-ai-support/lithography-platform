@@ -1,12 +1,18 @@
 // src/features/auth-session/ui/logout-button.tsx
 
 import { useState } from 'react';
-import { Button } from 'antd';
+import { LogoutOutlined } from '@ant-design/icons';
+import { Button, Tooltip } from 'antd';
 import { useNavigate } from 'react-router';
 
 import { logoutAuthSession } from '../auth-session-entry';
 
-export function LogoutButton() {
+type LogoutButtonProps = {
+  /** 收起态专用：仅渲染图标，可访问名称由 aria-label/Tooltip 提供。 */
+  iconOnly?: boolean;
+};
+
+export function LogoutButton({ iconOnly = false }: LogoutButtonProps = {}) {
   const navigate = useNavigate();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
@@ -26,9 +32,17 @@ export function LogoutButton() {
     navigate('/login');
   }
 
-  return (
-    <Button disabled={isLoggingOut} loading={isLoggingOut} onClick={() => void handleLogout()}>
-      退出登录
+  const button = (
+    <Button
+      aria-label={iconOnly ? '退出登录' : undefined}
+      disabled={isLoggingOut}
+      icon={iconOnly ? <LogoutOutlined /> : undefined}
+      loading={isLoggingOut}
+      onClick={() => void handleLogout()}
+    >
+      {iconOnly ? null : '退出登录'}
     </Button>
   );
+
+  return iconOnly ? <Tooltip title="退出登录">{button}</Tooltip> : button;
 }
