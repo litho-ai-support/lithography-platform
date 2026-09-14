@@ -7,10 +7,10 @@ type LoadingStateProps = {
   label?: ReactNode;
 };
 
-// 加载态：居中 Spin + 可选说明文字。
+// 加载态：居中 Spin + 可选说明文字；role=status 让辅助技术感知进行中状态。
 export function LoadingState({ label }: LoadingStateProps) {
   return (
-    <div className="loading-state">
+    <div className="loading-state" role="status">
       <Spin size="small" />
       {label ? <span className="loading-state-label">{label}</span> : null}
     </div>

@@ -19,11 +19,11 @@ describe('ErrorState', () => {
       />,
     );
 
-    const container = screen.getByText('加载失败').closest('div');
+    const container = screen.getByRole('heading', { name: '加载失败' }).closest('div');
 
     expect(container).toHaveClass('error-state');
     expect(screen.getByText('请检查网络后重试')).toHaveClass('error-state-description');
-    expect(container?.querySelector('.error-state-action')?.textContent).toContain('重试');
+    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
   });
 
   it('renders the title only when description and action are omitted', () => {

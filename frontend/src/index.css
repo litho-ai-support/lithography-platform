@@ -172,6 +172,16 @@ body {
   padding: 14px 12px;
 }
 
+/* 折叠态（64px）品牌区只留折叠/展开切换钮：logo+钮超出宽度，首页入口由菜单承担 */
+.app-sidebar--collapsed .app-sidebar-brand {
+  justify-content: center;
+  padding-inline: 8px;
+}
+
+.app-sidebar--collapsed .app-sidebar-brand-link {
+  display: none;
+}
+
 .app-sidebar-brand-link {
   align-items: center;
   display: flex;

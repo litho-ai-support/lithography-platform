@@ -20,7 +20,7 @@ describe('DataCard', () => {
     const card = screen.getByText('卡片内容').closest('section');
 
     expect(card).toHaveClass('data-card');
-    expect(screen.getByText('卡片标题')).toHaveClass('data-card-title');
+    expect(screen.getByRole('heading', { name: '卡片标题' })).toHaveClass('data-card-title');
     expect(card?.querySelector('.data-card-extra')?.textContent).toContain('操作');
   });
 

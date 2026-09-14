@@ -13,6 +13,7 @@ describe('LoadingState', () => {
   it('renders a spinner with the optional label', () => {
     render(<LoadingState label="正在加载" />);
 
+    expect(screen.getByRole('status')).toHaveClass('loading-state');
     expect(document.querySelector('.loading-state .ant-spin')).not.toBeNull();
     expect(screen.getByText('正在加载')).toHaveClass('loading-state-label');
   });
@@ -20,6 +21,7 @@ describe('LoadingState', () => {
   it('renders the spinner only when no label is provided', () => {
     render(<LoadingState />);
 
+    expect(screen.getByRole('status')).toHaveClass('loading-state');
     expect(document.querySelector('.loading-state .ant-spin')).not.toBeNull();
     expect(document.querySelector('.loading-state-label')).toBeNull();
   });

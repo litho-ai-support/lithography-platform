@@ -1,6 +1,6 @@
 // src/app/layout/app-layout.spec.tsx
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -24,6 +24,50 @@ vi.mock('@/features/auth-session', async (importOriginal) => {
 vi.mock('@/widgets/aigc-sidecar', () => ({
   AigcSidecar: () => null,
 }));
+
+// setup.ts 的 matchMedia 是静态 shim；S4 自动折叠用例需要可控的 matches 状态，
+// 在测试内覆盖并在 afterEach 还原，避免污染 AntD 自身的响应式查询。
+const originalMatchMedia = window.matchMedia;
+
+type QueryListener = (event: { matches: boolean }) => void;
+
+function stubNarrowViewport(initialMatches: boolean) {
+  const listeners = new Set<QueryListener>();
+  const narrowQuery = {
+    matches: initialMatches,
+    media: '(max-width: 1024px)',
+  };
+  const mediaQueryList = {
+    ...narrowQuery,
+    addEventListener: (_type: string, listener: QueryListener) => {
+      listeners.add(listener);
+    },
+    addListener: () => {},
+    dispatchEvent: () => false,
+    onchange: null,
+    removeEventListener: (_type: string, listener: QueryListener) => {
+      listeners.delete(listener);
+    },
+    removeListener: () => {},
+  };
+
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: (query: string) =>
+      query === '(max-width: 1024px)' ? mediaQueryList : originalMatchMedia(query),
+  });
+
+  return {
+    setMatches(matches: boolean) {
+      narrowQuery.matches = matches;
+      mediaQueryList.matches = matches;
+
+      for (const listener of listeners) {
+        listener({ matches });
+      }
+    },
+  };
+}
 
 function renderLayout(pathname: string) {
   return render(
@@ -53,6 +97,10 @@ describe('AppLayout（S3 壳层）', () => {
   afterEach(() => {
     cleanup();
     useAuthSessionMock.mockReset();
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: originalMatchMedia,
+    });
   });
 
   it('CUSTOMER 仅见首页、发起申请、我的申请', () => {
@@ -102,5 +150,27 @@ describe('AppLayout（S3 壳层）', () => {
     expect(screen.getByRole('link', { name: '首页' })).toBeInTheDocument();
     expect(screen.queryByText(/退出登录/)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '用户管理' })).not.toBeInTheDocument();
+  });
+
+  it('窄视口（≤1024px）挂载时侧栏自动折叠（S4 P2-03）', () => {
+    useAuthSessionMock.mockReturnValue(sessionFor('CUSTOMER'));
+    stubNarrowViewport(true);
+    renderLayout('/customer');
+
+    expect(screen.getByRole('button', { name: '展开导航' })).toBeInTheDocument();
+  });
+
+  it('跨越窄视口断点时自动收敛/展开，宽屏恢复展开态', () => {
+    useAuthSessionMock.mockReturnValue(sessionFor('CUSTOMER'));
+    const narrowViewport = stubNarrowViewport(false);
+    renderLayout('/customer');
+
+    expect(screen.getByRole('button', { name: '折叠导航' })).toBeInTheDocument();
+
+    act(() => narrowViewport.setMatches(true));
+    expect(screen.getByRole('button', { name: '展开导航' })).toBeInTheDocument();
+
+    act(() => narrowViewport.setMatches(false));
+    expect(screen.getByRole('button', { name: '折叠导航' })).toBeInTheDocument();
   });
 });

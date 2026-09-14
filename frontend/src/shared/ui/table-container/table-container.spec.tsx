@@ -26,7 +26,7 @@ describe('TableContainer', () => {
     const container = screen.getByText('行内容').closest('section');
 
     expect(container).toHaveClass('table-container');
-    expect(screen.getByText('维修申请')).toHaveClass('data-card-title');
+    expect(screen.getByRole('heading', { name: '维修申请' })).toHaveClass('data-card-title');
     expect(screen.getByText('共 3 条').closest('.data-card-extra')).not.toBeNull();
   });
 

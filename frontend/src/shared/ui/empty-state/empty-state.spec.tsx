@@ -19,11 +19,11 @@ describe('EmptyState', () => {
       />,
     );
 
-    const container = screen.getByText('暂无数据').closest('div');
+    const container = screen.getByRole('heading', { name: '暂无数据' }).closest('div');
 
     expect(container).toHaveClass('empty-state');
     expect(screen.getByText('尚无记录，可从下方动作开始')).toHaveClass('empty-state-description');
-    expect(container?.querySelector('.empty-state-action')?.textContent).toContain('新建');
+    expect(screen.getByRole('button', { name: '新建' })).toBeInTheDocument();
   });
 
   it('renders the title only when description and action are omitted', () => {

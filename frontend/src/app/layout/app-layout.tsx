@@ -66,6 +66,10 @@ type AppLayoutProps = {
   children?: ReactNode;
 };
 
+// 窄视口断点（S4）：≤1024px 时侧栏自动折叠，跨越断点时自动收敛/展开；
+// 断点内用户仍可手动切换。任务书验收视口（1366×768、1440×900）不受影响。
+const NARROW_VIEWPORT_QUERY = '(max-width: 1024px)';
+
 export function AppLayout({ children }: AppLayoutProps = {}) {
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isSidecarOpen, setIsSidecarOpen] = useState(false);
@@ -90,6 +94,21 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
     () => navigationItems.map((item) => toRouteCandidate(item)),
     [navigationItems],
   );
+
+  useEffect(() => {
+    const narrowQuery = window.matchMedia(NARROW_VIEWPORT_QUERY);
+
+    function syncCollapsedFromViewport() {
+      setIsNavCollapsed(narrowQuery.matches);
+    }
+
+    syncCollapsedFromViewport();
+    narrowQuery.addEventListener('change', syncCollapsedFromViewport);
+
+    return () => {
+      narrowQuery.removeEventListener('change', syncCollapsedFromViewport);
+    };
+  }, []);
 
   useEffect(() => {
     if (wasSidecarOpenRef.current && !isSidecarOpen) {

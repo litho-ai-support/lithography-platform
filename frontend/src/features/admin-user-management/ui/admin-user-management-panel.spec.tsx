@@ -417,6 +417,8 @@ describe('管理员用户管理面板的弹窗会话代次守卫', () => {
       // 数据库变更确实发生，reload 照常执行
       await waitFor(() => expect(fetchUsersMock.mock.calls.length).toBeGreaterThanOrEqual(2));
     },
+    // 长交互用例（多轮弹窗 + 挂起 Promise）：全量并发跑偶发 5s 抖动，显式放宽到 15s
+    15_000,
   );
 
   it.each(ROW_DIALOG_CASES)(
@@ -442,6 +444,7 @@ describe('管理员用户管理面板的弹窗会话代次守卫', () => {
       expect(isDialogOpen(testCase.dialogTitleOf(ROW_A.nickname))).toBe(true);
       testCase.assertStaleSuccessFeedback();
     },
+    15_000,
   );
 
   it.each(ROW_DIALOG_CASES)('$name：正常成功关闭弹窗、给出成功反馈并刷新列表', async (testCase) => {

@@ -12,7 +12,7 @@ type ErrorStateProps = {
 export function ErrorState({ action, description, title }: ErrorStateProps) {
   return (
     <div className="error-state">
-      <p className="error-state-title">{title}</p>
+      <h3 className="error-state-title">{title}</h3>
       {description ? <p className="error-state-description">{description}</p> : null}
       {action ? <div className="error-state-action">{action}</div> : null}
     </div>
