@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppstoreOutlined,
   BookOutlined,
   BugOutlined,
   CodeOutlined,
@@ -37,7 +38,8 @@ const ROLE_LABELS: Record<AuthSessionRole, string> = {
 };
 
 // 导航图标：按 id 映射，折叠态靠图标辨识目标（审查 P1-04 修复）。
-// 键与 catalog 的 item.id 对应；未匹配项不渲染图标，文字仍是完整可访问名称。
+// 键与 catalog 的 item.id 对应；未匹配项回落通用图标——折叠态必须始终有
+// 可见目标，避免后续新增菜单漏配图标时留下空白热点（外审 R2 P2-01）。
 const NAV_ITEM_ICONS: Record<string, ReactNode> = {
   'admin-users': <TeamOutlined />,
   'customer-repair-request-new': <FormOutlined />,
@@ -49,6 +51,8 @@ const NAV_ITEM_ICONS: Record<string, ReactNode> = {
   'reference-documents': <BookOutlined />,
   'sandbox-playground': <CodeOutlined />,
 };
+
+const FALLBACK_NAV_ICON = <AppstoreOutlined />;
 
 function toRouteCandidate(
   item: ReturnType<typeof getNavigationItems>[number],
@@ -180,7 +184,7 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
             >
               {/* 图标装饰性：aria-hidden 隔离 antd 图标自带的 role=img aria-label，
                   保证 Link 可访问名即菜单文字 */}
-              <span aria-hidden="true">{NAV_ITEM_ICONS[item.id]}</span>
+              <span aria-hidden="true">{NAV_ITEM_ICONS[item.id] ?? FALLBACK_NAV_ICON}</span>
               <span className="app-nav-item-label">{item.label}</span>
             </Link>
           ))}

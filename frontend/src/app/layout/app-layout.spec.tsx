@@ -152,6 +152,19 @@ describe('AppLayout（S3 壳层）', () => {
     expect(screen.queryByRole('link', { name: '用户管理' })).not.toBeInTheDocument();
   });
 
+  it('每个菜单项都有可见图标（折叠态辨识兜底，R2 P2-01）', () => {
+    useAuthSessionMock.mockReturnValue(sessionFor('SUPER_ADMIN'));
+    renderLayout('/admin/users');
+
+    const navLinks = document.querySelectorAll('nav[aria-label="主导航"] a.app-nav-item');
+
+    expect(navLinks.length).toBeGreaterThan(0);
+
+    for (const link of navLinks) {
+      expect(link.querySelector('.anticon')).not.toBeNull();
+    }
+  });
+
   it('窄视口（≤1024px）挂载时侧栏自动折叠（S4 P2-03）', () => {
     useAuthSessionMock.mockReturnValue(sessionFor('CUSTOMER'));
     stubNarrowViewport(true);

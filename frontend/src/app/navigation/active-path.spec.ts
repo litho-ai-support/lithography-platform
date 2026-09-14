@@ -16,7 +16,8 @@ const ITEMS = [
   item('engineer-repair-requests', '/engineer/repair-requests'),
   item('reference-documents', '/reference-documents'),
   item('admin-users', '/admin/users'),
-  item('admin-document-database', '/admin'),
+  // 中性父路径 fixture：仅验证前缀优先级，不代表任何真实/计划菜单（R2 P2-02）
+  item('admin-root', '/admin'),
 ];
 
 describe('resolveActiveNavigationPath', () => {
@@ -33,7 +34,7 @@ describe('resolveActiveNavigationPath', () => {
     );
   });
 
-  it('最长前缀优先：/admin/users 选中用户管理而非文档数据库', () => {
+  it('最长前缀优先：/admin/users 选中用户管理而非父路径', () => {
     expect(resolveActiveNavigationPath('/admin/users', ITEMS)).toBe('/admin/users');
   });
 
