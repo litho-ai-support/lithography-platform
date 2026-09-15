@@ -169,7 +169,7 @@ body {
   display: flex;
   gap: 8px;
   justify-content: space-between;
-  padding: 14px 12px;
+  padding: 20px 12px;
 }
 
 /* 折叠态（64px）品牌区只留折叠/展开切换钮：logo+钮超出宽度，首页入口由菜单承担 */
@@ -190,19 +190,39 @@ body {
   overflow: hidden;
 }
 
+.app-sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .app-sidebar-brand-name {
   color: var(--ant-color-text);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
+  letter-spacing: 0.025em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* 品牌辅行：小号大写字母间距的辅助层级，对齐基准品牌区两级文字节奏 */
+.app-sidebar-brand-subname {
+  color: var(--ant-color-text-tertiary);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .brand-logo {
   flex-shrink: 0;
-  height: 34px;
-  width: 34px;
+  height: 32px;
+  width: 32px;
 }
 
 .app-sidebar-nav {
@@ -212,18 +232,19 @@ body {
   gap: 4px;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 8px;
+  padding: 12px;
 }
 
 .app-nav-item {
   align-items: center;
-  border-radius: var(--ant-border-radius);
+  border-radius: 8px;
   color: var(--ant-color-text-secondary);
   display: flex;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
-  gap: 8px;
-  padding: 9px 12px;
+  gap: 10px;
+  line-height: 1.4;
+  padding: 11px 12px;
   text-decoration: none;
   transition:
     background 0.2s ease,
@@ -261,15 +282,35 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px;
+  padding: 14px 12px;
 }
 
 .app-user-card {
   align-items: center;
   display: flex;
-  gap: 8px;
+  gap: 10px;
   justify-content: space-between;
   min-width: 0;
+}
+
+/* 用户卡头像：真实会话昵称首字符，渐变蓝底与主色描边对齐基准身份块 */
+.app-user-card-avatar {
+  align-items: center;
+  background: linear-gradient(
+    145deg,
+    var(--ant-color-primary-bg),
+    var(--ant-color-primary-bg-hover)
+  );
+  border: 1px solid var(--ant-color-primary-border);
+  border-radius: 12px;
+  color: var(--ant-color-primary-active);
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 800;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
 }
 
 .app-user-card-info {
@@ -280,7 +321,7 @@ body {
 
 .app-user-card-name {
   color: var(--ant-color-text);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -289,7 +330,8 @@ body {
 
 .app-user-card-role {
   color: var(--ant-color-text-tertiary);
-  font-size: 12px;
+  font-size: 10px;
+  margin-top: 2px;
 }
 
 .app-user-card-actions .ant-btn {
@@ -301,6 +343,10 @@ body {
 .app-sidebar--collapsed .app-user-card {
   justify-content: center;
   width: 100%;
+}
+
+.app-sidebar--collapsed .app-user-card-avatar {
+  display: none;
 }
 
 .app-sidebar--collapsed .app-user-card-info {
@@ -322,7 +368,7 @@ body {
   margin: 0 auto;
   max-width: 1180px;
   min-width: 0;
-  padding: 40px 24px 56px;
+  padding: 24px 26px 32px;
   width: 100%;
 }
 
@@ -356,18 +402,18 @@ body {
 
 .page-title {
   color: var(--ant-color-text);
-  font-size: 30px;
-  font-weight: 780;
+  font-size: 24px;
+  font-weight: 700;
   letter-spacing: 0;
-  line-height: 1.15;
+  line-height: 1.25;
   margin: 0;
 }
 
 .page-description {
   color: var(--ant-color-text-secondary);
-  font-size: 15px;
-  line-height: 1.7;
-  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 8px 0 0;
   max-width: 760px;
 }
 

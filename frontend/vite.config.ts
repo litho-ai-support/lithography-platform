@@ -85,6 +85,20 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    // vite preview（生产构建本地预览）与 dev server 同源转发，供生产配置下的
+    // 验收截图/真机验证使用：preview 跑的是 prod 构建，无 dev 调试菜单
+    preview: {
+      proxy: {
+        '/graphql': {
+          target: devApiProxyTarget,
+          changeOrigin: true,
+        },
+        '/api': {
+          target: devApiProxyTarget,
+          changeOrigin: true,
+        },
+      },
+    },
     build: {
       outDir: buildOutDir,
       sourcemap: buildSourcemap,

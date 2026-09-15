@@ -160,7 +160,13 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
         <div className="app-sidebar-brand">
           <Link className="app-sidebar-brand-link" to="/">
             <img alt="" className="brand-logo" src="/logo.svg" />
-            {isNavCollapsed ? null : <span className="app-sidebar-brand-name">光刻维护平台</span>}
+            {isNavCollapsed ? null : (
+              <span className="app-sidebar-brand-text">
+                <span className="app-sidebar-brand-name">光刻维护平台</span>
+                {/* 品牌辅行：装饰性英文小字，对齐基准品牌区两级文字层级 */}
+                <span className="app-sidebar-brand-subname">Service Platform</span>
+              </span>
+            )}
           </Link>
           <Button
             aria-label={isNavCollapsed ? '展开导航' : '折叠导航'}
@@ -207,6 +213,12 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
           )}
           {session ? (
             <div className="app-user-card">
+              {!isNavCollapsed ? (
+                /* 头像取真实会话昵称首字符（装饰性，aria-hidden）；无假身份信息 */
+                <span aria-hidden="true" className="app-user-card-avatar">
+                  {(session.userInfo?.nickname ?? '用户').trim().charAt(0).toUpperCase()}
+                </span>
+              ) : null}
               <div className="app-user-card-info">
                 <span className="app-user-card-name">
                   {session.userInfo?.nickname ?? '当前用户'}
