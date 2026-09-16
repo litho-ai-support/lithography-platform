@@ -113,6 +113,7 @@ export function SharedUiGalleryPage() {
 
       <div className="card-grid">
         <EmptyState description="演示文本：列表没有数据时的容器语言。" title="暂无数据" />
+        <EmptyState title="暂无可显示数据" />
         <ErrorState description="演示文本：加载失败时的容器语言。" title="加载失败" />
         <LoadingState label="演示文本：加载中状态。" />
       </div>

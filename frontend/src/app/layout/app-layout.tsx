@@ -176,13 +176,15 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
               </span>
             )}
           </Link>
-          <Button
-            aria-label={isNavCollapsed ? '展开导航' : '折叠导航'}
-            icon={isNavCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            size="small"
-            type="text"
-            onClick={() => setIsNavCollapsed((previousValue) => !previousValue)}
-          />
+          <span className="app-sidebar-collapse-button">
+            <Button
+              aria-label={isNavCollapsed ? '展开导航' : '折叠导航'}
+              icon={isNavCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              size="small"
+              type="text"
+              onClick={() => setIsNavCollapsed((previousValue) => !previousValue)}
+            />
+          </span>
         </div>
 
         <nav aria-label="主导航" className="app-sidebar-nav">

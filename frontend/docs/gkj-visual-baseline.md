@@ -59,14 +59,16 @@ M 档的含义：**保留原型字号层级**（导航 12px、胶囊 10px、页�
 
 ### 2.6 共享组件映射与声明式偏差（负责人 0916 逐条复核裁定）
 
-| 组件                      | 映射与基准                                                                                                                                                                                                 |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| DataCard / TableContainer | gkj `.panel-card`：半透明白底 `rgba(255,255,255,.92)`、1px `#e2e8f0`、14px 圆角、`0 10px 30px rgba(15,23,42,.06)` 投影                                                                                     |
-| StatCard                  | gkj `.metric-tile`：`linear-gradient(180deg,#fff,#f8fbff)`、1px `#dbeafe`、14px 圆角、padding 16px、**无投影**；统计卡片不是普通 panel-card                                                                |
-| FilterBar                 | gkj `.platform-search` 的**容器语言**：底色 `#f8fafc`、1px `#dbe3ee`、10px 圆角、margin `12 0 14`；内含多个 AntD 筛选控件故高度自适应，不强制单框 36px                                                     |
-| EmptyState / ErrorState   | gkj `.platform-empty`：`#f8fafc` 底、1px dashed `#cbd5e1`、12px 圆角、padding `22px 14px`、`#94a3b8` 文本（原型源码字号 11px）                                                                             |
-| PageHeader eyebrow        | 可选 API；gkj `.atta-eyebrow` 10px/800/letter-spacing .16em/uppercase/#2563eb；仅在 gkj 对应工作台页传入                                                                                                   |
-| 声明式偏差                | ① S/M/L 字号档位控件（原型无此功能）：安置在用户区上方独立行；② 折叠导航控件（原型无此功能）：行内占于品牌区内容区右缘，右侧 48px 保留区宽度不变；③ 不渲染原型的 Access L4 / Online 演示徽标（假身份红线） |
+| 组件                      | 映射与基准                                                                                                                                                                                                             |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DataCard / TableContainer | gkj `.panel-card`：半透明白底 `rgba(255,255,255,.92)`、1px `#e2e8f0`、14px 圆角、`0 10px 30px rgba(15,23,42,.06)` 投影                                                                                                 |
+| StatCard                  | gkj `.metric-tile`：`linear-gradient(180deg,#fff,#f8fbff)`、1px `#dbeafe`、14px 圆角、padding 16px、**无投影**；统计卡片不是普通 panel-card                                                                            |
+| StatCard 文字层级         | 标签 `12px/400/#64748b`；数值 `30px/700/36px/#1e293b`；辅助文字 `11px/#94a3b8`、上间距 8px。不得混用原型 `.health-score` 的局部样式。                                                                                  |
+| FilterBar                 | gkj `.platform-search` 的**容器语言**：底色 `#f8fafc`、1px `#dbe3ee`、10px 圆角、margin `12 0 14`；内含多个 AntD 筛选控件故高度自适应，不强制单框 36px                                                                 |
+| EmptyState / ErrorState   | gkj `.platform-empty`：`#f8fafc` 底、1px dashed `#cbd5e1`、12px 圆角、padding `22px 14px`、`#94a3b8` 文本（原型源码字号 11px）                                                                                         |
+| 单行空态                  | 无说明/操作时采用 `11px/400/#94a3b8` 单行提示；标题+说明+操作为扩展态，不宣称与原型单行提示完全相同。                                                                                                                  |
+| PageHeader eyebrow        | 可选 API；gkj `.atta-eyebrow` 10px/800/letter-spacing .16em/uppercase/#2563eb；仅在 gkj 对应工作台页传入                                                                                                               |
+| 声明式偏差                | ① S/M/L 字号档位控件（原型无此功能）：安置在用户区上方独立行；② 折叠导航控件（原型无此功能）：绝对定位于品牌区右侧 48px 保留区，不参与品牌链接 flex 宽度计算；③ 不渲染原型的 Access L4 / Online 演示徽标（假身份红线） |
 
 ### 2.4 颜色 / 背景 / 阴影
 

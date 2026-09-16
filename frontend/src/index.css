@@ -73,6 +73,9 @@
   --eyebrow-text: #2563eb;
   --stat-card-gradient: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
   --stat-card-border: #dbeafe;
+  --stat-card-label: var(--text-muted);
+  --stat-card-value: var(--text-strong);
+  --stat-card-hint: var(--empty-text);
   --filter-bar-bg: #f8fafc;
   --filter-bar-border: #dbe3ee;
   --empty-bg: #f8fafc;
@@ -213,13 +216,12 @@ body {
   align-items: center;
   border-bottom: 1px solid var(--panel-border);
   display: flex;
-  gap: 8px;
-  justify-content: space-between;
   /* 原型品牌区（atta-brand-wrap）：padding 20/48/20/20、总高 88px（逐条复核报告 20260916
      P1）；右侧 48px 保留区对应原型 lang-toggle 的 absolute right:8px 区域，当前折叠
      控件行内占位于内容区右缘，保留区宽度不变 */
   min-height: 88px;
   padding: 20px 48px 20px 20px;
+  position: relative;
 }
 
 /* 折叠态（64px）品牌区只留折叠/展开切换钮：logo+钮超出宽度，首页入口由菜单承担 */
@@ -238,6 +240,20 @@ body {
   gap: 8px;
   min-width: 0;
   overflow: hidden;
+  width: 100%;
+}
+
+/* 48px 右预留区只由该绝对定位按钮使用；不得作为 flex 子项再次挤压品牌文字。 */
+.app-sidebar-collapse-button {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.app-sidebar--collapsed .app-sidebar-collapse-button {
+  position: static;
+  transform: none;
 }
 
 .app-sidebar-brand-text {
@@ -252,11 +268,10 @@ body {
   color: var(--text-strong);
   font-size: 0.75rem;
   font-weight: 700;
-  /* 原型品牌主名 12px/700/16px（text-xs 行高 1rem），行高随字号同比例缩放 */
+  /* 展开态完整显示品牌名（第二轮 Request changes S0）：M/L 档不截字；
+     保留 nowrap 防断字，去 ellipsis 后即便极端宽度也以完整形态溢出而非省略号 */
   line-height: 1.3333;
   letter-spacing: 0.025em;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -267,10 +282,9 @@ body {
   font-weight: 400;
   letter-spacing: 0.1em;
   margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   text-transform: uppercase;
-  white-space: nowrap;
+  /* 英文辅行允许换行，不默认 ellipsis（第二轮 Request changes S0） */
+  white-space: normal;
 }
 
 /* LF 标记：32×32、圆角 8px、深板岩底白色粗体（原型 .w-8.h-8.rounded-lg.bg-slate-800） */
@@ -1087,25 +1101,26 @@ body {
   padding: 16px;
 }
 
-/* StatCard：大数值排版（gkj .health-score 语言） */
+/* StatCard：完整映射 gkj .metric-tile 的标签、数值和辅助文字层级，不混用 health-score。 */
 .stat-card-label {
-  color: var(--ant-color-text-secondary);
+  color: var(--stat-card-label);
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 400;
   margin: 0;
 }
 
 .stat-card-value {
-  font-size: 1.5rem;
-  font-weight: 800;
+  color: var(--stat-card-value);
+  font-size: 1.875rem;
+  font-weight: 700;
   line-height: 1.2;
   margin: 4px 0 0;
 }
 
 .stat-card-hint {
-  color: var(--ant-color-text-tertiary);
-  font-size: 0.75rem;
-  margin: 6px 0 0;
+  color: var(--stat-card-hint);
+  font-size: 0.6875rem;
+  margin: 8px 0 0;
 }
 
 /* FilterBar：映射到 gkj .platform-search 的容器语言（负责人 0916 复核裁定）：
@@ -1146,6 +1161,15 @@ body {
   font-size: 0.875rem;
   font-weight: 700;
   margin: 0;
+}
+
+/* 原型 .platform-empty 的单行提示；含说明或操作时才使用扩展态标题层级。 */
+.empty-state--simple .empty-state-title,
+.error-state--simple .error-state-title {
+  color: var(--empty-text);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  line-height: 1.5;
 }
 
 .empty-state-description,
