@@ -46,6 +46,8 @@
   /* gkj 原型语义色（受控全局常量，不依赖 AntD；基准表见 frontend/docs/gkj-visual-baseline.md）。
      导航次级文字与说明/角色文字是两个语义，禁止共用同一变量 */
   --text-strong: #1e293b;
+  --brand-mark-bg: #1e293b;
+  --brand-mark-fg: #ffffff;
   --nav-text: #475569;
   --text-muted: #64748b;
   --nav-hover-bg: #e5e7eb;
@@ -157,9 +159,25 @@ body {
 }
 
 .app-shell {
-  background: var(--workspace-bg);
   display: flex;
   min-height: 100vh;
+}
+
+/* 工作区层（原型 .workspace-page）：先占余宽承载渐变与紧凑留白，
+   内容再入 1280px 内层，两层职责不混叠 */
+.app-workspace {
+  background: var(--workspace-bg);
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+  padding: 22px 26px 32px;
+}
+
+.app-main {
+  max-width: 1280px;
+  min-width: 0;
+  width: 100%;
 }
 
 /* 左固定导航（gkj 视觉语言：浅灰底、右描边、右投影；色值见 --nav-* Token） */
@@ -183,11 +201,12 @@ body {
 
 .app-sidebar-brand {
   align-items: center;
-  border-bottom: 1px solid var(--ant-color-border-secondary);
+  border-bottom: 1px solid var(--panel-border);
   display: flex;
   gap: 8px;
   justify-content: space-between;
-  padding: 20px 12px;
+  /* 原型品牌区左内边距 20px；右侧由真实折叠控件占位（原型为 48px 预留的 absolute 开关） */
+  padding: 20px 8px 20px 20px;
 }
 
 /* 折叠态（64px）品牌区只留折叠/展开切换钮：logo+钮超出宽度，首页入口由菜单承担 */
@@ -239,9 +258,18 @@ body {
   white-space: nowrap;
 }
 
-.brand-logo {
+/* LF 标记：32×32、圆角 8px、深板岩底白色粗体（原型 .w-8.h-8.rounded-lg.bg-slate-800） */
+.brand-mark {
+  align-items: center;
+  background: var(--brand-mark-bg);
+  border-radius: 8px;
+  color: var(--brand-mark-fg);
+  display: flex;
   flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
   height: 32px;
+  justify-content: center;
   width: 32px;
 }
 
@@ -272,9 +300,12 @@ body {
   white-space: nowrap;
 }
 
-.app-nav-item .anticon {
+.app-nav-item .anticon,
+.app-nav-item .nav-icon {
   flex-shrink: 0;
   font-size: 1rem;
+  height: 1rem;
+  width: 1rem;
 }
 
 .app-nav-item:hover {
@@ -302,13 +333,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 12px;
+  /* 原型用户区左右内边距 14px */
+  padding: 14px;
 }
 
 .app-user-card {
   align-items: center;
   display: flex;
-  gap: 10px;
+  /* 原型头像与文字间距 12px */
+  gap: 12px;
   justify-content: space-between;
   min-width: 0;
 }
@@ -380,14 +413,6 @@ body {
   background: transparent;
 }
 
-.app-main {
-  margin: 0 auto;
-  max-width: 1180px;
-  min-width: 0;
-  padding: 24px 26px 32px;
-  width: 100%;
-}
-
 .page-stack {
   display: flex;
   flex-direction: column;
@@ -396,11 +421,10 @@ body {
 
 .page-header {
   align-items: flex-start;
-  border-bottom: 1px solid var(--ant-color-border);
+  /* 原型页头无分隔线、无额外底部内边距（负责人 0916 对照表） */
   display: flex;
   gap: 24px;
   justify-content: space-between;
-  padding-bottom: 20px;
 }
 
 .page-header-content {
@@ -429,7 +453,7 @@ body {
   color: var(--text-muted);
   font-size: 0.875rem;
   line-height: 1.25rem;
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   max-width: 760px;
 }
 
@@ -884,7 +908,7 @@ body {
 }
 
 @media (max-width: 760px) {
-  .app-main {
+  .app-workspace {
     padding: 30px 16px 44px;
   }
 

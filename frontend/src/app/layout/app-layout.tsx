@@ -3,17 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppstoreOutlined,
-  BookOutlined,
   BugOutlined,
   CodeOutlined,
   ExperimentOutlined,
-  FormOutlined,
-  HomeOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  ProfileOutlined,
-  TeamOutlined,
-  UnorderedListOutlined,
 } from '@ant-design/icons';
 import { Button, Segmented } from 'antd';
 import type { ReactNode } from 'react';
@@ -29,6 +23,13 @@ import { type AuthSessionRole, LogoutButton, useAuthSession } from '@/features/a
 import type { AssistantRouteCandidate } from '@/entities/assistant-session';
 
 import { EntryAccentGlyph } from './entry-accent-glyph';
+import {
+  NavBookOpenIcon,
+  NavChatIcon,
+  NavDashboardIcon,
+  NavListIcon,
+  NavUserIcon,
+} from './nav-icons';
 
 // 侧栏用户卡的展示名映射：仅展示用途，角色判断一律走 auth-session 策略层。
 const ROLE_LABELS: Record<AuthSessionRole, string> = {
@@ -38,17 +39,18 @@ const ROLE_LABELS: Record<AuthSessionRole, string> = {
 };
 
 // 导航图标：按 id 映射，折叠态靠图标辨识目标（审查 P1-04 修复）。
-// 键与 catalog 的 item.id 对应；未匹配项回落通用图标——折叠态必须始终有
-// 可见目标，避免后续新增菜单漏配图标时留下空白热点（外审 R2 P2-01）。
+// 原型已对应的五个菜单用 gkj 描边 SVG（./nav-icons）；dev 专属入口仍用 AntD 图标
+//（生产不可见）；未匹配项回落通用图标——折叠态必须始终有可见目标，
+// 避免后续新增菜单漏配图标时留下空白热点（外审 R2 P2-01）。
 const NAV_ITEM_ICONS: Record<string, ReactNode> = {
-  'admin-users': <TeamOutlined />,
-  'customer-repair-request-new': <FormOutlined />,
-  'customer-repair-requests': <UnorderedListOutlined />,
-  'engineer-repair-requests': <ProfileOutlined />,
+  'admin-users': <NavUserIcon />,
+  'customer-repair-request-new': <NavChatIcon />,
+  'customer-repair-requests': <NavListIcon />,
+  'engineer-repair-requests': <NavListIcon />,
   'error-preview': <BugOutlined />,
   'game-2048-lab': <ExperimentOutlined />,
-  home: <HomeOutlined />,
-  'reference-documents': <BookOutlined />,
+  home: <NavDashboardIcon />,
+  'reference-documents': <NavBookOpenIcon />,
   'sandbox-playground': <CodeOutlined />,
 };
 
@@ -159,7 +161,12 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
       <aside className={`app-sidebar${isNavCollapsed ? ' app-sidebar--collapsed' : ''}`}>
         <div className="app-sidebar-brand">
           <Link className="app-sidebar-brand-link" to="/">
-            <img alt="" className="brand-logo" src="/logo.svg" />
+            {/* LF 标记：32×32、圆角 8px、深板岩底白色粗体，对齐原型品牌标识（色值见
+                index.css 的 --brand-mark-* Token 与基准表）；文字为装饰性字形
+                （aria-hidden），项目真名由右侧两级文字承担 */}
+            <span aria-hidden="true" className="brand-mark">
+              LF
+            </span>
             {isNavCollapsed ? null : (
               <span className="app-sidebar-brand-text">
                 <span className="app-sidebar-brand-name">光刻维护平台</span>
@@ -188,8 +195,6 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
               title={item.description}
               to={item.path}
             >
-              {/* 图标装饰性：aria-hidden 隔离 antd 图标自带的 role=img aria-label，
-                  保证 Link 可访问名即菜单文字 */}
               <span aria-hidden="true">{NAV_ITEM_ICONS[item.id] ?? FALLBACK_NAV_ICON}</span>
               <span className="app-nav-item-label">{item.label}</span>
             </Link>
@@ -233,7 +238,10 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
         </div>
       </aside>
 
-      <main className="app-main">{children ?? <Outlet />}</main>
+      {/* 工作区先占余宽（原型 workspace-page：渐变+22px 上距），内容再入 1280px 内层 */}
+      <main className="app-workspace">
+        <div className="app-main">{children ?? <Outlet />}</div>
+      </main>
 
       {!isSidecarOpen ? (
         <div className="entry-trigger-shell" data-entry-open="false">

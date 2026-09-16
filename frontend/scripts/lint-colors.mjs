@@ -16,6 +16,8 @@ const ALLOWED_INDEX_CSS_COLOR_TOKENS = new Set([
   // gkj 原型受控语义常量（基准表：frontend/docs/gkj-visual-baseline.md）
   '--avatar-border',
   '--avatar-gradient',
+  '--brand-mark-bg',
+  '--brand-mark-fg',
   '--nav-bg',
   '--nav-border',
   '--nav-hover-bg',

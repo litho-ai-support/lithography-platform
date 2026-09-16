@@ -161,7 +161,8 @@ describe('AppLayout（S3 壳层）', () => {
     expect(navLinks.length).toBeGreaterThan(0);
 
     for (const link of navLinks) {
-      expect(link.querySelector('.anticon')).not.toBeNull();
+      // 图标实现双轨：原型描边 SVG（.nav-icon）与 dev 专属 AntD 图标（.anticon）
+      expect(link.querySelector('.nav-icon, .anticon')).not.toBeNull();
     }
   });
 
