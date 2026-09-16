@@ -319,6 +319,14 @@ body {
   color: var(--ant-color-primary-active);
 }
 
+/* active+hover：hover 选择器特异性 (0,2,0) 高于 active (0,1,0)，
+   悬停已激活项时必须保持 active 视觉（验收报告 20260916 P1；
+   原型 .nav-item.active 位于 hover 后同等特异性，此处显式声明等价优先级） */
+.app-nav-item--active:hover {
+  background: var(--ant-color-primary-bg);
+  color: var(--ant-color-primary-active);
+}
+
 /* 折叠态：仅保留图标与展开按钮，文字隐藏（图标承担目标辨识，aria-label 由 Link 提供） */
 .app-sidebar--collapsed .app-nav-item {
   justify-content: center;
