@@ -13,12 +13,27 @@ const THEME_PATH = path.normalize('src/app/theme/index.ts');
 const ALLOWED_INDEX_CSS_COLOR_TOKENS = new Set([
   '--color-ai-accent',
   '--color-ai-accent-hover',
+  // gkj 原型受控语义常量（基准表：frontend/docs/gkj-visual-baseline.md）
+  '--avatar-border',
+  '--avatar-gradient',
   '--nav-bg',
   '--nav-border',
+  '--nav-hover-bg',
+  '--nav-hover-text',
   '--nav-shadow',
+  '--nav-text',
+  '--panel-bg',
+  '--panel-border',
+  '--panel-shadow',
+  '--status-critical-bg',
   '--status-critical-text',
+  '--status-ok-bg',
   '--status-ok-text',
+  '--status-warn-bg',
   '--status-warn-text',
+  '--text-muted',
+  '--text-strong',
+  '--workspace-bg',
 ]);
 const ALLOWED_THEME_TOKEN_NAMES = new Set([
   'colorBorderSecondary',

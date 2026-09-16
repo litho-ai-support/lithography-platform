@@ -21,6 +21,57 @@
 :root {
   --color-ai-accent: #cc6b46;
   --color-ai-accent-hover: #b35a37;
+  --z-index-main-base: 0;
+  --z-index-sidecar-container: 1100;
+  --shell-header-height: 64px;
+  --error-block-min-height: 60vh;
+  --error-block-shell-max-width: 36rem;
+  --error-block-shell-gap: 24px;
+  --error-block-shell-padding-inline: 24px;
+  --error-block-shell-padding-block: 40px;
+  --error-block-visual-min-height: 220px;
+  --error-block-icon-size: 11.25rem;
+  --error-block-icon-opacity: 0.08;
+  --error-block-status-font-size: clamp(6rem, 8vw, 8rem);
+  --error-block-status-letter-spacing: -0.06em;
+  --error-block-title-font-size: 1rem;
+  --error-block-title-font-weight: 700;
+  --error-block-title-letter-spacing: 0.4em;
+  --error-block-description-max-width: 26.25rem;
+  --font-sans:
+    'Inter Variable', -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  --font-mono:
+    'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  /* gkj 原型语义色（受控全局常量，不依赖 AntD；基准表见 frontend/docs/gkj-visual-baseline.md）。
+     导航次级文字与说明/角色文字是两个语义，禁止共用同一变量 */
+  --text-strong: #1e293b;
+  --nav-text: #475569;
+  --text-muted: #64748b;
+  --nav-hover-bg: #e5e7eb;
+  --nav-hover-text: #111827;
+  --status-ok-bg: #dcfce7;
+  --status-ok-text: #166534;
+  --status-warn-bg: #fef3c7;
+  --status-warn-text: #92400e;
+  --status-critical-bg: #fee2e2;
+  --status-critical-text: #b91c1c;
+  --nav-width: 210px;
+  --nav-bg: #f8fafc;
+  --nav-border: #cbd5e1;
+  --nav-shadow: 8px 0 24px rgba(15, 23, 42, 0.08);
+  --workspace-bg: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+  --avatar-gradient: linear-gradient(145deg, #dbeafe, #bfdbfe);
+  --avatar-border: #93c5fd;
+  --panel-bg: rgba(255, 255, 255, 0.92);
+  --panel-border: #e2e8f0;
+  --panel-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+
+/* 依赖 AntD CSS 变量的别名只能定义在真正拥有 app-theme 的作用域：
+   自定义属性在定义元素处解析后向下继承，:root 读不到后代注入的 --ant-*
+   （负责人 0916 审查第 5 节）。AI 侧车组件全部渲染在 .app-shell 内。 */
+.app-shell {
   --color-ai-accent-bg: color-mix(
     in srgb,
     var(--color-ai-accent) 12%,
@@ -52,39 +103,6 @@
   );
   --color-ai-shadow: color-mix(in srgb, var(--color-ai-accent) 58%, var(--ant-color-text));
   --color-ai-shadow-strong: color-mix(in srgb, var(--color-ai-accent) 70%, var(--ant-color-text));
-  --z-index-main-base: 0;
-  --z-index-sidecar-container: 1100;
-  --shell-header-height: 64px;
-  --error-block-min-height: 60vh;
-  --error-block-shell-max-width: 36rem;
-  --error-block-shell-gap: 24px;
-  --error-block-shell-padding-inline: 24px;
-  --error-block-shell-padding-block: 40px;
-  --error-block-visual-min-height: 220px;
-  --error-block-icon-size: 11.25rem;
-  --error-block-icon-opacity: 0.08;
-  --error-block-status-font-size: clamp(6rem, 8vw, 8rem);
-  --error-block-status-letter-spacing: -0.06em;
-  --error-block-title-font-size: 1rem;
-  --error-block-title-font-weight: 700;
-  --error-block-title-letter-spacing: 0.4em;
-  --error-block-description-max-width: 26.25rem;
-  --font-sans:
-    'Inter Variable', -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', sans-serif;
-  --font-mono:
-    'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
-  --status-ok-bg: var(--ant-color-success-bg);
-  --status-ok-text: #166534;
-  --status-warn-bg: var(--ant-color-warning-bg);
-  --status-warn-text: #92400e;
-  --status-critical-bg: var(--ant-color-error-bg);
-  --status-critical-text: #b91c1c;
-  --nav-width: 210px;
-  --nav-bg: #f8fafc;
-  --nav-border: #cbd5e1;
-  --nav-shadow: 8px 0 24px rgba(15, 23, 42, 0.08);
-  --workspace-bg: var(--ant-color-bg-layout);
 }
 
 [data-layout-surface='sidecar'] {
@@ -197,8 +215,10 @@ body {
 }
 
 .app-sidebar-brand-name {
-  color: var(--ant-color-text);
-  font-size: 12px;
+  /* 品牌两级文字与状态文本均为受控语义变量（M 档数值见 frontend/docs/gkj-visual-baseline.md）；
+     字号用 rem 表达，随根字号（S/M/L 档位）同步缩放 */
+  color: var(--text-strong);
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.025em;
   overflow: hidden;
@@ -208,9 +228,9 @@ body {
 
 /* 品牌辅行：小号大写字母间距的辅助层级，对齐基准品牌区两级文字节奏 */
 .app-sidebar-brand-subname {
-  color: var(--ant-color-text-tertiary);
-  font-size: 9px;
-  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 0.5625rem;
+  font-weight: 400;
   letter-spacing: 0.1em;
   margin-top: 2px;
   overflow: hidden;
@@ -238,9 +258,9 @@ body {
 .app-nav-item {
   align-items: center;
   border-radius: 8px;
-  color: var(--ant-color-text-secondary);
+  color: var(--nav-text);
   display: flex;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   gap: 10px;
   line-height: 1.4;
@@ -254,12 +274,12 @@ body {
 
 .app-nav-item .anticon {
   flex-shrink: 0;
-  font-size: 16px;
+  font-size: 1rem;
 }
 
 .app-nav-item:hover {
-  background: var(--ant-color-fill-tertiary);
-  color: var(--ant-color-text);
+  background: var(--nav-hover-bg);
+  color: var(--nav-hover-text);
 }
 
 .app-nav-item--active {
@@ -296,17 +316,13 @@ body {
 /* 用户卡头像：真实会话昵称首字符，渐变蓝底与主色描边对齐基准身份块 */
 .app-user-card-avatar {
   align-items: center;
-  background: linear-gradient(
-    145deg,
-    var(--ant-color-primary-bg),
-    var(--ant-color-primary-bg-hover)
-  );
-  border: 1px solid var(--ant-color-primary-border);
+  background: var(--avatar-gradient);
+  border: 1px solid var(--avatar-border);
   border-radius: 12px;
   color: var(--ant-color-primary-active);
   display: flex;
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 800;
   height: 38px;
   justify-content: center;
@@ -320,8 +336,8 @@ body {
 }
 
 .app-user-card-name {
-  color: var(--ant-color-text);
-  font-size: 12px;
+  color: var(--text-strong);
+  font-size: 0.75rem;
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -329,14 +345,14 @@ body {
 }
 
 .app-user-card-role {
-  color: var(--ant-color-text-tertiary);
-  font-size: 10px;
+  color: var(--text-muted);
+  font-size: 0.625rem;
   margin-top: 2px;
 }
 
 .app-user-card-actions .ant-btn {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   padding-inline: 8px;
 }
 
@@ -401,18 +417,18 @@ body {
 }
 
 .page-title {
-  color: var(--ant-color-text);
-  font-size: 24px;
+  color: var(--text-strong);
+  font-size: 1.5rem;
   font-weight: 700;
   letter-spacing: 0;
-  line-height: 1.25;
+  line-height: 2rem;
   margin: 0;
 }
 
 .page-description {
-  color: var(--ant-color-text-secondary);
-  font-size: 14px;
-  line-height: 1.6;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
   margin: 8px 0 0;
   max-width: 760px;
 }
@@ -924,11 +940,11 @@ body {
   align-items: center;
   border-radius: 999px;
   display: inline-flex;
-  font-size: 12px;
+  font-size: 0.625rem;
   font-weight: 700;
   gap: 6px;
   letter-spacing: 0.02em;
-  line-height: 1;
+  line-height: 1.5;
   padding: 4px 10px;
 }
 
@@ -973,7 +989,7 @@ body {
 }
 
 .data-card-title {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 700;
   margin: 0;
 }
@@ -987,13 +1003,13 @@ body {
 /* StatCard：大数值排版（gkj .health-score 语言） */
 .stat-card-label {
   color: var(--ant-color-text-secondary);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   margin: 0;
 }
 
 .stat-card-value {
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 800;
   line-height: 1.2;
   margin: 4px 0 0;
@@ -1001,7 +1017,7 @@ body {
 
 .stat-card-hint {
   color: var(--ant-color-text-tertiary);
-  font-size: 12px;
+  font-size: 0.75rem;
   margin: 6px 0 0;
 }
 
@@ -1032,14 +1048,14 @@ body {
 .empty-state-title,
 .error-state-title {
   color: var(--ant-color-text);
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 700;
   margin: 0;
 }
 
 .empty-state-description,
 .error-state-description {
-  font-size: 12px;
+  font-size: 0.75rem;
   margin: 0;
 }
 
@@ -1054,5 +1070,5 @@ body {
 
 .loading-state-label {
   color: var(--ant-color-text-tertiary);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
