@@ -202,8 +202,10 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
           ))}
         </nav>
 
-        <div className="app-sidebar-footer">
-          {isNavCollapsed ? null : (
+        {/* 字号档位控件：有意偏差，安置在用户区上方独立行，不占用 footer 几何
+            （逐条复核报告 20260916 修复建议 3；基准偏差登记见 gkj-visual-baseline.md） */}
+        {isNavCollapsed ? null : (
+          <div className="app-font-scale-area">
             <div className="app-font-scale-control">
               <Segmented
                 onChange={(value) => {
@@ -216,7 +218,10 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
                 value={fontScale}
               />
             </div>
-          )}
+          </div>
+        )}
+
+        <div className="app-sidebar-footer">
           {session ? (
             <div className="app-user-card">
               {!isNavCollapsed ? (

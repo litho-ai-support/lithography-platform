@@ -69,6 +69,15 @@
   --panel-border: #e2e8f0;
   --panel-radius: 14px;
   --panel-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  --sidebar-footer-bg: #f8fafc;
+  --eyebrow-text: #2563eb;
+  --stat-card-gradient: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  --stat-card-border: #dbeafe;
+  --filter-bar-bg: #f8fafc;
+  --filter-bar-border: #dbe3ee;
+  --empty-bg: #f8fafc;
+  --empty-border: #cbd5e1;
+  --empty-text: #94a3b8;
 }
 
 /* 依赖 AntD CSS 变量的别名只能定义在真正拥有 app-theme 的作用域：
@@ -206,8 +215,11 @@ body {
   display: flex;
   gap: 8px;
   justify-content: space-between;
-  /* 原型品牌区左内边距 20px；右侧由真实折叠控件占位（原型为 48px 预留的 absolute 开关） */
-  padding: 20px 8px 20px 20px;
+  /* 原型品牌区（atta-brand-wrap）：padding 20/48/20/20、总高 88px（逐条复核报告 20260916
+     P1）；右侧 48px 保留区对应原型 lang-toggle 的 absolute right:8px 区域，当前折叠
+     控件行内占位于内容区右缘，保留区宽度不变 */
+  min-height: 88px;
+  padding: 20px 48px 20px 20px;
 }
 
 /* 折叠态（64px）品牌区只留折叠/展开切换钮：logo+钮超出宽度，首页入口由菜单承担 */
@@ -240,6 +252,8 @@ body {
   color: var(--text-strong);
   font-size: 0.75rem;
   font-weight: 700;
+  /* 原型品牌主名 12px/700/16px（text-xs 行高 1rem），行高随字号同比例缩放 */
+  line-height: 1.3333;
   letter-spacing: 0.025em;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -292,7 +306,9 @@ body {
   font-size: 0.75rem;
   font-weight: 600;
   gap: 10px;
-  line-height: 1.4;
+  /* 原型导航 12px/600/18px（Tailwind leading-6 等价 1.5），行高 1.4 会使每项少 1.2px
+     （逐条复核报告 3.2 节 P1） */
+  line-height: 1.5;
   padding: 11px 12px;
   text-decoration: none;
   transition:
@@ -337,12 +353,25 @@ body {
   display: none;
 }
 
+/* 字号档位控件：有意偏差——原型侧栏底部只有用户卡（nav-engineer-card 87.5px 区域），
+   本项目的 S/M/L 控件安置在用户区上方独立行，不占用 footer 几何（逐条复核报告 20260916
+   修复建议 3），在 gkj-visual-baseline.md 中登记为声明式偏差 */
+.app-font-scale-area {
+  margin: 10px 14px 10px;
+}
+
 .app-sidebar-footer {
+  background: var(--sidebar-footer-bg);
   border-top: 1px solid var(--ant-color-border-secondary);
   display: flex;
   flex-direction: column;
   gap: 10px;
-  /* 原型用户区左右内边距 14px */
+  justify-content: center;
+  /* 原型用户区（nav-engineer-card）：padding 14px、总高 87.5px、背景同
+     --sidebar-footer-bg、
+     头像在内容区垂直居中（逐条复核报告 P1）。真实用户卡无第三行徽标，内容不足时
+     以 min-height 保持原型区域高度 */
+  min-height: 87.5px;
   padding: 14px;
 }
 
@@ -381,6 +410,8 @@ body {
   color: var(--text-strong);
   font-size: 0.75rem;
   font-weight: 700;
+  /* 原型用户昵称 12px/700/16px（逐条复核报告 3.2 节） */
+  line-height: 1.3333;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -434,6 +465,16 @@ body {
   display: flex;
   gap: 24px;
   justify-content: space-between;
+}
+
+.page-eyebrow {
+  color: var(--eyebrow-text);
+  font-size: 0.625rem;
+  font-weight: 800;
+  /* 原型 .atta-eyebrow：10px/800/.16em/uppercase；仅在 gkj 对应工作台页传入（可选 API） */
+  letter-spacing: 0.16em;
+  margin: 0 0 4px;
+  text-transform: uppercase;
 }
 
 .page-header-content {
@@ -1034,6 +1075,18 @@ body {
   gap: 8px;
 }
 
+/* StatCard：gkj .metric-tile 语言——白→淡蓝渐变、--stat-card-border 描边、
+   --panel-radius 圆角、无投影；
+   任务书明确统计卡片不是普通 panel-card（逐条复核报告 2 节 P1） */
+.stat-card {
+  background: var(--stat-card-gradient);
+  border: 1px solid var(--stat-card-border);
+  border-radius: var(--panel-radius);
+  color: var(--ant-color-text);
+  min-width: 0;
+  padding: 16px;
+}
+
 /* StatCard：大数值排版（gkj .health-score 语言） */
 .stat-card-label {
   color: var(--ant-color-text-secondary);
@@ -1055,27 +1108,35 @@ body {
   margin: 6px 0 0;
 }
 
-/* FilterBar：横排筛选控件容器 */
+/* FilterBar：映射到 gkj .platform-search 的容器语言（负责人 0916 复核裁定）：
+   同底色/描边/圆角，内含多个筛选控件故高度自适应，不强制单框 36px */
 .filter-bar {
   align-items: center;
+  background: var(--filter-bar-bg);
+  border: 1px solid var(--filter-bar-border);
+  border-radius: 10px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
-  margin-bottom: 12px;
+  margin: 12px 0 14px;
+  padding: 8px 11px;
 }
 
-/* EmptyState / ErrorState：虚线框居中反馈 */
+/* EmptyState / ErrorState：gkj .platform-empty 语言——虚线描边 --empty-border、
+   淡灰底、12px 圆角、padding 22×14、--empty-text 文本
+   （原型源码字号 11px，容器几何逐项对齐） */
 .empty-state,
 .error-state {
   align-items: center;
-  border: 1px dashed var(--ant-color-border);
-  border-radius: var(--ant-border-radius-lg);
-  color: var(--ant-color-text-tertiary);
+  background: var(--empty-bg);
+  border: 1px dashed var(--empty-border);
+  border-radius: 12px;
+  color: var(--empty-text);
   display: flex;
   flex-direction: column;
   gap: 8px;
   justify-content: center;
-  padding: 32px 16px;
+  padding: 22px 14px;
   text-align: center;
 }
 

@@ -20,6 +20,7 @@ export function EngineerPage() {
     <div className="page-stack">
       <PageHeader
         description="ENGINEER 工作区。当前身份来自后端登录结果，提供维修申请接单入口与安全会话信息。"
+        eyebrow="Engineer Workspace"
         title="工程师页面"
       />
 
