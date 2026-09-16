@@ -6,16 +6,30 @@ import { expect, test } from '@playwright/test';
 
 import { seedAuthSession } from './helpers/auth-session-seed';
 
-// GraphQL stub：壳层验收只关心导航/布局；业务页面查询返回空 data 即可，
-// 页面自身的错误态不是本文件断言对象。
+// GraphQL stub：壳层验收只关心导航/布局，但仍返回已访问页面所需的最小合法 DTO。
+// 不能把 `{ data: {} }` 当成空态：管理员 mapper 会把它判为外部契约异常，污染
+// 浏览器日志并掩盖真正的壳层报错。
 test.beforeEach(async ({ page }) => {
-  await page.route('**/graphql', (route) =>
-    route.fulfill({
-      body: JSON.stringify({ data: {} }),
+  await page.route('**/graphql', async (route) => {
+    const requestBody = route.request().postDataJSON() as { operationName?: string } | null;
+    const data =
+      requestBody?.operationName === 'AdminUsers'
+        ? {
+            adminUsers: {
+              items: [],
+              page: 1,
+              pageSize: 20,
+              total: 0,
+            },
+          }
+        : {};
+
+    await route.fulfill({
+      body: JSON.stringify({ data }),
       contentType: 'application/json',
       status: 200,
-    }),
-  );
+    });
+  });
 });
 
 test('seeded roles see only their own stable menu items in the sidebar', async ({ page }) => {
