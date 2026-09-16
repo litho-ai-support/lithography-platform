@@ -52,6 +52,7 @@ const NAV_ITEM_ICONS: Record<string, ReactNode> = {
   home: <NavDashboardIcon />,
   'reference-documents': <NavBookOpenIcon />,
   'sandbox-playground': <CodeOutlined />,
+  'shared-ui-gallery': <AppstoreOutlined />,
 };
 
 const FALLBACK_NAV_ICON = <AppstoreOutlined />;

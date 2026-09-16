@@ -100,6 +100,14 @@ const DEV_ONLY_NAVIGATION_ITEMS: NavigationItem[] = [
     path: '/sandbox/playground',
     tags: ['sandbox', 'prototype', 'playground', 'token', 'theme', '沙盒', '主题'],
   },
+  {
+    description: '共享视觉 primitives 的真实渲染组合，供截图与 computed-style 取证。',
+    id: 'shared-ui-gallery',
+    kind: 'stable',
+    label: '组件组合',
+    path: '/dev/shared-ui',
+    tags: ['shared', 'ui', 'gallery', 'primitives', '组件', '组合', '验收'],
+  },
 ];
 
 function canExposeDevItems(env: AppEnv) {

@@ -67,6 +67,7 @@
   --avatar-border: #93c5fd;
   --panel-bg: rgba(255, 255, 255, 0.92);
   --panel-border: #e2e8f0;
+  --panel-radius: 14px;
   --panel-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
 }
 
@@ -463,11 +464,12 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
+/* 公共面板（gkj .panel-card）：半透明白底、细描边、14px 圆角、指定投影 */
 .surface-panel {
-  background: var(--ant-color-bg-container);
-  border: 1px solid var(--ant-color-border-secondary);
-  border-radius: var(--ant-border-radius-lg);
-  box-shadow: var(--ant-box-shadow-tertiary);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
   padding: 20px;
 }
 
@@ -992,13 +994,13 @@ body {
   color: var(--status-warn-text);
 }
 
-/* DataCard / TableContainer：白底、细描边、轻投影的卡片语言 */
+/* DataCard / TableContainer：gkj 卡片语言——半透明白底、细描边、14px 圆角、指定投影 */
 .data-card,
 .table-container {
-  background: var(--ant-color-bg-container);
-  border: 1px solid var(--ant-color-border-secondary);
-  border-radius: var(--ant-border-radius-lg);
-  box-shadow: var(--ant-box-shadow-tertiary);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
   color: var(--ant-color-text);
   min-width: 0;
   padding: 16px;
