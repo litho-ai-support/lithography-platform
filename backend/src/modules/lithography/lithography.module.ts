@@ -7,6 +7,10 @@ import { EngineerResponseEntity } from './entities/engineer-response.entity';
 import { EquipmentModelEntity } from './entities/equipment-model.entity';
 import { ReferenceDocumentEntity } from './entities/reference-document.entity';
 import { RepairRequestEntity } from './entities/repair-request.entity';
+import { AdminAiConversationQueryService } from './queries/admin-ai-conversation.query.service';
+import { AdminAiMessageQueryService } from './queries/admin-ai-message.query.service';
+import { AdminAiReportQueryService } from './queries/admin-ai-report.query.service';
+import { AdminRepairRequestQueryService } from './queries/admin-repair-request.query.service';
 import { EquipmentModelQueryService } from './queries/equipment-model.query.service';
 import { ReferenceDocumentQueryService } from './queries/reference-document.query.service';
 import { RepairRequestQueryService } from './queries/repair-request.query.service';
@@ -30,6 +34,10 @@ const LITHOGRAPHY_ENTITIES = [
     EquipmentModelQueryService,
     ReferenceDocumentQueryService,
     RepairRequestQueryService,
+    AdminRepairRequestQueryService,
+    AdminAiConversationQueryService,
+    AdminAiMessageQueryService,
+    AdminAiReportQueryService,
     RepairRequestService,
     ReferenceDocumentService,
     EngineerResponseService,
@@ -39,6 +47,10 @@ const LITHOGRAPHY_ENTITIES = [
     EquipmentModelQueryService,
     ReferenceDocumentQueryService,
     RepairRequestQueryService,
+    AdminRepairRequestQueryService,
+    AdminAiConversationQueryService,
+    AdminAiMessageQueryService,
+    AdminAiReportQueryService,
     RepairRequestService,
     ReferenceDocumentService,
     EngineerResponseService,

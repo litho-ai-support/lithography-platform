@@ -2,6 +2,7 @@
 import { ExceptionPayload } from '@app-types/errors/exception-payload.types';
 import {
   ACCOUNT_ERROR,
+  ADMIN_DOCUMENT_DATABASE_ERROR,
   ADMIN_USER_ERROR,
   AUTH_ERROR,
   CAPABILITY_ERROR,
@@ -236,6 +237,10 @@ function mapDomainErrorToGqlCode(errorCode: string): string {
     [MY_ACCOUNT_ERROR.LOGIN_CREDENTIAL_BOTH_EMPTY]: 'BAD_USER_INPUT',
     [MY_ACCOUNT_ERROR.CREDENTIAL_CONFLICT]: 'CONFLICT',
     [MY_ACCOUNT_ERROR.CURRENT_PASSWORD_MISMATCH]: 'BAD_USER_INPUT',
+
+    // 管理员文档数据库聚合读（PR3 只读）：目标不存在/已软删统一 NOT_FOUND，
+    // 输入问题走默认 BAD_USER_INPUT，这里显式登记避免语义漂移。
+    [ADMIN_DOCUMENT_DATABASE_ERROR.NOT_FOUND]: 'NOT_FOUND',
 
     [CAPABILITY_ERROR.UNAVAILABLE]: 'INTERNAL_SERVER_ERROR',
   };

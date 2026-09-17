@@ -19,6 +19,7 @@ import {
   VerificationRecordType,
 } from '@app-types/models/verification-record.types';
 import { RegisterTypeEnum } from '@app-types/services/register.types';
+import { AiConversationStatus, AiMessageRole } from '@src/modules/lithography/lithography.types';
 import { registerEnumType } from '@nestjs/graphql';
 import { GqlPaginationMode, GqlSortDirection } from '@src/adapters/api/graphql/pagination.enums';
 import { OrderDirection } from '@app-types/common/sort.types';
@@ -39,6 +40,8 @@ export function registerEnums(): void {
   registerEnumType(VerificationRecordType, { name: 'VerificationRecordType' });
   registerEnumType(CreatableVerificationRecordType, { name: 'CreatableVerificationRecordType' });
   registerEnumType(EngineerResolutionStatus, { name: 'EngineerResolutionStatus' });
+  registerEnumType(AiConversationStatus, { name: 'AiConversationStatus' });
+  registerEnumType(AiMessageRole, { name: 'AiMessageRole' });
   registerEnumType(OrderDirection, { name: 'OrderDirection' });
   registerEnumType(GqlPaginationMode, { name: 'PaginationMode' });
   registerEnumType(GqlSortDirection, { name: 'SortDirection' });

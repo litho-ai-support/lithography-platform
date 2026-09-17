@@ -20,6 +20,7 @@ import { PassportModule } from '@nestjs/passport';
 import { AccountResolver } from './account/account.resolver';
 import { AdminUserResolver } from './account/admin-user.resolver';
 import { MyAccountSettingsResolver } from './account/my-account-settings.resolver';
+import { AdminDocumentDatabaseResolver } from './admin-document-database/admin-document-database.resolver';
 import { AiResolver } from './ai/ai.resolver';
 import { UserInfoResolver } from './account/user-info.resolver';
 import { AuthResolver } from './auth/auth.resolver';
@@ -97,6 +98,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     AccountResolver,
     AdminUserResolver,
     MyAccountSettingsResolver,
+    AdminDocumentDatabaseResolver,
     AiResolver,
     AuthResolver,
     ThirdPartyAuthResolver,
@@ -118,6 +120,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     AccountResolver,
     AdminUserResolver,
     MyAccountSettingsResolver,
+    AdminDocumentDatabaseResolver,
     AiResolver,
     AuthResolver,
     ThirdPartyAuthResolver,
