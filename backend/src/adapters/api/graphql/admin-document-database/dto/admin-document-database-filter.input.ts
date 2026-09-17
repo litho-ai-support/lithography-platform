@@ -2,7 +2,7 @@
 // 管理员文档数据库（PR3 只读聚合）筛选入参；全部可选
 
 import { Field, InputType, Int } from '@nestjs/graphql';
-import { AiConversationStatus } from '@src/modules/lithography/lithography.types';
+import { AiConversationStatus } from '@app-types/models/ai-conversation.types';
 import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 /** 展示关键字长度上限（昵称 50 / 公司名 100，取并集上限；与 usecase 层校验对齐） */

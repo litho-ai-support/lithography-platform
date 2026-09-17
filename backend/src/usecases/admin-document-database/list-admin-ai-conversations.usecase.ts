@@ -18,6 +18,7 @@ import type {
 import { AdminAiConversationQueryService } from '@src/modules/lithography/queries/admin-ai-conversation.query.service';
 import {
   ADMIN_KEYWORD_ACCOUNT_LIMIT,
+  assertKeywordAccountLimit,
   assertTimeRangeOrder,
   normalizeOptionalFilterText,
   normalizeOptionalKeyword,
@@ -34,7 +35,8 @@ const MAX_PAGE_SIZE = 100;
  * - 精确授权先行：activeRole === SUPER_ADMIN（失败关闭）
  * - 仅 OFFSET 分页；排序由契约固定（创建时间倒序 + 主键倒序），不采纳客户端排序入参
  * - engineerKeyword 为跨账户域展示关键字：先经账户域解析为账号 ID 有界集合，
- *   无命中时短路返回空页；requestNo / 状态 / 时间范围筛选保持在 SQL 侧执行
+ *   命中超上限显式拒绝（不静默截断漏数），无命中时短路返回空页；
+ *   requestNo / 状态 / 时间范围筛选保持在 SQL 侧执行
  * - 会话消息数 / 报告数来自真实聚合统计，不伪造演示数字
  */
 @Injectable()
@@ -69,10 +71,13 @@ export class ListAdminAiConversationsUsecase {
 
     let engineerAccountIds: number[] | undefined;
     if (engineerKeyword) {
-      engineerAccountIds = await this.accountQueryService.findAccountIdsByDisplayKeyword(
-        engineerKeyword,
-        ADMIN_KEYWORD_ACCOUNT_LIMIT,
-      );
+      const { accountIds, totalMatched } =
+        await this.accountQueryService.findAccountIdsByDisplayKeyword(
+          engineerKeyword,
+          ADMIN_KEYWORD_ACCOUNT_LIMIT,
+        );
+      assertKeywordAccountLimit(totalMatched, engineerKeyword);
+      engineerAccountIds = accountIds;
       if (engineerAccountIds.length === 0) {
         return {
           items: [],

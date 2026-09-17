@@ -1,17 +1,5 @@
 import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
 
-export enum AiConversationStatus {
-  ACTIVE = 'ACTIVE',
-  COMPLETED = 'COMPLETED',
-}
-
-export enum AiMessageRole {
-  SYSTEM = 'SYSTEM',
-  USER = 'USER',
-  ASSISTANT = 'ASSISTANT',
-  TOOL = 'TOOL',
-}
-
 /**
  * 设备型号读侧稳定视图（客户端可见字段）
  */
