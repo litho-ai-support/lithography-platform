@@ -1,6 +1,7 @@
 // src/adapters/api/graphql/graphql-adapter.module.ts
 
 import { AccountUsecasesModule } from '@src/usecases/account/account-usecases.module';
+import { AdminDocumentDatabaseUsecasesModule } from '@src/usecases/admin-document-database/admin-document-database-usecases.module';
 import { AiQueueUsecasesModule } from '@src/usecases/ai-queue/ai-queue-usecases.module';
 import { AuthUsecasesModule } from '@src/usecases/auth/auth-usecases.module';
 import { AsyncTaskRecordUsecasesModule } from '@src/usecases/async-task-record/async-task-record-usecases.module';
@@ -19,6 +20,7 @@ import { PassportModule } from '@nestjs/passport';
 // Resolvers
 import { AccountResolver } from './account/account.resolver';
 import { AdminUserResolver } from './account/admin-user.resolver';
+import { AdminDocumentDatabaseResolver } from './admin-document-database/admin-document-database.resolver';
 import { AiResolver } from './ai/ai.resolver';
 import { UserInfoResolver } from './account/user-info.resolver';
 import { AuthResolver } from './auth/auth.resolver';
@@ -49,6 +51,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   imports: [
     // 导入业务模块以获取服务
     AccountUsecasesModule,
+    AdminDocumentDatabaseUsecasesModule,
     AiQueueUsecasesModule,
     AsyncTaskRecordUsecasesModule,
     AuthUsecasesModule,
@@ -95,6 +98,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     // Resolvers
     AccountResolver,
     AdminUserResolver,
+    AdminDocumentDatabaseResolver,
     AiResolver,
     AuthResolver,
     ThirdPartyAuthResolver,
@@ -115,6 +119,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     // Resolvers
     AccountResolver,
     AdminUserResolver,
+    AdminDocumentDatabaseResolver,
     AiResolver,
     AuthResolver,
     ThirdPartyAuthResolver,

@@ -202,6 +202,16 @@ export const REFERENCE_DOCUMENT_ERROR = {
   FILE_NOT_AVAILABLE: 'REFERENCE_DOCUMENT_FILE_NOT_AVAILABLE',
 } as const;
 Object.freeze(REFERENCE_DOCUMENT_ERROR);
+
+// 管理员文档数据库聚合读相关错误码（PR3 只读：维修申请摘要 / AI 会话 / AI 消息 / AI 报告）
+// 刻意不复用 REPAIR_REQUEST_ERROR / REFERENCE_DOCUMENT_ERROR：那些码归属既有客户/工程师读链路，
+// 管理员聚合读的拒绝口径与既有链路保持独立，避免语义漂移与前端误判
+export const ADMIN_DOCUMENT_DATABASE_ERROR = {
+  INVALID_PARAMS: 'ADMIN_DOCUMENT_DATABASE_INVALID_PARAMS',
+  // 目标（维修申请摘要 / AI 报告详情）不存在或已软删时统一 NOT_FOUND，不泄露删除状态
+  NOT_FOUND: 'ADMIN_DOCUMENT_DATABASE_NOT_FOUND',
+} as const;
+Object.freeze(ADMIN_DOCUMENT_DATABASE_ERROR);
 // 管理员用户管理相关错误码（管理员列表读取、管理员创建普通用户等）
 // 刻意不复用 `AUTH_ERROR.*` / `JWT_ERROR.*`：那些码被全局过滤器映射为 `UNAUTHENTICATED`，
 // 会让前端把「管理员输入/目标问题」误判为 Session 失效并清理会话跳转登录页
@@ -275,6 +285,8 @@ export type RepairRequestErrorCode =
 export type ReferenceDocumentErrorCode =
   (typeof REFERENCE_DOCUMENT_ERROR)[keyof typeof REFERENCE_DOCUMENT_ERROR];
 export type AdminUserErrorCode = (typeof ADMIN_USER_ERROR)[keyof typeof ADMIN_USER_ERROR];
+export type AdminDocumentDatabaseErrorCode =
+  (typeof ADMIN_DOCUMENT_DATABASE_ERROR)[keyof typeof ADMIN_DOCUMENT_DATABASE_ERROR];
 export type InputNormalizeErrorCode =
   (typeof INPUT_NORMALIZE_ERROR)[keyof typeof INPUT_NORMALIZE_ERROR];
 
@@ -302,6 +314,7 @@ export type DomainErrorCode =
   | RepairRequestErrorCode
   | ReferenceDocumentErrorCode
   | AdminUserErrorCode
+  | AdminDocumentDatabaseErrorCode
   | InputNormalizeErrorCode
   | PaginationErrorCode;
 
