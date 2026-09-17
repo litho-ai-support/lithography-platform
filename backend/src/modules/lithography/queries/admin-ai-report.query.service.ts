@@ -1,9 +1,10 @@
 // src/modules/lithography/queries/admin-ai-report.query.service.ts
 
 import { DomainError, ADMIN_DOCUMENT_DATABASE_ERROR } from '@core/common/errors/domain-error';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository, SelectQueryBuilder } from 'typeorm';
+import { AiConversationEntity } from '../entities/ai-conversation.entity';
 import { AiReportEntity } from '../entities/ai-report.entity';
 import { RepairRequestEntity } from '../entities/repair-request.entity';
 import type {
@@ -33,14 +34,20 @@ function escapeLikePattern(input: string): string {
  * - 跨账户域读取（工程师展示信息不在此富集：装配结果仅携带账号 ID，
  *   由 usecase 经账户域 QueryService 批量富集后对外输出）。
  *
- * 实现说明：requestNo 筛选经本域 repair_request 关联，全部筛选保持在
- * SQL 侧执行以保证分页正确性。
+ * 实现说明：requestNo 展示与筛选均以会话归属申请为权威（PR3 定向 Review
+ * M-04 裁定：报告由会话产出，报告自身 requestId 仅作审计展示），关联链为
+ * report → conversation → repair_request；报告记录的申请与会话归属不一致时
+ * 输出 requestMismatch 审计标记并记录警告日志，不静默改写。
  */
 @Injectable()
 export class AdminAiReportQueryService {
+  private readonly logger = new Logger(AdminAiReportQueryService.name);
+
   constructor(
     @InjectRepository(AiReportEntity)
     private readonly reportRepository: Repository<AiReportEntity>,
+    @InjectRepository(AiConversationEntity)
+    private readonly conversationRepository: Repository<AiConversationEntity>,
     @InjectRepository(RepairRequestEntity)
     private readonly requestRepository: Repository<RepairRequestEntity>,
   ) {}
@@ -65,7 +72,8 @@ export class AdminAiReportQueryService {
 
     const qb = this.reportRepository
       .createQueryBuilder('report')
-      .leftJoin(RepairRequestEntity, 'request', 'request.id = report.requestId')
+      .leftJoin(AiConversationEntity, 'conversation', 'conversation.id = report.conversationId')
+      .leftJoin(RepairRequestEntity, 'request', 'request.id = conversation.requestId')
       .orderBy('report.createdAt', 'DESC')
       .addOrderBy('report.id', 'DESC')
       .offset((page - 1) * pageSize)
@@ -100,15 +108,31 @@ export class AdminAiReportQueryService {
       });
     }
 
+    const conversation = await this.conversationRepository.findOne({
+      where: { id: entity.conversationId },
+      select: { id: true, requestId: true },
+    });
+    // 权威申请取会话归属；会话缺失等极端情况回落报告自身申请（不因关联缺失整体不可读）
+    const authoritativeRequestId = conversation?.requestId ?? entity.requestId;
     const request = await this.requestRepository.findOne({
-      where: { id: entity.requestId },
+      where: { id: authoritativeRequestId },
       select: { id: true, requestNo: true },
     });
+
+    if (conversation && conversation.requestId !== entity.requestId) {
+      this.logger.warn('AI 报告与所属会话的维修申请归属不一致', {
+        reportId: entity.id,
+        conversationId: entity.conversationId,
+        reportRequestId: entity.requestId,
+        conversationRequestId: conversation.requestId,
+      });
+    }
 
     return {
       id: entity.id,
       requestId: entity.requestId,
       requestNo: request?.requestNo ?? '',
+      requestMismatch: conversation ? conversation.requestId !== entity.requestId : false,
       conversationId: entity.conversationId,
       engineerAccountId: entity.engineerAccountId,
       reportTitle: entity.reportTitle,
@@ -159,7 +183,8 @@ export class AdminAiReportQueryService {
   private countByFilter(filter?: AdminAiReportQueryFilter): Promise<number> {
     const qb = this.reportRepository
       .createQueryBuilder('report')
-      .leftJoin(RepairRequestEntity, 'request', 'request.id = report.requestId');
+      .leftJoin(AiConversationEntity, 'conversation', 'conversation.id = report.conversationId')
+      .leftJoin(RepairRequestEntity, 'request', 'request.id = conversation.requestId');
     this.applyFilters(qb, filter);
     return qb.getCount();
   }
@@ -175,7 +200,10 @@ export class AdminAiReportQueryService {
     };
   }
 
-  /** 批量装配列表项：关联申请编号一次批量读取，避免逐行查询 */
+  /**
+   * 批量装配列表项：权威申请编号按 report → conversation → repair_request
+   * 链批量读取；关联不一致记录审计日志并以 requestMismatch 标记。
+   */
   private async toListItemQueryResults(
     entities: AiReportEntity[],
   ): Promise<AdminAiReportListItemQueryResult[]> {
@@ -183,24 +211,50 @@ export class AdminAiReportQueryService {
       return [];
     }
 
-    const requestIds = [...new Set(entities.map((entity) => entity.requestId))];
+    const conversationIds = [...new Set(entities.map((entity) => entity.conversationId))];
+    const conversations = await this.conversationRepository.find({
+      where: { id: In(conversationIds) },
+      select: { id: true, requestId: true },
+    });
+    const conversationById = new Map(conversations.map((row) => [row.id, row]));
+
+    const authoritativeRequestIds = [
+      ...new Set(
+        entities.map(
+          (entity) => conversationById.get(entity.conversationId)?.requestId ?? entity.requestId,
+        ),
+      ),
+    ];
     const requests = await this.requestRepository.find({
-      where: { id: In(requestIds) },
+      where: { id: In(authoritativeRequestIds) },
       select: { id: true, requestNo: true },
     });
     const requestNoByRequestId = new Map(
       requests.map((request) => [request.id, request.requestNo]),
     );
 
-    return entities.map((entity) => ({
-      id: entity.id,
-      requestId: entity.requestId,
-      requestNo: requestNoByRequestId.get(entity.requestId) ?? '',
-      conversationId: entity.conversationId,
-      engineerAccountId: entity.engineerAccountId,
-      reportTitle: entity.reportTitle,
-      reportType: entity.reportType,
-      createdAt: entity.createdAt,
-    }));
+    return entities.map((entity) => {
+      const conversation = conversationById.get(entity.conversationId);
+      if (conversation && conversation.requestId !== entity.requestId) {
+        this.logger.warn('AI 报告与所属会话的维修申请归属不一致', {
+          reportId: entity.id,
+          conversationId: entity.conversationId,
+          reportRequestId: entity.requestId,
+          conversationRequestId: conversation.requestId,
+        });
+      }
+      const authoritativeRequestId = conversation?.requestId ?? entity.requestId;
+      return {
+        id: entity.id,
+        requestId: entity.requestId,
+        requestNo: requestNoByRequestId.get(authoritativeRequestId) ?? '',
+        requestMismatch: conversation ? conversation.requestId !== entity.requestId : false,
+        conversationId: entity.conversationId,
+        engineerAccountId: entity.engineerAccountId,
+        reportTitle: entity.reportTitle,
+        reportType: entity.reportType,
+        createdAt: entity.createdAt,
+      };
+    });
   }
 }

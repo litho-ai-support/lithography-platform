@@ -251,26 +251,35 @@ export class AccountQueryService {
    * 按展示关键字（昵称 / 公司名称模糊匹配）批量解析账号 ID 有界集合。
    * 供管理员文档数据库读模型把跨域展示关键字筛选收敛为本域账号 ID 过滤，
    * 关键字筛选由此保持在 SQL 侧执行（不破坏分页正确性）。
-   * LIKE 通配符转义与参考资料标题搜索同口径；无命中返回空数组，
-   * 调用方（usecase）据此短路返回空页，不再发起本域查询。
+   * LIKE 通配符转义与参考资料标题搜索同口径；accountIds 为按 limit 截断的
+   * 前 limit 个命中（accountId ASC），totalMatched 为不含截断的命中总数，
+   * 调用方（usecase）据此检测超限并显式拒绝，保证筛选语义完整不静默漏数；
+   * totalMatched 为 0 时调用方短路返回空页，不再发起本域查询。
    */
-  async findAccountIdsByDisplayKeyword(keyword: string, limit: number): Promise<number[]> {
+  async findAccountIdsByDisplayKeyword(
+    keyword: string,
+    limit: number,
+  ): Promise<{ accountIds: number[]; totalMatched: number }> {
     const trimmed = keyword.trim();
     if (!trimmed || !Number.isInteger(limit) || limit <= 0) {
-      return [];
+      return { accountIds: [], totalMatched: 0 };
     }
     const escaped = trimmed.replace(/[\\%_]/g, (ch) => `\\${ch}`);
     const pattern = `%${escaped}%`;
-    const rows = await this.userInfoRepository.find({
-      where: [
-        { nickname: Raw((alias) => `${alias} LIKE :pattern`, { pattern }) },
-        { companyName: Raw((alias) => `${alias} LIKE :pattern`, { pattern }) },
-      ],
-      select: { accountId: true },
-      order: { accountId: 'ASC' },
-      take: limit,
-    });
-    return rows.map((row) => row.accountId);
+    const where = [
+      { nickname: Raw((alias) => `${alias} LIKE :pattern`, { pattern }) },
+      { companyName: Raw((alias) => `${alias} LIKE :pattern`, { pattern }) },
+    ];
+    const [rows, totalMatched] = await Promise.all([
+      this.userInfoRepository.find({
+        where,
+        select: { accountId: true },
+        order: { accountId: 'ASC' },
+        take: limit,
+      }),
+      this.userInfoRepository.count({ where }),
+    ]);
+    return { accountIds: rows.map((row) => row.accountId), totalMatched };
   }
 
   async pickAvailableNickname(params: {

@@ -3,7 +3,7 @@
 // 不返回任何归属类账号 ID；昵称/公司名为服务端富集展示字段
 
 import { Field, Int, ObjectType } from '@nestjs/graphql';
-import { AiConversationStatus, AiMessageRole } from '@src/modules/lithography/lithography.types';
+import { AiConversationStatus, AiMessageRole } from '@app-types/models/ai-conversation.types';
 import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
 import type {
   AdminAiReportDetailView,
@@ -149,11 +149,17 @@ export class AdminAiReportListItemDTO {
   @Field(() => Int, { description: 'AI 报告 ID' })
   id!: number;
 
-  @Field(() => Int, { description: '关联维修申请 ID' })
+  @Field(() => Int, { description: '报告记录自身携带的维修申请 ID（审计字段）' })
   requestId!: number;
 
-  @Field(() => String, { description: '关联申请编号' })
+  @Field(() => String, { description: '权威申请编号（以会话归属申请为准）' })
   requestNo!: string;
+
+  @Field(() => Boolean, {
+    description:
+      '报告记录的申请与会话归属申请是否不一致（数据审计标记：正常数据为 false；以会话归属为权威）',
+  })
+  requestMismatch!: boolean;
 
   @Field(() => Int, { description: '关联 AI 会话 ID' })
   conversationId!: number;
@@ -235,6 +241,7 @@ export function toAdminAiReportDetailDTO(detail: AdminAiReportDetailView): Admin
     id: detail.id,
     requestId: detail.requestId,
     requestNo: detail.requestNo,
+    requestMismatch: detail.requestMismatch,
     conversationId: detail.conversationId,
     engineerNickname: detail.engineerNickname,
     reportTitle: detail.reportTitle,

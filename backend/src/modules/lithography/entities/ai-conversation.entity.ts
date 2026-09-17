@@ -1,4 +1,4 @@
-import { AiConversationStatus } from '../lithography.types';
+import { AiConversationStatus } from '@app-types/models/ai-conversation.types';
 import {
   Check,
   Column,

@@ -1,7 +1,7 @@
 // src/modules/lithography/admin-document-database.types.ts
 
 import type { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
-import { AiConversationStatus, AiMessageRole } from './lithography.types';
+import { AiConversationStatus, AiMessageRole } from '@app-types/models/ai-conversation.types';
 
 // ============================================================================
 // PR3: 管理员 Document Database 聚合查询类型（只读）
@@ -195,11 +195,21 @@ export type AdminAiReportQueryFilter = {
 /**
  * 管理员 AI 报告列表项稳定读视图。
  * 不携带 contentMd 大字段（仅详情返回），与「列表只投影必要字段」口径一致。
+ *
+ * 申请关联口径（PR3 定向 Review M-04 裁定）：
+ * 会话是报告与维修申请关联的权威来源（报告由会话产出）——requestNo 取会话
+ * 归属申请；报告自身 requestId 仅作数据审计展示。数据库未约束二者一致，
+ * 不一致属异常历史数据：以 requestMismatch=true 显式暴露并记录审计日志，
+ * 不静默改写、不改 Entity/Migration。
  */
 export type AdminAiReportListItemQueryResult = {
   id: number;
+  /** 报告记录自身携带的维修申请 ID（审计字段；权威归属见 requestNo/requestMismatch） */
   requestId: number;
+  /** 权威申请编号（取会话归属申请；会话缺失等极端情况回落报告自身申请） */
   requestNo: string;
+  /** 报告记录的申请与会话归属申请是否不一致（数据审计标记，正常数据为 false） */
+  requestMismatch: boolean;
   conversationId: number;
   engineerAccountId: number;
   reportTitle: string;

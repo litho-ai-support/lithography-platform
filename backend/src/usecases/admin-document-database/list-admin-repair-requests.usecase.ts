@@ -18,6 +18,7 @@ import type {
 import { AdminRepairRequestQueryService } from '@src/modules/lithography/queries/admin-repair-request.query.service';
 import {
   ADMIN_KEYWORD_ACCOUNT_LIMIT,
+  assertKeywordAccountLimit,
   assertTimeRangeOrder,
   normalizeOptionalFilterText,
   normalizeOptionalKeyword,
@@ -34,8 +35,8 @@ const MAX_PAGE_SIZE = 100;
  * - 精确授权先行：activeRole === SUPER_ADMIN（失败关闭），守卫层 @Roles(SUPER_ADMIN) 只做粗准入
  * - 仅 OFFSET 分页；排序由契约固定（创建时间倒序 + 主键倒序），不采纳客户端排序入参
  * - customerKeyword 为跨账户域展示关键字：先经账户域解析为账号 ID 有界集合，
- *   无命中时短路返回空页，不再发起本域查询；关键字筛选整体保持在 SQL 侧执行，
- *   保证分页正确性（不做取页后过滤）
+ *   命中超上限显式拒绝（不静默截断漏数），无命中时短路返回空页，不再发起本域查询；
+ *   关键字筛选整体保持在 SQL 侧执行，保证分页正确性（不做取页后过滤）
  * - 默认仅未删除申请（与既有维修申请读模型口径一致）
  */
 @Injectable()
@@ -70,10 +71,13 @@ export class ListAdminRepairRequestsUsecase {
 
     let customerAccountIds: number[] | undefined;
     if (customerKeyword) {
-      customerAccountIds = await this.accountQueryService.findAccountIdsByDisplayKeyword(
-        customerKeyword,
-        ADMIN_KEYWORD_ACCOUNT_LIMIT,
-      );
+      const { accountIds, totalMatched } =
+        await this.accountQueryService.findAccountIdsByDisplayKeyword(
+          customerKeyword,
+          ADMIN_KEYWORD_ACCOUNT_LIMIT,
+        );
+      assertKeywordAccountLimit(totalMatched, customerKeyword);
+      customerAccountIds = accountIds;
       if (customerAccountIds.length === 0) {
         return {
           items: [],

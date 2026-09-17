@@ -19,7 +19,7 @@ import {
   VerificationRecordType,
 } from '@app-types/models/verification-record.types';
 import { RegisterTypeEnum } from '@app-types/services/register.types';
-import { AiConversationStatus, AiMessageRole } from '@src/modules/lithography/lithography.types';
+import { AiConversationStatus, AiMessageRole } from '@app-types/models/ai-conversation.types';
 import { registerEnumType } from '@nestjs/graphql';
 import { GqlPaginationMode, GqlSortDirection } from '@src/adapters/api/graphql/pagination.enums';
 import { OrderDirection } from '@app-types/common/sort.types';
