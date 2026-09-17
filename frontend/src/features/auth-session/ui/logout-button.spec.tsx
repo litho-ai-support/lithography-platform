@@ -14,11 +14,11 @@ vi.mock('../auth-session-entry', () => ({
 
 const mockedLogoutAuthSession = vi.mocked(logoutAuthSession);
 
-function renderLogoutRoute() {
+function renderLogoutRoute(iconOnly = false) {
   return render(
     <MemoryRouter initialEntries={['/engineer']}>
       <Routes>
-        <Route element={<LogoutButton />} path="/engineer" />
+        <Route element={<LogoutButton iconOnly={iconOnly} />} path="/engineer" />
         <Route element={<div>login-page-marker</div>} path="/login" />
       </Routes>
     </MemoryRouter>,
@@ -79,5 +79,22 @@ describe('LogoutButton', () => {
     await waitFor(() => {
       expect(screen.getByText('login-page-marker')).toBeInTheDocument();
     });
+  });
+
+  it('iconOnly 态：不渲染文字，可访问名称由 aria-label 提供，点击仍走退出链路', async () => {
+    mockedLogoutAuthSession.mockResolvedValue(undefined);
+    renderLogoutRoute(true);
+
+    const iconButton = screen.getByRole('button', { name: '退出登录' });
+
+    expect(iconButton).toHaveTextContent('');
+    expect(screen.queryByText('退出登录')).not.toBeInTheDocument();
+
+    fireEvent.click(iconButton);
+
+    await waitFor(() => {
+      expect(screen.getByText('login-page-marker')).toBeInTheDocument();
+    });
+    expect(mockedLogoutAuthSession).toHaveBeenCalledTimes(1);
   });
 });

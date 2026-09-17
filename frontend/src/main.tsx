@@ -1,5 +1,9 @@
 // src/main.tsx
 
+// 本地字体（SIL OFL，随包 LICENSE 保留）：运行时零字体 CDN。
+import '@fontsource-variable/inter';
+import '@fontsource-variable/jetbrains-mono';
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 

@@ -8,13 +8,58 @@ const CHECKED_EXTENSIONS = new Set(['.css', '.ts', '.tsx']);
 const MAGIC_COLOR_PATTERN = /#[0-9a-fA-F]{3,8}\b|\b(?:rgb|hsl)a?\s*\(/gi;
 const INDEX_CSS_PATH = path.normalize('src/index.css');
 const THEME_PATH = path.normalize('src/app/theme/index.ts');
-const ALLOWED_INDEX_CSS_COLOR_TOKENS = new Set(['--color-ai-accent', '--color-ai-accent-hover']);
+// 白名单即「documented global token」：每一项都对应 gkj 视觉基准的映射记录，
+// 见 docs/plan/薛-PR1-S1现状与设计映射-20260914.md 第 3 节（Token/变量映射表）。
+const ALLOWED_INDEX_CSS_COLOR_TOKENS = new Set([
+  '--color-ai-accent',
+  '--color-ai-accent-hover',
+  // gkj 原型受控语义常量（基准表：frontend/docs/gkj-visual-baseline.md）
+  '--avatar-border',
+  '--avatar-gradient',
+  '--brand-mark-bg',
+  '--brand-mark-fg',
+  '--empty-bg',
+  '--empty-border',
+  '--empty-text',
+  '--eyebrow-text',
+  '--filter-bar-bg',
+  '--filter-bar-border',
+  '--nav-bg',
+  '--nav-border',
+  '--nav-hover-bg',
+  '--nav-hover-text',
+  '--nav-shadow',
+  '--nav-text',
+  '--panel-bg',
+  '--panel-border',
+  '--panel-shadow',
+  '--status-critical-bg',
+  '--status-critical-text',
+  '--status-ok-bg',
+  '--status-ok-text',
+  '--status-warn-bg',
+  '--status-warn-text',
+  '--stat-card-border',
+  '--stat-card-gradient',
+  '--sidebar-footer-bg',
+  '--text-muted',
+  '--text-strong',
+  '--workspace-bg',
+]);
 const ALLOWED_THEME_TOKEN_NAMES = new Set([
-  'colorPrimary',
+  'colorBorderSecondary',
   'colorError',
+  'colorErrorBg',
   'colorLink',
-  'colorBgLayout',
   'colorBgContainer',
+  'colorBgLayout',
+  'colorPrimary',
+  'colorPrimaryActive',
+  'colorPrimaryBg',
+  'colorSuccess',
+  'colorSuccessBg',
+  'colorWarning',
+  'colorWarningBg',
 ]);
 
 async function collectFiles(directory) {

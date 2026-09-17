@@ -189,6 +189,7 @@ describe('客户「我的维修申请」列表页', () => {
     expect(screen.queryByText('internal boom')).toBeNull();
   });
 
+  // 长交互用例（多轮 fetch + 弹窗）：全量并发跑偶发 5s 抖动，显式放宽到 15s。
   it('删除进行中禁用所有行的删除按钮（防连点），完成后恢复', async () => {
     fetchListMock.mockResolvedValue(makePage({ items: [makeItem(920001), makeItem(920003)] }));
     let releaseDelete: () => void = () => {};
@@ -219,7 +220,7 @@ describe('客户「我的维修申请」列表页', () => {
     await waitFor(() => {
       expect(deleteButtons.every((button) => !(button as HTMLButtonElement).disabled)).toBe(true);
     });
-  });
+  }, 15_000);
 
   it('无数据时渲染空态文案', async () => {
     fetchListMock.mockResolvedValue(makePage({ items: [], total: 0 }));

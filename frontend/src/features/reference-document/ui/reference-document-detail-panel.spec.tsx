@@ -9,7 +9,7 @@
  * 生产组件决定，测试不复制规则。
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ReferenceDocumentDetail } from '../infrastructure/reference-document.types';
@@ -132,6 +132,14 @@ describe('ReferenceDocumentDetailPanel', () => {
     await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
     expect(downloadFileMock).toHaveBeenCalledWith(970002);
     expect(URL.createObjectURL).toHaveBeenCalledWith(blob);
+
+    // 排空下载 promise 链的收尾 setState（finally 内 downloading 复位）：
+    // 否则 jsdom teardown 后 React 仍在调度并访问 window，产生未处理
+    // ReferenceError（验收报告 20260916，不能仅靠断言通过计数）。
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
 
     // a[download] 带服务端文件名，保存后回收 URL
     const anchor = clickSpy.mock.contexts[0] as HTMLAnchorElement;

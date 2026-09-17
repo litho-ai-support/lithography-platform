@@ -138,8 +138,10 @@ test.describe('real backend reference document flow', () => {
     await page.getByRole('button', { name: /登\s*录/ }).click();
     await expect(page).toHaveURL(/\/admin$/);
 
-    // 导航入口可见（F-09）
-    await expect(page.getByText('参考资料库')).toBeVisible();
+    // 导航入口可见（F-09）：S3 中文化后菜单标签为「参考资料」
+    await expect(
+      page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '参考资料' }),
+    ).toBeVisible();
 
     // 本次运行创建的资料精确 ID（页面创建后从详情 URL 捕获，供 finally 按精确 ID 清理；
     // 作用域须覆盖 try/finally，主链路在任何一步失败都能兜底清理）

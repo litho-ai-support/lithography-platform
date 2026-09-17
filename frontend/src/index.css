@@ -2,8 +2,6 @@
 
 @import 'tailwindcss';
 
-@custom-variant dark (&:where(.dark, .dark *));
-
 @theme inline {
   --color-primary: var(--ant-color-primary);
   --color-text: var(--ant-color-text);
@@ -23,6 +21,72 @@
 :root {
   --color-ai-accent: #cc6b46;
   --color-ai-accent-hover: #b35a37;
+  --z-index-main-base: 0;
+  --z-index-sidecar-container: 1100;
+  --shell-header-height: 64px;
+  --error-block-min-height: 60vh;
+  --error-block-shell-max-width: 36rem;
+  --error-block-shell-gap: 24px;
+  --error-block-shell-padding-inline: 24px;
+  --error-block-shell-padding-block: 40px;
+  --error-block-visual-min-height: 220px;
+  --error-block-icon-size: 11.25rem;
+  --error-block-icon-opacity: 0.08;
+  --error-block-status-font-size: clamp(6rem, 8vw, 8rem);
+  --error-block-status-letter-spacing: -0.06em;
+  --error-block-title-font-size: 1rem;
+  --error-block-title-font-weight: 700;
+  --error-block-title-letter-spacing: 0.4em;
+  --error-block-description-max-width: 26.25rem;
+  --font-sans:
+    'Inter Variable', -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  --font-mono:
+    'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  /* gkj 原型语义色（受控全局常量，不依赖 AntD；基准表见 frontend/docs/gkj-visual-baseline.md）。
+     导航次级文字与说明/角色文字是两个语义，禁止共用同一变量 */
+  --text-strong: #1e293b;
+  --brand-mark-bg: #1e293b;
+  --brand-mark-fg: #ffffff;
+  --nav-text: #475569;
+  --text-muted: #64748b;
+  --nav-hover-bg: #e5e7eb;
+  --nav-hover-text: #111827;
+  --status-ok-bg: #dcfce7;
+  --status-ok-text: #166534;
+  --status-warn-bg: #fef3c7;
+  --status-warn-text: #92400e;
+  --status-critical-bg: #fee2e2;
+  --status-critical-text: #b91c1c;
+  --nav-width: 210px;
+  --nav-bg: #f8fafc;
+  --nav-border: #cbd5e1;
+  --nav-shadow: 8px 0 24px rgba(15, 23, 42, 0.08);
+  --workspace-bg: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+  --avatar-gradient: linear-gradient(145deg, #dbeafe, #bfdbfe);
+  --avatar-border: #93c5fd;
+  --panel-bg: rgba(255, 255, 255, 0.92);
+  --panel-border: #e2e8f0;
+  --panel-radius: 14px;
+  --panel-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  --sidebar-footer-bg: #f8fafc;
+  --eyebrow-text: #2563eb;
+  --stat-card-gradient: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  --stat-card-border: #dbeafe;
+  --stat-card-label: var(--text-muted);
+  --stat-card-value: var(--text-strong);
+  --stat-card-hint: var(--empty-text);
+  --filter-bar-bg: #f8fafc;
+  --filter-bar-border: #dbe3ee;
+  --empty-bg: #f8fafc;
+  --empty-border: #cbd5e1;
+  --empty-text: #94a3b8;
+}
+
+/* 依赖 AntD CSS 变量的别名只能定义在真正拥有 app-theme 的作用域：
+   自定义属性在定义元素处解析后向下继承，:root 读不到后代注入的 --ant-*
+   （负责人 0916 审查第 5 节）。AI 侧车组件全部渲染在 .app-shell 内。 */
+.app-shell {
   --color-ai-accent-bg: color-mix(
     in srgb,
     var(--color-ai-accent) 12%,
@@ -54,59 +118,6 @@
   );
   --color-ai-shadow: color-mix(in srgb, var(--color-ai-accent) 58%, var(--ant-color-text));
   --color-ai-shadow-strong: color-mix(in srgb, var(--color-ai-accent) 70%, var(--ant-color-text));
-  --z-index-main-base: 0;
-  --z-index-sidecar-container: 1100;
-  --shell-header-height: 64px;
-  --error-block-min-height: 60vh;
-  --error-block-shell-max-width: 36rem;
-  --error-block-shell-gap: 24px;
-  --error-block-shell-padding-inline: 24px;
-  --error-block-shell-padding-block: 40px;
-  --error-block-visual-min-height: 220px;
-  --error-block-icon-size: 11.25rem;
-  --error-block-icon-opacity: 0.08;
-  --error-block-status-font-size: clamp(6rem, 8vw, 8rem);
-  --error-block-status-letter-spacing: -0.06em;
-  --error-block-title-font-size: 1rem;
-  --error-block-title-font-weight: 700;
-  --error-block-title-letter-spacing: 0.4em;
-  --error-block-description-max-width: 26.25rem;
-}
-
-.dark {
-  --color-ai-accent: #d97955;
-  --color-ai-accent-hover: #ee8d68;
-  --color-ai-accent-bg: color-mix(
-    in srgb,
-    var(--color-ai-accent) 18%,
-    var(--ant-color-bg-container)
-  );
-  --color-ai-accent-bg-hover: color-mix(
-    in srgb,
-    var(--color-ai-accent) 26%,
-    var(--ant-color-bg-container)
-  );
-  --color-ai-accent-border: color-mix(in srgb, var(--color-ai-accent) 40%, var(--ant-color-border));
-  --color-ai-text: color-mix(in srgb, var(--ant-color-text) 90%, var(--color-ai-accent));
-  --color-ai-text-strong: color-mix(in srgb, var(--ant-color-text) 92%, var(--color-ai-accent));
-  --color-ai-text-secondary: color-mix(
-    in srgb,
-    var(--ant-color-text-secondary) 86%,
-    var(--color-ai-accent)
-  );
-  --color-ai-text-tertiary: color-mix(
-    in srgb,
-    var(--ant-color-text-tertiary) 80%,
-    var(--color-ai-accent)
-  );
-  --color-ai-focus-outline: color-mix(in srgb, var(--color-ai-accent) 62%, transparent);
-  --color-ai-surface-highlight: color-mix(in srgb, var(--color-ai-accent) 18%, transparent);
-  --color-ai-shadow: color-mix(in srgb, var(--color-ai-accent) 42%, var(--ant-color-bg-layout));
-  --color-ai-shadow-strong: color-mix(
-    in srgb,
-    var(--color-ai-accent) 58%,
-    var(--ant-color-bg-layout)
-  );
 }
 
 [data-layout-surface='sidecar'] {
@@ -156,71 +167,293 @@ body,
 body {
   background: var(--ant-color-bg-layout);
   color: var(--ant-color-text);
+  font-family: var(--font-sans);
   margin: 0;
 }
 
 .app-shell {
-  background: var(--ant-color-bg-layout);
+  display: flex;
   min-height: 100vh;
 }
 
-.app-header {
-  align-items: center;
-  background: color-mix(in srgb, var(--ant-color-bg-container) 94%, transparent);
-  backdrop-filter: blur(14px);
-  border-bottom: 1px solid var(--ant-color-border-secondary);
-  display: grid;
-  gap: 16px;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  min-height: var(--shell-header-height);
-  padding: 0 24px;
+/* 工作区层（原型 .workspace-page）：先占余宽承载渐变与紧凑留白，
+   内容再入 1280px 内层，两层职责不混叠 */
+.app-workspace {
+  background: var(--workspace-bg);
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+  padding: 22px 26px 32px;
+}
+
+.app-main {
+  max-width: 1280px;
+  min-width: 0;
+  width: 100%;
+}
+
+/* 左固定导航（gkj 视觉语言：浅灰底、右描边、右投影；色值见 --nav-* Token） */
+.app-sidebar {
+  background: var(--nav-bg);
+  border-right: 1px solid var(--nav-border);
+  box-shadow: var(--nav-shadow);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  height: 100vh;
   position: sticky;
   top: 0;
-  z-index: var(--z-index-sidecar-container);
+  width: var(--nav-width);
+  z-index: var(--z-index-main-base);
 }
 
-.brand-logo {
-  height: 34px;
-  width: 34px;
+.app-sidebar--collapsed {
+  width: 64px;
 }
 
-.brand-title {
-  color: var(--ant-color-text);
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.2;
+.app-sidebar-brand {
+  align-items: center;
+  border-bottom: 1px solid var(--panel-border);
+  display: flex;
+  /* 原型品牌区（atta-brand-wrap）：padding 20/48/20/20、总高 88px（逐条复核报告 20260916
+     P1）；右侧 48px 保留区对应原型 lang-toggle 的 absolute right:8px 区域，当前折叠
+     控件行内占位于内容区右缘，保留区宽度不变 */
+  min-height: 88px;
+  padding: 20px 48px 20px 20px;
+  position: relative;
 }
 
-.brand-subtitle {
-  color: var(--ant-color-text-tertiary);
-  font-size: 12px;
+/* 折叠态（64px）品牌区只留折叠/展开切换钮：logo+钮超出宽度，首页入口由菜单承担 */
+.app-sidebar--collapsed .app-sidebar-brand {
+  justify-content: center;
+  padding-inline: 8px;
 }
 
-.app-nav {
-  justify-self: center;
-  max-width: 100%;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-
-.app-nav::-webkit-scrollbar {
+.app-sidebar--collapsed .app-sidebar-brand-link {
   display: none;
 }
 
-.app-header-actions {
+.app-sidebar-brand-link {
   align-items: center;
   display: flex;
-  gap: 12px;
-  justify-content: flex-end;
-  min-width: max-content;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
 }
 
-.app-appearance-controls {
+/* 48px 右预留区只由该绝对定位按钮使用；不得作为 flex 子项再次挤压品牌文字。 */
+.app-sidebar-collapse-button {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.app-sidebar--collapsed .app-sidebar-collapse-button {
+  position: static;
+  transform: none;
+}
+
+.app-sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-sidebar-brand-name {
+  /* 品牌两级文字与状态文本均为受控语义变量（M 档数值见 frontend/docs/gkj-visual-baseline.md）；
+     字号用 rem 表达，随根字号（S/M/L 档位）同步缩放 */
+  color: var(--text-strong);
+  font-size: 0.75rem;
+  font-weight: 700;
+  /* 展开态完整显示品牌名（第二轮 Request changes S0）：M/L 档不截字；
+     保留 nowrap 防断字，去 ellipsis 后即便极端宽度也以完整形态溢出而非省略号 */
+  line-height: 1.3333;
+  letter-spacing: 0.025em;
+  white-space: nowrap;
+}
+
+/* 品牌辅行：小号大写字母间距的辅助层级，对齐基准品牌区两级文字节奏 */
+.app-sidebar-brand-subname {
+  color: var(--text-muted);
+  font-size: 0.5625rem;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  margin-top: 2px;
+  text-transform: uppercase;
+  /* 英文辅行允许换行，不默认 ellipsis（第二轮 Request changes S0） */
+  white-space: normal;
+}
+
+/* LF 标记：32×32、圆角 8px、深板岩底白色粗体（原型 .w-8.h-8.rounded-lg.bg-slate-800） */
+.brand-mark {
+  align-items: center;
+  background: var(--brand-mark-bg);
+  border-radius: 8px;
+  color: var(--brand-mark-fg);
+  display: flex;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.app-sidebar-nav {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.app-nav-item {
+  align-items: center;
+  border-radius: 8px;
+  color: var(--nav-text);
+  display: flex;
+  font-size: 0.75rem;
+  font-weight: 600;
+  gap: 10px;
+  /* 原型导航 12px/600/18px（Tailwind leading-6 等价 1.5），行高 1.4 会使每项少 1.2px
+     （逐条复核报告 3.2 节 P1） */
+  line-height: 1.5;
+  padding: 11px 12px;
+  text-decoration: none;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
+  white-space: nowrap;
+}
+
+.app-nav-item .anticon,
+.app-nav-item .nav-icon {
+  flex-shrink: 0;
+  font-size: 1rem;
+  height: 1rem;
+  width: 1rem;
+}
+
+.app-nav-item:hover {
+  background: var(--nav-hover-bg);
+  color: var(--nav-hover-text);
+}
+
+.app-nav-item--active {
+  background: var(--ant-color-primary-bg);
+  color: var(--ant-color-primary-active);
+}
+
+/* active+hover：hover 选择器特异性 (0,2,0) 高于 active (0,1,0)，
+   悬停已激活项时必须保持 active 视觉（验收报告 20260916 P1；
+   原型 .nav-item.active 位于 hover 后同等特异性，此处显式声明等价优先级） */
+.app-nav-item--active:hover {
+  background: var(--ant-color-primary-bg);
+  color: var(--ant-color-primary-active);
+}
+
+/* 折叠态：仅保留图标与展开按钮，文字隐藏（图标承担目标辨识，aria-label 由 Link 提供） */
+.app-sidebar--collapsed .app-nav-item {
+  justify-content: center;
+  padding: 9px 0;
+}
+
+.app-sidebar--collapsed .app-nav-item-label {
+  display: none;
+}
+
+/* 字号档位控件：有意偏差——原型侧栏底部只有用户卡（nav-engineer-card 87.5px 区域），
+   本项目的 S/M/L 控件安置在用户区上方独立行，不占用 footer 几何（逐条复核报告 20260916
+   修复建议 3），在 gkj-visual-baseline.md 中登记为声明式偏差 */
+.app-font-scale-area {
+  margin: 10px 14px 10px;
+}
+
+.app-sidebar-footer {
+  background: var(--sidebar-footer-bg);
+  border-top: 1px solid var(--ant-color-border-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+  /* 原型用户区（nav-engineer-card）：padding 14px、总高 87.5px、背景同
+     --sidebar-footer-bg、
+     头像在内容区垂直居中（逐条复核报告 P1）。真实用户卡无第三行徽标，内容不足时
+     以 min-height 保持原型区域高度 */
+  min-height: 87.5px;
+  padding: 14px;
+}
+
+.app-user-card {
   align-items: center;
   display: flex;
+  /* 原型头像与文字间距 12px */
   gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+/* 用户卡头像：真实会话昵称首字符，渐变蓝底与主色描边对齐基准身份块 */
+.app-user-card-avatar {
+  align-items: center;
+  background: var(--avatar-gradient);
+  border: 1px solid var(--avatar-border);
+  border-radius: 12px;
+  color: var(--ant-color-primary-active);
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  font-weight: 800;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+
+.app-user-card-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-user-card-name {
+  color: var(--text-strong);
+  font-size: 0.75rem;
+  font-weight: 700;
+  /* 原型用户昵称 12px/700/16px（逐条复核报告 3.2 节） */
+  line-height: 1.3333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-user-card-role {
+  color: var(--text-muted);
+  font-size: 0.625rem;
+  margin-top: 2px;
+}
+
+.app-user-card-actions .ant-btn {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  padding-inline: 8px;
+}
+
+.app-sidebar--collapsed .app-user-card {
+  justify-content: center;
+  width: 100%;
+}
+
+.app-sidebar--collapsed .app-user-card-avatar {
+  display: none;
+}
+
+.app-sidebar--collapsed .app-user-card-info {
+  display: none;
 }
 
 .app-font-scale-control {
@@ -234,53 +467,6 @@ body {
   background: transparent;
 }
 
-.app-color-scheme-control {
-  display: inline-flex;
-}
-
-.app-color-scheme-control .ant-btn {
-  background: var(--ant-color-fill-tertiary);
-  border: 1px solid var(--ant-color-border-secondary);
-  color: var(--ant-color-text-secondary);
-}
-
-.app-color-scheme-control .ant-btn:hover,
-.app-color-scheme-control .ant-btn:focus-visible {
-  background: var(--ant-color-fill-secondary);
-  border-color: var(--ant-color-border);
-  color: var(--ant-color-text);
-}
-
-.app-nav .ant-tabs {
-  min-width: max-content;
-}
-
-.app-nav .ant-tabs-nav {
-  margin: 0;
-  overflow: hidden;
-}
-
-.app-nav .ant-tabs-nav-wrap {
-  overflow-y: hidden;
-}
-
-.app-nav .ant-tabs-nav::before,
-.app-nav .ant-tabs-content-holder {
-  display: none;
-}
-
-.app-nav .ant-tabs-tab {
-  font-size: 14px;
-  font-weight: 600;
-  padding: 8px 0;
-}
-
-.app-main {
-  margin: 0 auto;
-  max-width: 1180px;
-  padding: 40px 24px 56px;
-}
-
 .page-stack {
   display: flex;
   flex-direction: column;
@@ -289,11 +475,20 @@ body {
 
 .page-header {
   align-items: flex-start;
-  border-bottom: 1px solid var(--ant-color-border);
+  /* 原型页头无分隔线、无额外底部内边距（负责人 0916 对照表） */
   display: flex;
   gap: 24px;
   justify-content: space-between;
-  padding-bottom: 20px;
+}
+
+.page-eyebrow {
+  color: var(--eyebrow-text);
+  font-size: 0.625rem;
+  font-weight: 800;
+  /* 原型 .atta-eyebrow：10px/800/.16em/uppercase；仅在 gkj 对应工作台页传入（可选 API） */
+  letter-spacing: 0.16em;
+  margin: 0 0 4px;
+  text-transform: uppercase;
 }
 
 .page-header-content {
@@ -310,19 +505,19 @@ body {
 }
 
 .page-title {
-  color: var(--ant-color-text);
-  font-size: 30px;
-  font-weight: 780;
+  color: var(--text-strong);
+  font-size: 1.5rem;
+  font-weight: 700;
   letter-spacing: 0;
-  line-height: 1.15;
+  line-height: 2rem;
   margin: 0;
 }
 
 .page-description {
-  color: var(--ant-color-text-secondary);
-  font-size: 15px;
-  line-height: 1.7;
-  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  margin: 4px 0 0;
   max-width: 760px;
 }
 
@@ -332,11 +527,12 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
+/* 公共面板（gkj .panel-card）：半透明白底、细描边、14px 圆角、指定投影 */
 .surface-panel {
-  background: var(--ant-color-bg-container);
-  border: 1px solid var(--ant-color-border-secondary);
-  border-radius: var(--ant-border-radius-lg);
-  box-shadow: var(--ant-box-shadow-tertiary);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
   padding: 20px;
 }
 
@@ -386,7 +582,7 @@ body {
   border: 1px solid var(--ant-color-border-secondary);
   border-radius: var(--ant-border-radius);
   color: var(--ant-color-text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   min-width: 0;
   overflow: hidden;
@@ -777,25 +973,7 @@ body {
 }
 
 @media (max-width: 760px) {
-  .app-header {
-    align-items: stretch;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 14px 16px;
-  }
-
-  .app-nav {
-    max-width: 100%;
-    width: 100%;
-  }
-
-  .app-header-actions {
-    flex-wrap: wrap;
-    width: 100%;
-  }
-
-  .app-main {
+  .app-workspace {
     padding: 30px 16px 44px;
   }
 
@@ -842,4 +1020,174 @@ body {
     bottom: 20px;
     right: 20px;
   }
+}
+
+/* ===== shared/ui 公共视觉 primitives（PR1 S2）：只消费主题 Token/语义变量 ===== */
+
+/* StatusPill：gkj 状态胶囊语言 */
+.status-pill {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.625rem;
+  font-weight: 700;
+  gap: 6px;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  padding: 4px 10px;
+}
+
+.status-pill--critical {
+  background: var(--status-critical-bg);
+  color: var(--status-critical-text);
+}
+
+.status-pill--neutral {
+  background: var(--ant-color-fill-tertiary);
+  color: var(--ant-color-text-secondary);
+}
+
+.status-pill--ok {
+  background: var(--status-ok-bg);
+  color: var(--status-ok-text);
+}
+
+.status-pill--warn {
+  background: var(--status-warn-bg);
+  color: var(--status-warn-text);
+}
+
+/* DataCard / TableContainer：gkj 卡片语言——半透明白底、细描边、14px 圆角、指定投影 */
+.data-card,
+.table-container {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
+  color: var(--ant-color-text);
+  min-width: 0;
+  padding: 16px;
+}
+
+.data-card-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.data-card-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.data-card-extra {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+/* StatCard：gkj .metric-tile 语言——白→淡蓝渐变、--stat-card-border 描边、
+   --panel-radius 圆角、无投影；
+   任务书明确统计卡片不是普通 panel-card（逐条复核报告 2 节 P1） */
+.stat-card {
+  background: var(--stat-card-gradient);
+  border: 1px solid var(--stat-card-border);
+  border-radius: var(--panel-radius);
+  color: var(--ant-color-text);
+  min-width: 0;
+  padding: 16px;
+}
+
+/* StatCard：完整映射 gkj .metric-tile 的标签、数值和辅助文字层级，不混用 health-score。 */
+.stat-card-label {
+  color: var(--stat-card-label);
+  font-size: 0.75rem;
+  font-weight: 400;
+  margin: 0;
+}
+
+.stat-card-value {
+  color: var(--stat-card-value);
+  font-size: 1.875rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 4px 0 0;
+}
+
+.stat-card-hint {
+  color: var(--stat-card-hint);
+  font-size: 0.6875rem;
+  margin: 8px 0 0;
+}
+
+/* FilterBar：映射到 gkj .platform-search 的容器语言（负责人 0916 复核裁定）：
+   同底色/描边/圆角，内含多个筛选控件故高度自适应，不强制单框 36px */
+.filter-bar {
+  align-items: center;
+  background: var(--filter-bar-bg);
+  border: 1px solid var(--filter-bar-border);
+  border-radius: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 12px 0 14px;
+  padding: 8px 11px;
+}
+
+/* EmptyState / ErrorState：gkj .platform-empty 语言——虚线描边 --empty-border、
+   淡灰底、12px 圆角、padding 22×14、--empty-text 文本
+   （原型源码字号 11px，容器几何逐项对齐） */
+.empty-state,
+.error-state {
+  align-items: center;
+  background: var(--empty-bg);
+  border: 1px dashed var(--empty-border);
+  border-radius: 12px;
+  color: var(--empty-text);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+  padding: 22px 14px;
+  text-align: center;
+}
+
+.empty-state-title,
+.error-state-title {
+  color: var(--ant-color-text);
+  font-size: 0.875rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+/* 原型 .platform-empty 的单行提示；含说明或操作时才使用扩展态标题层级。 */
+.empty-state--simple .empty-state-title,
+.error-state--simple .error-state-title {
+  color: var(--empty-text);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.empty-state-description,
+.error-state-description {
+  font-size: 0.75rem;
+  margin: 0;
+}
+
+/* LoadingState：居中 Spin */
+.loading-state {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  padding: 32px 16px;
+}
+
+.loading-state-label {
+  color: var(--ant-color-text-tertiary);
+  font-size: 0.75rem;
 }
