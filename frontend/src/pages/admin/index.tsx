@@ -19,6 +19,7 @@ export function AdminPage() {
     <div className="page-stack">
       <PageHeader
         description="SUPER_ADMIN 管理员入口。当前身份来自后端登录结果，可进入用户管理页面执行完整管理动作。"
+        eyebrow="Admin Workspace"
         extra={
           <Button type="primary" onClick={() => void navigate('/admin/users')}>
             进入用户管理

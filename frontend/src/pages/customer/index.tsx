@@ -40,6 +40,7 @@ export function CustomerPage() {
     <div className="page-stack">
       <PageHeader
         description="CUSTOMER 临时落地页。当前身份来自后端登录结果，仅展示安全会话信息。"
+        eyebrow="Customer Workspace"
         title="客户页面"
       />
 

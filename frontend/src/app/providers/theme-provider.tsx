@@ -23,21 +23,10 @@ function readStoredFontScale(): FontScale {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [isDark, setIsDark] = useState(() => {
-    try {
-      return localStorage.getItem('color-scheme') === 'dark';
-    } catch {
-      return false;
-    }
-  });
   const [fontScale, setFontScale] = useState<FontScale>(readStoredFontScale);
   const themeConfig = useMemo(
-    () =>
-      createAppThemeConfig({
-        fontSize: FONT_SCALE_CONFIG[fontScale].antdFontSize,
-        isDark,
-      }),
-    [fontScale, isDark],
+    () => createAppThemeConfig({ fontSize: FONT_SCALE_CONFIG[fontScale].antdFontSize }),
+    [fontScale],
   );
 
   useEffect(() => {
@@ -50,26 +39,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [fontScale]);
 
-  useEffect(() => {
-    const root = document.documentElement;
-
-    if (isDark) {
-      root.classList.add('dark');
-      root.style.colorScheme = 'dark';
-    } else {
-      root.classList.remove('dark');
-      root.style.colorScheme = 'light';
-    }
-
-    try {
-      localStorage.setItem('color-scheme', isDark ? 'dark' : 'light');
-    } catch {
-      // Storage can be unavailable in restricted browsers.
-    }
-  }, [isDark]);
-
   return (
-    <ThemeContext.Provider value={{ fontScale, isDark, setFontScale, setIsDark }}>
+    <ThemeContext.Provider value={{ fontScale, setFontScale }}>
       <ConfigProvider theme={themeConfig}>{children}</ConfigProvider>
     </ThemeContext.Provider>
   );

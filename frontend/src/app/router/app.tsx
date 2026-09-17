@@ -26,6 +26,7 @@ import { ReferenceDocumentDetailPage } from '@/pages/reference-document-detail';
 import { ReferenceDocumentNewPage } from '@/pages/reference-document-new';
 import { ReferenceDocumentsPage } from '@/pages/reference-documents';
 import { RepairRequestCreatePage } from '@/pages/repair-request-create';
+import { canAccessSharedUiGallery, SharedUiGalleryPage } from '@/pages/shared-ui-gallery';
 import { Error403, Error404, Error500, ErrorRouteCrash } from '@/features/error-feedback';
 
 import { getAppEnv } from '@/shared/env';
@@ -75,6 +76,14 @@ function game2048LabLoader() {
 
 function sandboxPlaygroundLoader() {
   if (!canAccessSandboxPlayground(getAppEnv())) {
+    throw redirect('/');
+  }
+
+  return null;
+}
+
+function sharedUiGalleryLoader() {
+  if (!canAccessSharedUiGallery(getAppEnv())) {
     throw redirect('/');
   }
 
@@ -167,6 +176,11 @@ const router = createBrowserRouter([
       {
         element: <ErrorPreviewPage />,
         path: 'error-preview',
+      },
+      {
+        element: <SharedUiGalleryPage />,
+        loader: sharedUiGalleryLoader,
+        path: 'dev/shared-ui',
       },
       {
         element: <Game2048LabPage />,

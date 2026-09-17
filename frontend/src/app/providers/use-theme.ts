@@ -6,9 +6,7 @@ import type { FontScale } from './theme-constants';
 
 export type ThemeContextValue = {
   fontScale: FontScale;
-  isDark: boolean;
   setFontScale: (scale: FontScale) => void;
-  setIsDark: (value: boolean | ((previousValue: boolean) => boolean)) => void;
 };
 
 export const ThemeContext = createContext<ThemeContextValue | null>(null);
