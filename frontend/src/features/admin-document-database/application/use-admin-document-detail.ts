@@ -74,6 +74,16 @@ function useAdminDetail<TDetail>(
     requestId: 0,
   });
   const requestIdRef = useRef(0);
+  // fetcher 引用稳定化：消费方（useAdminRepairRequestSummary 等）每次渲染新建内联
+  // fetcher，若 load 直接依赖 fetcher，则 effect 每渲染重新发请求，requestId 持续
+  // 递增导致所有已完成的响应被竞态校验丢弃，详情面板永远停留在 loading 骨架
+  // （Playwright 真实链路暴露的 S3 缺陷）。经 ref 收口后 load 引用稳定，
+  // 仅 targetId 变化时重新读取；ref 同步置于渲染后、读目标 effect 之前的
+  // 独立 effect 内（effect 按定义顺序执行，首次读取前 ref 必已就绪）。
+  const fetcherRef = useRef(fetcher);
+  useEffect(() => {
+    fetcherRef.current = fetcher;
+  }, [fetcher]);
 
   const load = useCallback(
     async (target: number) => {
@@ -83,7 +93,7 @@ function useAdminDetail<TDetail>(
       dispatch({ type: 'load-start', requestId });
 
       try {
-        const result = await fetcher(target);
+        const result = await fetcherRef.current(target);
 
         if (result.ok) {
           dispatch({ type: 'load-ready', requestId, detail: result.detail });
@@ -98,7 +108,7 @@ function useAdminDetail<TDetail>(
         });
       }
     },
-    [fetcher, fallbackMessage],
+    [fallbackMessage],
   );
 
   useEffect(() => {
