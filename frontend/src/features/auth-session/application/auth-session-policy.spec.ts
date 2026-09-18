@@ -69,6 +69,10 @@ describe('auth session policy', () => {
     expect(isAuthSessionRoleAllowedAt('ENGINEER', '/engineer/repair-requests/1')).toBe(true);
     expect(isAuthSessionRoleAllowedAt('ENGINEER', '/customer/repair-requests/1')).toBe(false);
     expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/admin/settings')).toBe(true);
+    // PR3 S3：/admin/document-database 沿 /admin/** 根路径表规则（文档数据库定点断言）
+    expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/admin/document-database')).toBe(true);
+    expect(isAuthSessionRoleAllowedAt('ENGINEER', '/admin/document-database')).toBe(false);
+    expect(isAuthSessionRoleAllowedAt('CUSTOMER', '/admin/document-database')).toBe(false);
     expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/engineer/repair-requests/1')).toBe(true);
     expect(isAuthSessionRoleAllowedAt('SUPER_ADMIN', '/admin-console')).toBe(false);
   });
@@ -129,6 +133,8 @@ describe('auth session policy', () => {
     expect(resolveProtectedRouteRedirect(customerSession, '/customer/')).toBeNull();
     expect(resolveProtectedRouteRedirect(customerSession, '/customer-admin')).toBe('/customer');
     expect(resolveProtectedRouteRedirect(superAdminSession, '/admin/settings')).toBeNull();
+    // PR3 S3：文档数据库页未授权直达被拒，跳回管理员主页
+    expect(resolveProtectedRouteRedirect(superAdminSession, '/admin/document-database')).toBeNull();
     // SUPER_ADMIN 访问创建页与 ENGINEER 一致：跳回各自个人主页，不是 403。
     expect(resolveProtectedRouteRedirect(superAdminSession, '/customer/repair-requests/new')).toBe(
       '/admin',
