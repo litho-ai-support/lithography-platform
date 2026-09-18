@@ -18,6 +18,7 @@ import { CreateAccountUsecase } from '@src/usecases/account/create-account.useca
 import { DataSource, In } from 'typeorm';
 import { initGraphQLSchema } from '../../src/adapters/api/graphql/schema/schema.init';
 import { getAccountIdByLoginName, login, postGql } from '../utils/e2e-graphql-utils';
+import { assertDataSourceOnAllowedE2eDatabase } from '../utils/e2e-db-guard';
 import { seedTestAccounts, testAccountsConfig } from '../utils/test-accounts';
 
 /**
@@ -92,6 +93,11 @@ describe('AdminDocumentDatabase (e2e)', () => {
     dataSource = app.get(DataSource);
 
     await app.init();
+
+    // 🔒 首次删除夹具之前，复用与 global-setup 同一不可跳过的目标库白名单守卫：
+    //    即使有人用 E2E_SKIP_INFRA_CHECKS / E2E_SKIP_DB_CLEANUP 绕过了全局清理校验，
+    //    本 spec 也绝不会在未验证（非隔离 E2E 库）的数据库上执行 DELETE。
+    await assertDataSourceOnAllowedE2eDatabase(dataSource);
 
     // 造数前精确回收同名夹具（保证连跑两遍幂等），不整表删除业务数据
     await cleanupAdminFixture(dataSource);
