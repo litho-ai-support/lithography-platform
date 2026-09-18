@@ -4,6 +4,7 @@ import { AccountStatus } from '@app-types/models/account.types';
 import type { PersistenceTransactionContext } from '@app-types/common/transaction.types';
 import { ADMIN_USER_ERROR, DomainError, isDomainError } from '@core/common/errors/domain-error';
 import { PasswordPolicyService } from '@core/common/password/password-policy.service';
+import { isDualStatusFieldsConsistent } from '@core/account/policy/dual-status-consistency.policy';
 import { Inject, Injectable } from '@nestjs/common';
 import type { AdminUserStatusFacts, AdminUserView } from '@src/modules/account/account.types';
 import { AccountService } from '@src/modules/account/base/services/account.service';
@@ -24,7 +25,6 @@ import type {
 import { assertAdminUserManagementPermission } from './admin-user-permission';
 import {
   assertAdminUserPasswordPolicy,
-  isDualStatusFieldsConsistent,
   loadWritableAdminUserTarget,
   logAdminUserWriteFailure,
 } from './admin-user-write-support';
@@ -280,11 +280,19 @@ export class AdminResetUserPasswordUsecase {
     accountId: number,
   ): void {
     // 「双字段一致且处于两态」的两种合法形态：accountStatus 命中两态之一后，
-    // isDualStatusFieldsConsistent(facts) 即等价于 userState 与之同值
+    // isDualStatusFieldsConsistent({ accountStatus, userState }) 即等价于 userState 与之同值
     const isConsistentActive =
-      facts.accountStatus === AccountStatus.ACTIVE && isDualStatusFieldsConsistent(facts);
+      facts.accountStatus === AccountStatus.ACTIVE &&
+      isDualStatusFieldsConsistent({
+        accountStatus: facts.accountStatus,
+        userState: facts.userState,
+      });
     const isConsistentInactive =
-      facts.accountStatus === AccountStatus.INACTIVE && isDualStatusFieldsConsistent(facts);
+      facts.accountStatus === AccountStatus.INACTIVE &&
+      isDualStatusFieldsConsistent({
+        accountStatus: facts.accountStatus,
+        userState: facts.userState,
+      });
     if (isConsistentActive || isConsistentInactive) {
       return;
     }

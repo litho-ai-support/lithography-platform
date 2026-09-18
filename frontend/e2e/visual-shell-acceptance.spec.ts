@@ -167,6 +167,8 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
 test('导航 hover/active、三种状态底色和 S/M/L 往返均在真实浏览器生效', async ({
   page,
 }, testInfo) => {
+  // 本用例含多次真实页面导航与 reload，在 dev server 串行门禁中需要独立预算。
+  test.setTimeout(40_000);
   await page.setViewportSize({ height: 768, width: 1366 });
   await seedAuthSession(page, 'SUPER_ADMIN');
   await page.goto('/dev/shared-ui');

@@ -8,6 +8,8 @@ import type { ReactNode } from 'react';
 // 仅供导航消费；业务页图标仍走 @ant-design/icons。
 
 type NavIconDefinition = {
+  /** 可选圆形子形状（如齿轮中心轴），渲染在 path 之后 */
+  circles?: ReadonlyArray<{ cx: number; cy: number; r: number }>;
   id: string;
   path: string;
 };
@@ -38,6 +40,12 @@ const NAV_ICON_DEFINITIONS: Record<string, NavIconDefinition> = {
     id: 'chat',
     path: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-3 3v-3z',
   },
+  // 账号设置（0909 计划 P4）：Feather settings 齿轮，齿轮中心轴用 circle 子形状
+  settings: {
+    circles: [{ cx: 12, cy: 12, r: 3 }],
+    id: 'settings',
+    path: 'M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z',
+  },
 };
 
 function NavStrokeIcon({ definition }: { definition: NavIconDefinition }): ReactNode {
@@ -53,6 +61,14 @@ function NavStrokeIcon({ definition }: { definition: NavIconDefinition }): React
       viewBox="0 0 24 24"
     >
       <path d={definition.path} />
+      {definition.circles?.map((circle) => (
+        <circle
+          cx={circle.cx}
+          cy={circle.cy}
+          key={`${circle.cx}-${circle.cy}-${circle.r}`}
+          r={circle.r}
+        />
+      ))}
     </svg>
   );
 }
@@ -75,4 +91,8 @@ export function NavListIcon(): ReactNode {
 
 export function NavChatIcon(): ReactNode {
   return <NavStrokeIcon definition={NAV_ICON_DEFINITIONS.chat} />;
+}
+
+export function NavSettingsIcon(): ReactNode {
+  return <NavStrokeIcon definition={NAV_ICON_DEFINITIONS.settings} />;
 }
