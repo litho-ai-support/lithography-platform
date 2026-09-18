@@ -1,0 +1,376 @@
+// src/features/admin-document-database/infrastructure/admin-document-database-adapter.ts
+
+import { executeGraphQL, isGraphQLIngressError, readGraphQLErrorDetail } from '@/shared/graphql';
+
+import type {
+  AdminAiConversationFilter,
+  AdminAiConversationListItem,
+  AdminAiMessageListItem,
+  AdminAiReportDetail,
+  AdminAiReportFilter,
+  AdminAiReportListItem,
+  AdminDocumentDatabaseStats,
+  AdminListPage,
+  AdminRepairRequestFilter,
+  AdminRepairRequestListItem,
+  AdminRepairRequestSummary,
+} from './admin-document-database.types';
+
+/**
+ * 管理员文档数据库 GraphQL 数据访问层（PR3 S3）。
+ *
+ * - 只读：仅消费 SUPER_ADMIN 专用聚合 Query（backend/src/schema.graphql
+ *   的 admin* Query 组），不触达任何写操作；
+ * - 参考资料 tag 按计划表复用既有 features/reference-document 契约，
+ *   不在此重复实现；
+ * - transport / auth / network 失败由共享层归一为 GraphQLIngressError 上抛，
+ *   详情读取的业务拒绝（NOT_FOUND / FORBIDDEN）按既有 adapter 惯例归并
+ *   为显式 not-found 结果（详情见 reference-document-adapter 的错误双轨制）。
+ */
+
+type PaginationVariables = {
+  pagination: {
+    mode: 'OFFSET';
+    page: number;
+    pageSize: number;
+    withTotal: true;
+  };
+};
+
+// ---- 维修申请 ----
+
+const ADMIN_REPAIR_REQUESTS_QUERY = `
+  query AdminRepairRequests($pagination: PaginationArgs!, $filter: AdminRepairRequestFilterInput) {
+    adminRepairRequests(pagination: $pagination, filter: $filter) {
+      items {
+        id
+        requestNo
+        customerNickname
+        companyName
+        equipmentModelId
+        equipmentModelCode
+        equipmentModelName
+        errorCode
+        isAccepted
+        acceptedAt
+        acceptedByEngineerNickname
+        latestResolutionStatus
+        createdAt
+      }
+      total
+      page
+      pageSize
+    }
+  }
+`;
+
+const ADMIN_REPAIR_REQUEST_SUMMARY_QUERY = `
+  query AdminRepairRequestSummary($id: Int!) {
+    adminRepairRequestSummary(id: $id) {
+      id
+      requestNo
+      customerNickname
+      companyName
+      equipmentModelId
+      equipmentModelCode
+      equipmentModelName
+      errorCode
+      faultDescription
+      contentMd
+      isAccepted
+      acceptedAt
+      acceptedByEngineerNickname
+      latestResolutionStatus
+      createdAt
+    }
+  }
+`;
+
+// ---- AI 会话与消息 ----
+
+const ADMIN_AI_CONVERSATIONS_QUERY = `
+  query AdminAiConversations($pagination: PaginationArgs!, $filter: AdminAiConversationFilterInput) {
+    adminAiConversations(pagination: $pagination, filter: $filter) {
+      items {
+        id
+        requestNo
+        requestId
+        status
+        engineerNickname
+        messageCount
+        reportCount
+        createdAt
+        completedAt
+        aiFeedback
+      }
+      total
+      page
+      pageSize
+    }
+  }
+`;
+
+const ADMIN_AI_MESSAGES_QUERY = `
+  query AdminAiMessages($conversationId: Int!, $pagination: PaginationArgs!) {
+    adminAiMessages(conversationId: $conversationId, pagination: $pagination) {
+      items {
+        id
+        conversationId
+        messageSeq
+        turnNo
+        role
+        contentText
+        createdAt
+      }
+      total
+      page
+      pageSize
+    }
+  }
+`;
+
+// ---- AI 报告 ----
+
+const ADMIN_AI_REPORTS_QUERY = `
+  query AdminAiReports($pagination: PaginationArgs!, $filter: AdminAiReportFilterInput) {
+    adminAiReports(pagination: $pagination, filter: $filter) {
+      items {
+        id
+        conversationId
+        requestId
+        requestNo
+        requestMismatch
+        reportType
+        reportTitle
+        engineerNickname
+        createdAt
+      }
+      total
+      page
+      pageSize
+    }
+  }
+`;
+
+const ADMIN_AI_REPORT_DETAIL_QUERY = `
+  query AdminAiReport($id: Int!) {
+    adminAiReport(id: $id) {
+      id
+      conversationId
+      requestId
+      requestNo
+      requestMismatch
+      reportType
+      reportTitle
+      engineerNickname
+      createdAt
+      contentMd
+    }
+  }
+`;
+
+// ---- 设备型号下拉选项（公开 equipmentModels 查询；维修申请标签筛选用） ----
+
+const EQUIPMENT_MODELS_QUERY = `
+  query AdminDocumentDatabaseEquipmentModels {
+    equipmentModels {
+      id
+      modelCode
+      modelName
+    }
+  }
+`;
+
+export type AdminEquipmentModelOption = {
+  id: number;
+  modelCode: string;
+  modelName: string;
+};
+
+export async function fetchAdminEquipmentModelOptions(): Promise<AdminEquipmentModelOption[]> {
+  const data = await executeGraphQL<
+    { equipmentModels: AdminEquipmentModelOption[] },
+    Record<string, never>
+  >(EQUIPMENT_MODELS_QUERY, {});
+
+  return data.equipmentModels;
+}
+
+// ---- 统计 ----
+
+const ADMIN_DOCUMENT_DATABASE_STATS_QUERY = `
+  query AdminDocumentDatabaseStats {
+    adminDocumentDatabaseStats {
+      repairRequestTotal
+      referenceDocumentTotal
+      aiConversationTotal
+      aiReportTotal
+    }
+  }
+`;
+
+// ---- 变量构造：空值字段整体省略（契约 InputType 字段均可选） ----
+
+function omitEmpty<T extends object>(filter: T | undefined): T | undefined {
+  if (!filter) {
+    return undefined;
+  }
+
+  const entries = Object.entries(filter).filter(([, value]) => {
+    if (value === null || value === undefined) {
+      return false;
+    }
+
+    if (typeof value === 'string' && value.trim() === '') {
+      return false;
+    }
+
+    return true;
+  });
+
+  return entries.length > 0 ? (Object.fromEntries(entries) as T) : undefined;
+}
+
+type PaginatedData<TItem> = {
+  total?: number | null;
+  page?: number | null;
+  pageSize?: number | null;
+  items: TItem[];
+};
+
+function toListPage<TItem>(
+  data: PaginatedData<TItem>,
+  fallback: { page: number; pageSize: number },
+): AdminListPage<TItem> {
+  return {
+    items: data.items,
+    total: data.total ?? 0,
+    page: data.page ?? fallback.page,
+    pageSize: data.pageSize ?? fallback.pageSize,
+  };
+}
+
+export async function fetchAdminRepairRequests(
+  page: number,
+  pageSize: number,
+  filter?: AdminRepairRequestFilter,
+): Promise<AdminListPage<AdminRepairRequestListItem>> {
+  const data = await executeGraphQL<
+    { adminRepairRequests: PaginatedData<AdminRepairRequestListItem> },
+    PaginationVariables & { filter?: AdminRepairRequestFilter }
+  >(ADMIN_REPAIR_REQUESTS_QUERY, {
+    pagination: { mode: 'OFFSET', page, pageSize, withTotal: true },
+    filter: omitEmpty(filter),
+  });
+
+  return toListPage(data.adminRepairRequests, { page, pageSize });
+}
+
+export async function fetchAdminAiConversations(
+  page: number,
+  pageSize: number,
+  filter?: AdminAiConversationFilter,
+): Promise<AdminListPage<AdminAiConversationListItem>> {
+  const data = await executeGraphQL<
+    { adminAiConversations: PaginatedData<AdminAiConversationListItem> },
+    PaginationVariables & { filter?: AdminAiConversationFilter }
+  >(ADMIN_AI_CONVERSATIONS_QUERY, {
+    pagination: { mode: 'OFFSET', page, pageSize, withTotal: true },
+    filter: omitEmpty(filter),
+  });
+
+  return toListPage(data.adminAiConversations, { page, pageSize });
+}
+
+export async function fetchAdminAiMessages(
+  conversationId: number,
+  page: number,
+  pageSize: number,
+): Promise<AdminListPage<AdminAiMessageListItem>> {
+  const data = await executeGraphQL<
+    { adminAiMessages: PaginatedData<AdminAiMessageListItem> },
+    PaginationVariables & { conversationId: number }
+  >(ADMIN_AI_MESSAGES_QUERY, {
+    conversationId,
+    pagination: { mode: 'OFFSET', page, pageSize, withTotal: true },
+  });
+
+  return toListPage(data.adminAiMessages, { page, pageSize });
+}
+
+export async function fetchAdminAiReports(
+  page: number,
+  pageSize: number,
+  filter?: AdminAiReportFilter,
+): Promise<AdminListPage<AdminAiReportListItem>> {
+  const data = await executeGraphQL<
+    { adminAiReports: PaginatedData<AdminAiReportListItem> },
+    PaginationVariables & { filter?: AdminAiReportFilter }
+  >(ADMIN_AI_REPORTS_QUERY, {
+    pagination: { mode: 'OFFSET', page, pageSize, withTotal: true },
+    filter: omitEmpty(filter),
+  });
+
+  return toListPage(data.adminAiReports, { page, pageSize });
+}
+
+export async function fetchAdminDocumentDatabaseStats(): Promise<AdminDocumentDatabaseStats> {
+  const data = await executeGraphQL<
+    { adminDocumentDatabaseStats: AdminDocumentDatabaseStats },
+    Record<string, never>
+  >(ADMIN_DOCUMENT_DATABASE_STATS_QUERY, {});
+
+  return data.adminDocumentDatabaseStats;
+}
+
+// ---- 详情：业务拒绝显式归并（不区分 not-found 与 forbidden，防探测口径与既有模块一致） ----
+
+export type AdminDetailResult<TDetail> =
+  | { ok: true; detail: TDetail }
+  | { ok: false; message: string };
+
+/** 详情读取的业务拒绝归并：NOT_FOUND / FORBIDDEN 统一为显式 not-found 结果（防探测） */
+function toNotFoundResult<TDetail>(
+  error: unknown,
+  fallbackMessage: string,
+): AdminDetailResult<TDetail> {
+  if (isGraphQLIngressError(error)) {
+    const detail = readGraphQLErrorDetail(error);
+
+    if (detail?.code === 'NOT_FOUND' || detail?.code === 'FORBIDDEN') {
+      return { ok: false, message: detail.errorMessage ?? fallbackMessage };
+    }
+  }
+
+  throw error;
+}
+
+export async function fetchAdminRepairRequestSummary(
+  id: number,
+): Promise<AdminDetailResult<AdminRepairRequestSummary>> {
+  try {
+    const data = await executeGraphQL<
+      { adminRepairRequestSummary: AdminRepairRequestSummary },
+      { id: number }
+    >(ADMIN_REPAIR_REQUEST_SUMMARY_QUERY, { id });
+
+    return { ok: true, detail: data.adminRepairRequestSummary };
+  } catch (error) {
+    return toNotFoundResult(error, '维修申请不存在或不可查看。');
+  }
+}
+
+export async function fetchAdminAiReportDetail(
+  id: number,
+): Promise<AdminDetailResult<AdminAiReportDetail>> {
+  try {
+    const data = await executeGraphQL<{ adminAiReport: AdminAiReportDetail }, { id: number }>(
+      ADMIN_AI_REPORT_DETAIL_QUERY,
+      { id },
+    );
+
+    return { ok: true, detail: data.adminAiReport };
+  } catch (error) {
+    return toNotFoundResult(error, 'AI 报告不存在或不可查看。');
+  }
+}

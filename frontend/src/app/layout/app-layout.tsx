@@ -45,6 +45,7 @@ const ROLE_LABELS: Record<AuthSessionRole, string> = {
 // 避免后续新增菜单漏配图标时留下空白热点（外审 R2 P2-01）。
 const NAV_ITEM_ICONS: Record<string, ReactNode> = {
   'account-settings': <NavSettingsIcon />,
+  'admin-document-database': <NavListIcon />,
   'admin-users': <NavUserIcon />,
   'customer-repair-request-new': <NavChatIcon />,
   'customer-repair-requests': <NavListIcon />,
