@@ -1,8 +1,10 @@
 // src/features/admin-document-database/application/use-admin-document-detail.spec.ts
 // @vitest-environment jsdom
 
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { GraphQLIngressError } from '@/shared/graphql';
 
 import type { AdminAiReportDetail } from '../infrastructure/admin-document-database.types';
 
@@ -28,9 +30,10 @@ import { useAdminAiReportDetail } from './use-admin-document-detail';
 
 const mockFetchAdminAiReportDetail = vi.mocked(fetchAdminAiReportDetail);
 
-// 模块级 mock 跨用例共享，调用计数需逐用例清零，否则 toHaveBeenCalledTimes 串味
+// 模块级 mock 跨用例共享：既清调用计数又清实现/once 队列，避免用例间的
+// 持久 mockRejectedValue/mockResolvedValue 与残留 once 实现相互串味。
 beforeEach(() => {
-  mockFetchAdminAiReportDetail.mockClear();
+  mockFetchAdminAiReportDetail.mockReset();
 });
 
 const REPORT_DETAIL: AdminAiReportDetail = {
@@ -94,5 +97,76 @@ describe('useAdminAiReportDetail（fetcher 引用稳定化回归）', () => {
     rerender({ reportId: null });
     rerender({ reportId: 950002 });
     await waitFor(() => expect(mockFetchAdminAiReportDetail).toHaveBeenCalledTimes(3));
+  });
+
+  it('transport 抛非 GraphQL 错误：进入 failed 并回落固定兜底文案', async () => {
+    mockFetchAdminAiReportDetail.mockRejectedValue(new Error('底层堆栈不应外泄'));
+    const { result } = renderHook(() => useAdminAiReportDetail(950001));
+
+    await waitFor(() => expect(result.current.state.status).toBe('failed'));
+    if (result.current.state.status !== 'failed') throw new Error('unreachable');
+    expect(result.current.state.message).toBe('AI 报告详情加载失败，请稍后重试。');
+  });
+
+  it('transport 抛 GraphQLIngressError：透出统一用户文案', async () => {
+    mockFetchAdminAiReportDetail.mockRejectedValue(
+      new GraphQLIngressError({ type: 'network', message: '内部细节' }),
+    );
+    const { result } = renderHook(() => useAdminAiReportDetail(950001));
+
+    await waitFor(() => expect(result.current.state.status).toBe('failed'));
+    if (result.current.state.status !== 'failed') throw new Error('unreachable');
+    expect(result.current.state.message).toBe('网络连接异常，请稍后重试。');
+  });
+
+  it('retry：从 failed 重新读取同一目标并恢复 ready', async () => {
+    mockFetchAdminAiReportDetail
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({ ok: true, detail: REPORT_DETAIL });
+    const { result } = renderHook(() => useAdminAiReportDetail(950001));
+
+    await waitFor(() => expect(result.current.state.status).toBe('failed'));
+
+    await act(async () => {
+      result.current.retry();
+    });
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+    expect(mockFetchAdminAiReportDetail).toHaveBeenCalledTimes(2);
+    expect(mockFetchAdminAiReportDetail).toHaveBeenLastCalledWith(950001);
+  });
+
+  it('快速切换目标：晚到的旧请求响应被 requestId 竞态防护丢弃', async () => {
+    let resolveStale: (value: { ok: true; detail: AdminAiReportDetail }) => void = () => {};
+    mockFetchAdminAiReportDetail
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ ok: true; detail: AdminAiReportDetail }>((resolve) => {
+            resolveStale = resolve;
+          }),
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve({
+          ok: true,
+          detail: { ...REPORT_DETAIL, reportTitle: 'SECOND-TARGET' },
+        }),
+      );
+
+    const { result, rerender } = renderHook(
+      ({ reportId }: { reportId: number | null }) => useAdminAiReportDetail(reportId),
+      { initialProps: { reportId: 950001 as number | null } },
+    );
+
+    // 第一个目标的读取挂起，随即切到第二个目标并先完成
+    rerender({ reportId: 950002 });
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+    if (result.current.state.status !== 'ready') throw new Error('unreachable');
+    expect(result.current.state.detail.reportTitle).toBe('SECOND-TARGET');
+
+    // 旧目标响应最后才到：不得覆盖当前 ready
+    await act(async () => {
+      resolveStale({ ok: true, detail: { ...REPORT_DETAIL, reportTitle: 'STALE-FIRST' } });
+    });
+    if (result.current.state.status !== 'ready') throw new Error('unreachable');
+    expect(result.current.state.detail.reportTitle).toBe('SECOND-TARGET');
   });
 });

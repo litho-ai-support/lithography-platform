@@ -69,17 +69,24 @@ describe('GetAdminDocumentDatabaseStatsUsecase', () => {
     '$label 时授权先行拒绝，不触发任何统计查询',
     async ({ session }) => {
       const repair = makeRepairQueryService();
+      const conversation = makeConversationQueryService();
+      const report = makeReportQueryService();
+      const reference = makeReferenceQueryService();
       const usecase = new GetAdminDocumentDatabaseStatsUsecase(
         repair,
-        makeConversationQueryService(),
-        makeReportQueryService(),
-        makeReferenceQueryService(),
+        conversation,
+        report,
+        reference,
       );
 
       const error = (await captureThrownError(usecase.execute({ session }))) as { code?: string };
 
       expect(error.code).toBe(PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS);
+      // 要求 2：拒绝路径必须断言各依赖（四类计数/列表）均未被调用，而不只断错误码
       expect(repair.countAll).not.toHaveBeenCalled();
+      expect(conversation.countAll).not.toHaveBeenCalled();
+      expect(report.countAll).not.toHaveBeenCalled();
+      expect(reference.listDocuments).not.toHaveBeenCalled();
     },
   );
 });

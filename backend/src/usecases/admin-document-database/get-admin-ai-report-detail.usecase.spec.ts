@@ -1,12 +1,13 @@
 // src/usecases/admin-document-database/get-admin-ai-report-detail.usecase.spec.ts
 
-import { ADMIN_DOCUMENT_DATABASE_ERROR } from '@core/common/errors/domain-error';
+import { ADMIN_DOCUMENT_DATABASE_ERROR, PERMISSION_ERROR } from '@core/common/errors/domain-error';
 import type { AccountQueryService } from '@src/modules/account/queries/account.query.service';
 import type { AdminAiReportDetailQueryResult } from '@src/modules/lithography/admin-document-database.types';
 import type { AdminAiReportQueryService } from '@src/modules/lithography/queries/admin-ai-report.query.service';
 import {
   captureThrownError,
   createSuperAdminSession,
+  createUnauthorizedSessions,
 } from '../../../test/support/account/admin-user.fixture';
 import { GetAdminAiReportDetailUsecase } from './get-admin-ai-report-detail.usecase';
 
@@ -48,6 +49,19 @@ describe('GetAdminAiReportDetailUsecase', () => {
       .mockClear()
       .mockResolvedValue(new Map([[900002, '陈工程师']]));
   });
+
+  it.each(createUnauthorizedSessions().map(([label, session]) => ({ label, session })))(
+    '$label 时授权先行拒绝，报告查询与账户富集均不触发（要求 2）',
+    async ({ session }) => {
+      const error = (await captureThrownError(usecase.execute({ session, reportId: 550001 }))) as {
+        code?: string;
+      };
+
+      expect(error.code).toBe(PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS);
+      expect(adminAiReportQueryService.findDetailById).not.toHaveBeenCalled();
+      expect(accountQueryService.findNicknamesByAccountIds).not.toHaveBeenCalled();
+    },
+  );
 
   it('SUPER_ADMIN 读取详情：正文与工程师昵称可见，账号 ID 不外泄', async () => {
     const view = await usecase.execute({

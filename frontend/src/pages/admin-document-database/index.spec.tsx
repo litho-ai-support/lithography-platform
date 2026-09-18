@@ -194,4 +194,56 @@ describe('AdminDocumentDatabasePage（PR3 S3）', () => {
     });
     expect((await screen.findAllByText('RR-20260901-001')).length).toBeGreaterThan(0);
   });
+
+  // PR3 review S4-02：补齐计划要求的四态中「失败态」在实际 UI 的呈现与恢复
+  it('列表加载失败显示错误提示与重试入口，点击重试后恢复数据', async () => {
+    // 首笔维修申请取数失败（通用 Error 非 GraphQLIngressError → 命中 hook 兜底文案）；
+    // beforeEach 默认 resolve 兜住重试后的第二次取数
+    fetchRepairMock.mockRejectedValueOnce(new Error('network down'));
+    render(<AdminDocumentDatabasePage />);
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('tab', { name: '维修申请' }));
+    });
+
+    expect(await screen.findByText('维修申请列表加载失败，请稍后重试。')).toBeInTheDocument();
+    // AntD 两字按钮会在中间插入全角空格（「重 试」），用正则容忍
+    const retryButton = screen.getByRole('button', { name: /重\s*试/ });
+
+    await act(async () => {
+      fireEvent.click(retryButton);
+    });
+
+    await waitFor(() => expect(screen.getByText('RR-20260901-001')).toBeInTheDocument());
+    expect(screen.queryByText('维修申请列表加载失败，请稍后重试。')).not.toBeInTheDocument();
+  });
+
+  it('空态：筛选后无命中展示明确的筛选空文案（requirement 3）', async () => {
+    // beforeEach 已让 AI 报告返回空页（total 0）；输入筛选词后重载仍空，展示筛选空态。
+    render(<AdminDocumentDatabasePage />);
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('tab', { name: 'AI 报告' }));
+    });
+    await waitFor(() => expect(fetchReportsMock).toHaveBeenCalled());
+
+    const search = await screen.findByPlaceholderText('按关联申请编号搜索');
+    await act(async () => {
+      fireEvent.change(search, { target: { value: 'RR-不存在的编号' } });
+    });
+
+    // 防抖重载后仍无命中（reports 总返回空页），展示明确的筛选空态文案
+    expect(await screen.findByText('没有符合筛选条件的 AI 报告。')).toBeInTheDocument();
+    expect(screen.queryByText('AI 报告列表加载失败，请稍后重试。')).not.toBeInTheDocument();
+  });
+
+  it('统计加载失败给出可理解提示，且不阻断默认标签列表', async () => {
+    fetchStatsMock.mockRejectedValueOnce(new Error('stats down'));
+    render(<AdminDocumentDatabasePage />);
+
+    // 统计失败提示可见（带「列表功能不受影响」的口径说明）
+    expect(await screen.findByText(/统计加载失败：/)).toBeInTheDocument();
+    // 统计失败不影响列表：默认参考资料标签仍完成加载
+    expect(await screen.findByText('参考资料列表')).toBeInTheDocument();
+  });
 });

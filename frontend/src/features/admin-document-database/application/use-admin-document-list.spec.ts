@@ -107,4 +107,73 @@ describe('useAdminDocumentList', () => {
 
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it('enabled 由 false 翻转为 true 时补发首屏请求', async () => {
+    const fetcher = vi.fn().mockResolvedValue(makePage(['a'], 1, 1));
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useAdminDocumentList(fetcher, 'key-1', { enabled }),
+      { initialProps: { enabled: false } },
+    );
+
+    expect(fetcher).not.toHaveBeenCalled();
+    rerender({ enabled: true });
+
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+    expect(fetcher).toHaveBeenCalledWith(1, 10);
+  });
+
+  it('普通（非 GraphQL）错误失败：回落默认兜底文案', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('底层堆栈不应外泄'));
+    const { result } = renderHook(() => useAdminDocumentList(fetcher, 'key-1'));
+
+    await waitFor(() => expect(result.current.state.status).toBe('failed'));
+    if (result.current.state.status !== 'failed') throw new Error('unreachable');
+    expect(result.current.state.message).toBe('列表加载失败，请稍后重试。');
+  });
+
+  it('failureMessage 覆盖：普通错误采用调用方自定义文案', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('boom'));
+    const { result } = renderHook(() =>
+      useAdminDocumentList(fetcher, 'key-1', { failureMessage: '会话列表加载失败。' }),
+    );
+
+    await waitFor(() => expect(result.current.state.status).toBe('failed'));
+    if (result.current.state.status !== 'failed') throw new Error('unreachable');
+    expect(result.current.state.message).toBe('会话列表加载失败。');
+  });
+
+  it('晚到的旧页「失败」响应同样被 requestSeq 竞态防护丢弃（不覆盖新页 ready）', async () => {
+    let rejectPage2: (reason: unknown) => void = () => {};
+    const fetcher = vi.fn((page: number) => {
+      if (page === 2) {
+        return new Promise<ReturnType<typeof makePage<string>>>((_resolve, reject) => {
+          rejectPage2 = reject;
+        });
+      }
+      return Promise.resolve(makePage(['fresh-page-1'], 1, 20));
+    });
+    const { result, rerender } = renderHook(
+      ({ reloadKey }: { reloadKey: string }) => useAdminDocumentList(fetcher, reloadKey),
+      { initialProps: { reloadKey: 'filter-a' } },
+    );
+
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    // 翻到第 2 页（请求挂起），随后筛选变化触发回第 1 页并成功
+    await act(async () => {
+      result.current.goToPage(2);
+    });
+    rerender({ reloadKey: 'filter-b' });
+    await waitFor(() => expect(fetcher).toHaveBeenNthCalledWith(3, 1, 10));
+    if (result.current.state.status !== 'ready') throw new Error('unreachable');
+    expect(result.current.state.items).toEqual(['fresh-page-1']);
+
+    // 旧的第 2 页请求最后才失败：不得把已就绪的第 1 页打回 failed
+    await act(async () => {
+      rejectPage2(new Error('stale'));
+    });
+    expect(result.current.state.status).toBe('ready');
+    if (result.current.state.status !== 'ready') throw new Error('unreachable');
+    expect(result.current.state.items).toEqual(['fresh-page-1']);
+  });
 });

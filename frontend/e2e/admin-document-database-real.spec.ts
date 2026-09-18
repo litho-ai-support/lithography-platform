@@ -5,16 +5,17 @@
 //（920004 已软删不可见）、AI 会话 930001~930003（930002 进行中，含消息
 // 940006~940011，SYSTEM/USER/ASSISTANT/TOOL 三轮完整覆盖）、AI 报告
 // 950001~950002、参考资料 970001~970003（970002 含下载入口）。
-// 分页用例以本次运行唯一故障码（RUN_ID）自建 12 行跑满两页，清理经
-// deleteMyRepairRequest 逐 ID 软删（幂等成功后行对列表/详情不可见），
-// 共享开发库不做物理删除（与 reference-document-real.spec 同一安全边界）。
+// 分页用例以本次运行唯一故障码（RUN_ID）自建 12 行跑满两页，try 从首笔写入前
+// 开始、逐笔记录精确 ID，finally 经 deleteMyRepairRequest 逐 ID 幂等软删（清理失败
+// 归并进 primaryError 让测试转红），共享开发库不做物理删除（与
+// reference-document-real.spec 同一安全边界）。
 // 前提不满足（无本地后端 / 无 env / 无前端真实通道）时用例自动跳过，不阻塞。
 //
 // 断言作用域注意：Tabs 非激活面板保持挂载（仅隐藏），因此所有标签内
 // 定位一律收口到 .ant-tabs-tabpane-active（激活面板），Drawer 内容经
-// portal 渲染在面板外，单独用 .ant-drawer-content 收口。
+// portal 渲染在面板外，单独用 getByRole('dialog') 收口（AntD v6 无内容类）。
 
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 
 import {
   hasFrontendGraphQLEndpoint,
@@ -131,24 +132,46 @@ async function listRunRequestIds(env: Record<string, string>): Promise<number[]>
 }
 
 /**
- * 兜底清理（无条件逐 ID 幂等软删；失败仅告警不抛出，避免掩盖主链路原始错误；
- * 残留行已软删不可见，由库策略另行清理——与 reference-document-real.spec 同边界）。
+ * 分页夹具清理（S4-01）：删除目标取「本次记录的精确 ID」∩「按运行唯一故障码反查的
+ * 可见行」的并集——反查作为安全网，兜住创建中途抛错、ID 尚未记录但行已落库的情况。
+ * 逐条幂等软删（deleteMyRepairRequest）后再反查确认可见行为零。任一环节失败即
+ * 抛出，由用例 finally 归并到 primaryError——主断言通过而清理失败时让测试转红，
+ * 主断言已失败时保留原始失败原因不被掩盖。共享开发库只软删不物理删除
+ * （与 reference-document-real.spec 同边界）。
  */
-async function cleanupRunRequests(env: Record<string, string>): Promise<void> {
-  const ids = await listRunRequestIds(env);
+async function cleanupRunRequests(
+  env: Record<string, string>,
+  createdIds: readonly number[],
+): Promise<void> {
+  const failures: string[] = [];
+  const reverseFound = await listRunRequestIds(env);
+  const targets = Array.from(new Set([...createdIds, ...reverseFound]));
 
-  for (const id of ids) {
+  for (const id of targets) {
     try {
-      await realGraphqlCall(env, DELETE_MY_REQUEST_MUTATION, { id }, 'mock_customer_alpha');
+      const response = await realGraphqlCall(
+        env,
+        DELETE_MY_REQUEST_MUTATION,
+        { id },
+        'mock_customer_alpha',
+      );
+
+      if ((response.body as { errors?: unknown[] }).errors) {
+        failures.push(`自建申请 ${id} 软删返回 GraphQL 错误`);
+      }
     } catch (error) {
-      console.warn(`[e2e] 自建申请 ${id} 软删失败：${(error as Error).message}`);
+      failures.push(`自建申请 ${id} 软删异常：${(error as Error).message}`);
     }
   }
 
   const remaining = await listRunRequestIds(env);
 
   if (remaining.length > 0) {
-    console.warn(`[e2e] 清理后仍有可见自建行（需人工核查）：${remaining.join(',')}`);
+    failures.push(`清理后仍可见自建行：${remaining.join(',')}`);
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`E2E 自建数据清理失败——${failures.join('；')}`);
   }
 }
 
@@ -307,7 +330,8 @@ test.describe('real backend admin document database', () => {
     ).toBeVisible();
     await activePane(page).getByRole('combobox').hover();
     await activePane(page).locator('.ant-select-clear').click();
-    await expect(activePane(page).getByText('进行中', { exact: true })).toBeVisible();
+    // 清空状态筛选：「进行中」会话重新出现（共享库可能有多条 ACTIVE，取首行断言语义）
+    await expect(activePane(page).getByText('进行中', { exact: true }).first()).toBeVisible();
   });
 
   // 计划表 S4.5 分页：共享库 seed 行数不足一页，用运行唯一故障码自建 12 行
@@ -316,7 +340,7 @@ test.describe('real backend admin document database', () => {
     test.setTimeout(120_000);
     const env = readBackendEnv();
 
-    // 夹具准备：公开 equipmentModels 取型号；客户甲真实创建 12 条自建申请
+    // 只读夹具准备：公开 equipmentModels 取型号（无写入，留在 try 外）
     const modelsResponse = await realGraphqlCall(
       env,
       EQUIPMENT_MODELS_QUERY,
@@ -328,23 +352,32 @@ test.describe('real backend admin document database', () => {
     const modelId = models?.[0]?.id;
     expect(modelId).toBeDefined();
 
-    for (let index = 0; index < RUN_REQUEST_COUNT; index += 1) {
-      const created = await realGraphqlCall(
-        env,
-        CREATE_REQUEST_MUTATION,
-        {
-          input: {
-            equipmentModelId: modelId,
-            errorCode: RUN_ERROR_CODE,
-            faultDescription: `PR3 S4 分页夹具 #${index + 1}`,
-          },
-        },
-        'mock_customer_alpha',
-      );
-      expect((created.body as { errors?: unknown[] }).errors).toBeUndefined();
-    }
+    const createdIds: number[] = [];
+    let primaryError: unknown = null;
 
+    // S4-01：try 覆盖「首笔写入 → 页面断言」全程，任何一步失败都进入统一 finally 清理
     try {
+      for (let index = 0; index < RUN_REQUEST_COUNT; index += 1) {
+        const created = await realGraphqlCall(
+          env,
+          CREATE_REQUEST_MUTATION,
+          {
+            input: {
+              equipmentModelId: modelId,
+              errorCode: RUN_ERROR_CODE,
+              faultDescription: `PR3 S4 分页夹具 #${index + 1}`,
+            },
+          },
+          'mock_customer_alpha',
+        );
+        expect((created.body as { errors?: unknown[] }).errors).toBeUndefined();
+        const createdId = (created.body as { data?: { createRepairRequest?: { id: number } } }).data
+          ?.createRepairRequest?.id;
+        // 创建成功即记录精确 ID（Playwright expect 无 toBeTypeOf，用 toBeGreaterThan 断正整数）
+        expect(createdId).toBeGreaterThan(0);
+        createdIds.push(createdId as number);
+      }
+
       await loginAs(page, env, 'mock_super_admin', /\/admin$/);
       await page.goto(PAGE_PATH);
       await page.getByRole('tab', { name: '维修申请' }).click();
@@ -361,8 +394,21 @@ test.describe('real backend admin document database', () => {
       await expect(activePane(page).locator('.ant-pagination-item-2')).toHaveClass(
         /ant-pagination-item-active/,
       );
+    } catch (error) {
+      primaryError = error;
     } finally {
-      await cleanupRunRequests(env);
+      try {
+        await cleanupRunRequests(env, createdIds);
+      } catch (cleanupError) {
+        // 主断言已通过时清理失败才让测试转红；否则保留原始失败原因不被掩盖
+        if (primaryError === null) {
+          primaryError = cleanupError;
+        }
+      }
+    }
+
+    if (primaryError !== null) {
+      throw primaryError;
     }
   });
 
@@ -404,5 +450,43 @@ test.describe('real backend admin document database', () => {
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
     expect(horizontalOverflow).toBeLessThanOrEqual(0);
+  });
+});
+
+// 授权矩阵的角色边界补强：ENGINEER 直调管理员只读 Query 同样被拒（与后端
+// test/03-roles-guard 及 usecase 层权限单测呼应的集成侧口径）。这是纯后端契约断言，
+// 不依赖前端 dev server，故单列一个 describe，仅以「后端可用 + 可登录」为前置。
+test.describe('real backend admin document database - authorization', () => {
+  test.beforeEach(async () => {
+    const env = readBackendEnvOrNull();
+    test.skip(
+      env === null,
+      'backend/env/.env.development 缺失（本地文件，不入库），跳过真实后端用例',
+    );
+    test.skip(
+      !(await isRealBackendAvailable(env as Record<string, string>)),
+      '本地后端不可用或不可登录，跳过真实后端用例',
+    );
+  });
+
+  test('engineer 越权直调管理员维修申请 Query 返回 FORBIDDEN', async () => {
+    const env = readBackendEnv();
+
+    const denied = await realGraphqlCall(
+      env,
+      ADMIN_REPAIR_LIST_QUERY,
+      { pagination: { mode: 'OFFSET', page: 1, pageSize: 10, withTotal: true } },
+      'mock_engineer_chen',
+    );
+    const errors = (denied.body as { errors?: Array<{ extensions?: { code?: string } }> }).errors;
+    expect(errors?.[0]?.extensions?.code).toBe('FORBIDDEN');
+  });
+
+  test('engineer 越权直调管理员统计 Query 返回 FORBIDDEN', async () => {
+    const env = readBackendEnv();
+
+    const denied = await realGraphqlCall(env, STATS_QUERY, {}, 'mock_engineer_chen');
+    const errors = (denied.body as { errors?: Array<{ extensions?: { code?: string } }> }).errors;
+    expect(errors?.[0]?.extensions?.code).toBe('FORBIDDEN');
   });
 });

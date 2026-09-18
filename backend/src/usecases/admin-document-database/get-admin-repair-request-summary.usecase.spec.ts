@@ -1,12 +1,13 @@
 // src/usecases/admin-document-database/get-admin-repair-request-summary.usecase.spec.ts
 
-import { ADMIN_DOCUMENT_DATABASE_ERROR } from '@core/common/errors/domain-error';
+import { ADMIN_DOCUMENT_DATABASE_ERROR, PERMISSION_ERROR } from '@core/common/errors/domain-error';
 import type { AccountQueryService } from '@src/modules/account/queries/account.query.service';
 import type { AdminRepairRequestSummaryQueryResult } from '@src/modules/lithography/admin-document-database.types';
 import type { AdminRepairRequestQueryService } from '@src/modules/lithography/queries/admin-repair-request.query.service';
 import {
   captureThrownError,
   createSuperAdminSession,
+  createUnauthorizedSessions,
 } from '../../../test/support/account/admin-user.fixture';
 import { GetAdminRepairRequestSummaryUsecase } from './get-admin-repair-request-summary.usecase';
 
@@ -55,6 +56,19 @@ describe('GetAdminRepairRequestSummaryUsecase', () => {
       .mockClear()
       .mockResolvedValue(new Map([[900001, { nickname: '客户甲', companyName: '甲公司' }]]));
   });
+
+  it.each(createUnauthorizedSessions().map(([label, session]) => ({ label, session })))(
+    '$label 时授权先行拒绝，摘要查询与账户富集均不触发（要求 2）',
+    async ({ session }) => {
+      const error = (await captureThrownError(usecase.execute({ session, requestId: 880001 }))) as {
+        code?: string;
+      };
+
+      expect(error.code).toBe(PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS);
+      expect(adminRepairRequestQueryService.findSummaryById).not.toHaveBeenCalled();
+      expect(accountQueryService.findAccountDisplayInfosByAccountIds).not.toHaveBeenCalled();
+    },
+  );
 
   it('SUPER_ADMIN 读取摘要：富集展示昵称且账号 ID 不外泄', async () => {
     const view = await usecase.execute({
