@@ -158,4 +158,5 @@ Before applying multiple rule documents, read `docs/common/rule-precedence.rules
 - `graphql-error-contract-current.md`: global GraphQL error/auth runtime contract for every interface
 - `auth-session-current.md`: current auth / session / identity contract snapshot
 - `account-write-current.md`: current account / userInfo write contract snapshot
+- `admin-document-database-graphql-current.md`: current admin Document Database read-only GraphQL aggregation contract snapshot (PR3, SUPER_ADMIN only)
 - `plans/README.md`: planning directory usage, reading order and current plan index
