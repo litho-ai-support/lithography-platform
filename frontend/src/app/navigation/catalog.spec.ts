@@ -18,10 +18,15 @@ describe('navigation catalog（S1 菜单表对账）', () => {
     expect(paths).toEqual(['/', '/engineer/repair-requests', '/reference-documents']);
   });
 
-  it('SUPER_ADMIN 仅见首页、参考资料、用户管理（文档数据库待 PR3 真实页面交付再加入）', () => {
+  it('SUPER_ADMIN 见首页、参考资料、用户管理与文档数据库（PR3 S3）', () => {
     const paths = getNavigationItems('prod', 'SUPER_ADMIN').map((item) => item.path);
 
-    expect(paths).toEqual(['/', '/reference-documents', '/admin/users']);
+    expect(paths).toEqual([
+      '/',
+      '/reference-documents',
+      '/admin/users',
+      '/admin/document-database',
+    ]);
   });
 
   it('匿名只见不受角色限制的入口', () => {

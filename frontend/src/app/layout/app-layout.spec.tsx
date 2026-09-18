@@ -115,14 +115,14 @@ describe('AppLayout（S3 壳层）', () => {
     expect(screen.queryByRole('link', { name: '参考资料' })).not.toBeInTheDocument();
   });
 
-  it('SUPER_ADMIN 仅见首页、参考资料、用户管理（文档数据库待 PR3 加入）', () => {
+  it('SUPER_ADMIN 见首页、参考资料、用户管理与文档数据库（PR3 S3）', () => {
     useAuthSessionMock.mockReturnValue(sessionFor('SUPER_ADMIN'));
     renderLayout('/admin/users');
 
     expect(screen.getByRole('link', { name: '首页' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '用户管理' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '参考资料' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: '文档数据库' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '文档数据库' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '发起申请' })).not.toBeInTheDocument();
   });
 

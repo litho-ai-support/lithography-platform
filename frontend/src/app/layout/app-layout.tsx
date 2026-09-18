@@ -43,6 +43,7 @@ const ROLE_LABELS: Record<AuthSessionRole, string> = {
 //（生产不可见）；未匹配项回落通用图标——折叠态必须始终有可见目标，
 // 避免后续新增菜单漏配图标时留下空白热点（外审 R2 P2-01）。
 const NAV_ITEM_ICONS: Record<string, ReactNode> = {
+  'admin-document-database': <NavListIcon />,
   'admin-users': <NavUserIcon />,
   'customer-repair-request-new': <NavChatIcon />,
   'customer-repair-requests': <NavListIcon />,
