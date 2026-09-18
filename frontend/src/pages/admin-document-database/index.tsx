@@ -24,7 +24,8 @@ import { StatCard } from '@/shared/ui/stat-card';
  *   features/reference-document 公开列表组件（含筛选/分页/四态与
  *   仅 SUPER_ADMIN 的上传、编辑、软删除能力），不制造平行功能；
  * - 统计口径与默认列表过滤一致（不含软删除），来自后端聚合统计查询；
- * - 页面为 SUPER_ADMIN 专用只读视图，无任何写操作控件。
+ * - 本页新增的管理员聚合 Query（维修申请 / AI 会话 / AI 报告）全为只读；仅参考资料标签
+ *   复用既有、只向 SUPER_ADMIN 开放的管理能力（上传 / 编辑 / 软删），故页面整体非绝对只读。
  */
 export function AdminDocumentDatabasePage() {
   const stats = useAdminDocumentStats();
@@ -32,7 +33,7 @@ export function AdminDocumentDatabasePage() {
   return (
     <div className="page-stack">
       <PageHeader
-        description="面向 SUPER_ADMIN 的只读数据聚合视图：参考资料、维修申请、AI 会话与 AI 报告四类真实数据，各标签独立分页筛选。"
+        description="面向 SUPER_ADMIN 的数据聚合视图：维修申请、AI 会话、AI 报告为只读聚合，参考资料标签复用既有管理能力；各标签独立分页筛选。"
         title="文档数据库"
       />
 

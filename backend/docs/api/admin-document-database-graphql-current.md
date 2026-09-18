@@ -91,3 +91,5 @@ Global error contract: 遵循 `docs/api/graphql-error-contract-current.md`；本
 | 目标（申请摘要 / 报告详情）不存在或已软删（统一，防探测不泄露删除状态） | `ADMIN_DOCUMENT_DATABASE_NOT_FOUND` | `NOT_FOUND` | 404 |
 | 非 SUPER_ADMIN 直调 | 既有权限契约 | `FORBIDDEN` | 403 |
 | 未认证 | 既有认证契约 | `UNAUTHENTICATED` | 401 |
+
+> 注：表中 HTTP 列为「语义上的 REST 等价状态」，**不可作为 GraphQL 断言依据**：GraphQL over HTTP 通常对业务/认证/授权失败仍返回 **HTTP 200** 并在 body 携带 `errors`。调用方判定成功/失败必须以 `errors[0].extensions.code`（如 `BAD_USER_INPUT` / `NOT_FOUND` / `FORBIDDEN` / `UNAUTHENTICATED`）为准，不能仅凭 HTTP 状态码。
