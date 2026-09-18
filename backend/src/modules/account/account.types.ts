@@ -300,3 +300,99 @@ export interface AccountSessionAuthoritySnapshot {
     readonly metaDigest: ReadonlyArray<IdentityTypeEnum> | null;
   } | null;
 }
+
+/**
+ * 当前用户账号设置（自助场景）的**内部窄事实快照**：由 account QueryService 单语义读取、
+ * 完成三源角色收敛与双字段状态一致性判定后产出，仅供 `GetMyAccountSettingsUsecase` 消费，
+ * 不进入任何 GraphQL DTO。
+ *
+ * 为什么不直接把 `MyAccountSettingsView` 交给 Usecase：本快照刻意比对外 View 多带一个
+ * `accountId`——它是 Session 已认证的可信账号主键，只用于 Usecase 侧的结构化日志定位
+ * （写入 `DomainError.cause` / PinoLogger），**绝不外泄到响应**。把「携带 accountId 的内部事实」
+ * 与「不含 accountId 的公开读模型」拆成两个类型，使「不暴露目标 accountId」成为编译期结构约束
+ * 而非口头纪律：公开 View 上根本不存在该字段，adapter 无从映射。
+ *
+ * 字段口径与 `AdminUserView` 同源但**独立命名**（不复用 admin
+ * 命名的 View）：`role` 是三源收敛后的单值只读角色；`status` 是账号真实状态
+ * （`base_user_account.status`，已与 `base_user_info.user_state` 双写一致，不一致即失败关闭，
+ * 见 `findMyAccountSettingsSnapshot()`）；`contactEmail` 映射 `base_user_info.email`（联系邮箱），
+ * 与 `loginEmail`（`base_user_account.login_email`，登录凭据）严格区分。
+ *
+ * 这是普通数据（plain object），不是 ORM Entity / QueryBuilder
+ * （`queryservice.rules.md`：QueryService 对上游只返回稳定数据）。
+ */
+export interface MyAccountSettingsSnapshot {
+  readonly accountId: number;
+  readonly loginName: string | null;
+  readonly loginEmail: string | null;
+  readonly nickname: string;
+  readonly companyName: string | null;
+  readonly phone: string | null;
+  readonly contactEmail: string | null;
+  readonly role: IdentityTypeEnum;
+  readonly status: AccountStatus;
+  readonly updatedAt: Date;
+}
+
+/**
+ * 当前用户账号设置（自助场景）的**稳定公开读视图**：由 `GetMyAccountSettingsUsecase` 从
+ * `MyAccountSettingsSnapshot` 剥离内部字段后产出，Usecase 原样返回，adapter 薄映射为 GraphQL DTO。
+ *
+ * 服务 `myAccountSettings` 只读 Query（P1，契约见 `docs/api/account-write-current.md`）。该 Query 无任何输入
+ * 参数，目标账号只能来自已认证 Session，因此本 View **刻意不含 `accountId`**（负责人明确要求
+ * 「不暴露目标 accountId」；客户端已从登录结果获知自己的 accountId，无需由本视图回显）。
+ *
+ * `role` / `status` 均为**只读展示字段**：本功能不提供任何角色或状态写入入口，前端不渲染可编辑
+ * 控件，后端仍是权限真源。
+ *
+ * 严禁出现：`accountId`、`loginPassword` 或任何密码哈希、`metaDigest`、完整 `accessGroup`、
+ * Access/Refresh Token、`identityHint`、`userState`、任何内部诊断字段。映射点使用逐字段显式赋值，
+ * 不使用 `{ ...snapshot }` 展开，因此新增敏感列不会自动流入 View。
+ */
+export interface MyAccountSettingsView {
+  readonly loginName: string | null;
+  readonly loginEmail: string | null;
+  readonly nickname: string;
+  readonly companyName: string | null;
+  readonly phone: string | null;
+  readonly contactEmail: string | null;
+  readonly role: IdentityTypeEnum;
+  readonly status: AccountStatus;
+  readonly updatedAt: Date;
+}
+
+/**
+ * 账号设置更新（P2）锁内读取的**纯当前值事实**：由 `AccountService.lockMyAccountSettingsFacts()`
+ * 在事务内对 account 行取悲观锁后读取，仅供 `UpdateMyAccountSettingsUsecase` 做合并、
+ * 「至少保留一个登录凭据」判定与同值抑制，不进入任何 GraphQL DTO。
+ *
+ * 与 `MyAccountSettingsSnapshot` 的差异：只含六个**可写字段的当前值**，刻意不含
+ * `role` / `status` / `updatedAt` ——它们不参与合并裁决，写后校验由事务内回读
+ * `findMyAccountSettingsSnapshot()`（三源收敛 + 双状态判定）承担，本事实不重复实现。
+ *
+ * 这是普通数据（plain object），不是 ORM Entity / QueryBuilder
+ * （`queryservice.rules.md`：modules 对上游只返回稳定数据）。
+ */
+export interface MyAccountSettingsUpdateFacts {
+  readonly accountId: number;
+  readonly loginName: string | null;
+  readonly loginEmail: string | null;
+  readonly nickname: string;
+  readonly companyName: string | null;
+  readonly phone: string | null;
+  readonly contactEmail: string | null;
+}
+
+/**
+ * 自助凭据窄写入（P2）的稳定事实结果（modules service → usecase），
+ * 依据与 `AccountCreateOutcome` 相同的「返回事实对象而不抛错」precedent。
+ *
+ * - `UPDATED`：两列已按传入值写入；
+ * - `CREDENTIAL_CONFLICT`：并发竞争下命中 `uk_login_name` / `uk_login_email`。
+ *   唯一索引冲突无法可靠告知具体列（索引名只在驱动错误文本里，向上透出等于泄露存储细节），
+ *   因此刻意不带冲突维度字段；此时用例侧预检查已经通过，友好提示只能是通用文案
+ *   （「无法识别具体列时返回通用凭据冲突」）。驱动错误、SQL 与索引名一律不上行
+ *   （仅以 `DomainError.cause` 在 modules 内部保留）。
+ */
+export type MyAccountCredentialWriteOutcome =
+  { readonly kind: 'UPDATED' } | { readonly kind: 'CREDENTIAL_CONFLICT' };

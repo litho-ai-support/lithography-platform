@@ -10,26 +10,30 @@ import {
   PERMISSION_ERROR,
 } from '@core/common/errors/domain-error';
 import { PasswordPolicyService } from '@core/common/password/password-policy.service';
-import type { AdminUserStatusFacts, AdminUserView } from '@src/modules/account/account.types';
+import type { AdminUserView } from '@src/modules/account/account.types';
 import { assertWritableAdminUserTargetRole } from './admin-user-permission';
 import { AccountService } from '@src/modules/account/base/services/account.service';
 import { AdminUserQueryService } from '@src/modules/account/queries/admin-user.query.service';
 import { PinoLogger } from 'nestjs-pino';
 
 /**
- * 管理员用户写用例（P0-4 / P0-5 / P0-6）的共享执行支撑：
+ * account 写用例（P0-4 / P0-5 / P0-6 管理员链路 + P2 / P3 自助链路）的共享执行支撑：
  * - `loadWritableAdminUserTarget()`：事务内锁定目标 + 读取收敛 View + 目标角色保护，
  *   写用例共用的单一实现（沿用 `admin-user-permission.ts` 在 P0-1 确立的「同一裁决
- * - `assertAdminUserPasswordPolicy()`：管理员创建初始密码与管理员重置密码共用的
- *   密码策略校验（P0-6 起入本文件，避免第二份策略断言）；
- * - `logAdminUserWriteFailure()`：P0-4 / P0-5 / P0-6 写用例的失败日志，脱敏与结构化诊断
+ * - `assertAdminUserPasswordPolicy()`：管理员创建初始密码、管理员重置密码与自助修改密码
+ *   共用的密码策略校验（P0-6 起入本文件，避免第二份策略断言）；
+ * - `logAdminUserWriteFailure()`：P0-4 / P0-5 / P0-6 与 P2 / P3 写用例的失败日志，
+ *   脱敏与结构化诊断；warn 分流经可选 `warnErrorCodes` 按调用方注入（缺省为管理员四码，
+ *   既有管理员调用方行为不变），自助链路传入各自的 MY_ACCOUNT 预期业务码；
+ *   `accountId` 为可选定位字段（管理员链路在 `cause.diagnostic` 携带、不传本参数；
+ *   自助链路传 Session 账号 ID）。
  *
  * `extractDriverErrorCode()` 与 `errorMessage()` 两个取值 helper。「按阶段抑制 `message`」
  * 已于 P0-6 并入共享 helper——`logAdminUserWriteFailure()` 新增可选 `suppressMessagePhases`
- * 参数（缺省不抑制，既有调用方行为不变），P0-6 写哈希阶段的失败日志经类型化常量
+ * 参数（缺省不抑制，既有调用方行为不变），P0-6 与 P3 写哈希阶段的失败日志经类型化常量
  * `SUPPRESSED_MESSAGE_PHASES` 传入抑制清单。`AdminCreateUserUsecase.logCreateFailure()`
  * 仍保留「`UPDATE_PASSWORD_HASH` 阶段抑制 `message`」与「`CREDENTIAL_CONFLICT` 记 warn」
- * 两个创建路径特有分支，尚未合并的只剩后者——合并需给共享 helper 增加按错误码分流的
+ * 两个创建路径特有分支，后者现已可由 `warnErrorCodes` 表达，迁移属独立清理项不随本轮。
  *
  * `loadWritableAdminUserTarget()` 先取 `base_user_account` 的悲观行锁，各用例随后才写
  * `base_user_info`；依据是 `usecase-write-flow-boundaries.rules.md` 第 78-79 行「usecase 先开启
@@ -146,39 +150,67 @@ export async function loadWritableAdminUserTarget(params: {
 }
 
 /**
+ * 管理员写用例的预期业务拒绝码缺省清单：目标不存在 / 权限不足 / 状态转换不允许 /
+ * 重置密码状态边界不允许。命中时记 warn（预期业务结果而非系统故障），且不记录
+ * 密码 / 哈希 / Token / 角色原值。自助链路（P2 / P3）不使用本清单，必须经
+ * `warnErrorCodes` 显式传入各自的 MY_ACCOUNT 业务码，避免把管理员专用码的语义
+ * 带进自助日志分流。
+ */
+const ADMIN_USER_WRITE_WARN_ERROR_CODES: ReadonlyArray<string> = [
+  ADMIN_USER_ERROR.TARGET_NOT_FOUND,
+  PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS,
+  ADMIN_USER_ERROR.STATUS_TRANSITION_NOT_ALLOWED,
+  ADMIN_USER_ERROR.PASSWORD_RESET_TARGET_STATUS_NOT_ALLOWED,
+];
+
+/**
+ * account 写用例（管理员 P0-4 / P0-5 / P0-6 与自助 P2 / P3）失败的统一日志出口：
+ * 单一实现覆盖两条链路，warn 分流与定位字段只经参数注入，不在本函数内按调用方分支。
  *
  * - 非领域异常：记录异常类型名、驱动错误码与 `message`，供定位连接中断 / 死锁等
- *   基础设施故障；P0-4 / P0-5 写流程的语句不含密码派生物，记录 `message` 不引入敏感数据。
- *   **P0-6 例外**：管理员重置密码的写哈希阶段（`WRITE_PASSWORD_HASH`）的 UPDATE 语句
- *   绑定参数嵌新密码派生哈希，该阶段必须经 `suppressMessagePhases` 抑制 `message`
- *   （与 `AdminCreateUserUsecase.logCreateFailure()` 对 `UPDATE_PASSWORD_HASH` 阶段的
- *   纵深防御口径一致）；
- *   不是系统故障；
- * - 其余领域异常：记录错误码、阶段名与结构化 `cause.diagnostic`（如 `accountId` +
- *   `reason`），`cause` 为 `Error` 实例时丢弃 `message`，只保留类型名与驱动错误码。
+ *   基础设施故障；写流程语句不含密码派生物时记录 `message` 不引入敏感数据。
+ *   **写哈希阶段例外**：管理员重置密码（`WRITE_PASSWORD_HASH`）与自助修改密码
+ *   （`UPDATE_PASSWORD_HASH`）的 UPDATE 语句绑定参数嵌密码派生哈希，这些阶段必须经
+ *   `suppressMessagePhases` 抑制 `message`（与 `AdminCreateUserUsecase.logCreateFailure()`
+ *   对 `UPDATE_PASSWORD_HASH` 阶段的纵深防御口径一致）；
+ * - 预期业务拒绝（`warnErrorCodes` 命中）：记 warn 并返回，属预期业务结果而非系统故障；
+ * - 其余领域异常：记录错误码、阶段名与结构化 `cause.diagnostic`（如管理员链路的
+ *   `accountId` + `reason`），`cause` 为 `Error` 实例时丢弃 `message`，只保留类型名
+ *   与驱动错误码。
  *
  * @param phase 事务内阶段标记（各用例自己的联合类型成员或 `'TRANSACTION_BOUNDARY'`），
  *   只用于服务端日志定位，不出现在任何对外响应中
- * @param summary 动作摘要（如「管理员编辑用户资料」），用于拼接日志消息
+ * @param summary 动作摘要（如「管理员编辑用户资料」「账号设置更新」），用于拼接日志消息
+ * @param accountId 可选目标账号 ID，注入各日志条目便于定位。管理员链路刻意不传
+ *   （accountId 已在 `cause.diagnostic` 携带，避免双写）；自助链路传 Session 账号 ID。
+ *   缺省时 Pino 丢弃 undefined 字段，既有管理员日志形状不变。
  * @param suppressMessagePhases 可选：命中这些阶段时抑制非领域异常的 `message` 字段
  *   （错误类型名与驱动错误码仍保留）。仅供写哈希等语句参数含密码派生物的阶段使用；
  *   缺省不抑制，既有 P0-4 / P0-5 调用者行为不变。
+ * @param warnErrorCodes 可选：记 warn 的领域错误码清单（预期业务拒绝），缺省
+ *   `ADMIN_USER_WRITE_WARN_ERROR_CODES`（管理员四码，既有调用方行为不变）；自助链路
+ *   必须显式传入各自的 MY_ACCOUNT 业务码。
  */
 export function logAdminUserWriteFailure(params: {
   readonly logger: PinoLogger;
   readonly phase: string;
   readonly error: unknown;
   readonly summary: string;
+  readonly accountId?: number;
   readonly suppressMessagePhases?: ReadonlyArray<string>;
+  readonly warnErrorCodes?: ReadonlyArray<string>;
 }): void {
-  const { logger, phase, error, summary, suppressMessagePhases } = params;
+  const { logger, phase, error, summary, accountId, suppressMessagePhases, warnErrorCodes } =
+    params;
   const suppressMessage = suppressMessagePhases?.includes(phase) ?? false;
+  const warnCodes = warnErrorCodes ?? ADMIN_USER_WRITE_WARN_ERROR_CODES;
 
   if (!isDomainError(error)) {
     const errorName = error instanceof Error ? error.name : 'UNKNOWN';
     logger.error(
       {
         reason: 'UNEXPECTED',
+        accountId,
         phase,
         errorName,
         driverCode: extractDriverErrorCode(error),
@@ -189,16 +221,8 @@ export function logAdminUserWriteFailure(params: {
     return;
   }
 
-  if (
-    error.code === ADMIN_USER_ERROR.TARGET_NOT_FOUND ||
-    error.code === PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS ||
-    // 或双字段不一致，属预期业务结果而非系统故障，与 CREDENTIAL_CONFLICT 记 warn 同口径
-    error.code === ADMIN_USER_ERROR.STATUS_TRANSITION_NOT_ALLOWED ||
-    // DELETED 或双字段不一致的账号重置密码，同为预期业务结果（warn），
-    // 不记录密码 / 哈希 / Token / 角色原值
-    error.code === ADMIN_USER_ERROR.PASSWORD_RESET_TARGET_STATUS_NOT_ALLOWED
-  ) {
-    logger.warn({ errorCode: error.code, phase }, `${summary}被拒绝，已按业务结果返回`);
+  if (warnCodes.includes(error.code)) {
+    logger.warn({ accountId, errorCode: error.code, phase }, `${summary}被拒绝，已按业务结果返回`);
     return;
   }
 
@@ -206,6 +230,7 @@ export function logAdminUserWriteFailure(params: {
   const diagnostic = cause instanceof Error || cause === undefined ? undefined : cause;
   logger.error(
     {
+      accountId,
       errorCode: error.code,
       phase,
       diagnostic,
@@ -219,7 +244,8 @@ export function logAdminUserWriteFailure(params: {
 /**
  * 管理员写用例的密码策略校验：复用全仓单一的 `PasswordPolicyService`，不另写强度规则。
  * 管理员创建普通用户（P0-3，初始密码）与管理员重置密码（P0-6，新密码）共用本实现，
- * 不各写一份。
+ * 不各写一份；P3 起自助修改密码的新密码同样经本断言校验（错误码与文案口径必须与
+ * 管理员链路保持一致，避免第二份策略断言），本函数不含任何管理员目标逻辑。
  *
  * 失败抛 `INPUT_NORMALIZE_ERROR.INVALID_TEXT`（未入过滤器映射表 → 默认 `BAD_USER_INPUT`），
  * **不使用** `CreateAccountUsecase` 的 `AUTH_ERROR.INVALID_PASSWORD`：后者映射为
@@ -250,16 +276,4 @@ export function assertAdminUserPasswordPolicy(params: {
       `${params.fieldName}不符合安全要求: ${validation.errors.join(', ')}`,
     );
   }
-}
-
-/**
- * 是两个不同枚举类型（成员字符串当前逐字相同），一致性按字符串值显式比对。
- *
- * 消费方：`AdminSetUserStatusUsecase` 的状态转换矩阵（双字段不一致 ⇒ 拒绝启用/停用）
- * 与 `AdminResetUserPasswordUsecase` 的目标状态边界（双字段不一致 ⇒ 拒绝重置密码）。
- * 两处口径必须永远一致，故单一实现，不得各写一份；将来任一枚举扩容导致成员不再
- * 逐字相同时，本判定会自然转为「不一致」失败关闭。
- */
-export function isDualStatusFieldsConsistent(facts: AdminUserStatusFacts): boolean {
-  return String(facts.accountStatus) === String(facts.userState);
 }

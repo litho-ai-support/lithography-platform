@@ -10,6 +10,7 @@ import {
 
 import { AppLayout } from '@/app/layout';
 
+import { AccountSettingsPage } from '@/pages/account-settings';
 import { AdminPage } from '@/pages/admin';
 import { AdminUsersPage } from '@/pages/admin-users';
 import {
@@ -113,6 +114,14 @@ const router = createBrowserRouter([
         element: <AdminUsersPage />,
         loader: protectedRouteLoader,
         path: 'admin/users',
+      },
+      {
+        // 账号设置：对全部登录角色开放（导航目录同口径）；角色治理复用
+        // protectedRouteLoader + auth-session 角色路径表的 /account 根路径，
+        // 不在本文件另立角色判断
+        element: <AccountSettingsPage />,
+        loader: protectedRouteLoader,
+        path: 'account/settings',
       },
       {
         element: <EngineerPage />,

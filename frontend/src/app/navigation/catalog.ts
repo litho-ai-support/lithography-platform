@@ -8,8 +8,8 @@ import type { NavigationItem } from './types';
 
 // PR1 S3 角色菜单：落点与 auth-session 角色路径表逐项对账
 // （docs/plan/薛-PR1-S1现状与设计映射-20260914.md 第 2 节）。
-// 「AI 故障诊断」「账号设置」尚无正式路由，按负责人红线（不得保留无效菜单/死链接）
-// 暂不进入目录：AI 诊断待路由 owner 落定后加入；账号设置由 PR2 随页面交付加入。
+// 「AI 故障诊断」尚无正式路由，按负责人红线（不得保留无效菜单/死链接）
+// 暂不进入目录：AI 诊断待路由 owner 落定后加入。
 const STABLE_NAVIGATION_ITEMS: NavigationItem[] = [
   {
     description: '按角色进入各自的工作台首页。',
@@ -66,6 +66,16 @@ const STABLE_NAVIGATION_ITEMS: NavigationItem[] = [
     path: '/admin/users',
     roles: ['SUPER_ADMIN'],
     tags: ['admin', 'users', 'management', '管理员', '用户管理'],
+  },
+  {
+    description: '维护登录凭据、基础资料与登录密码；修改密码成功后需重新登录。',
+    id: 'account-settings',
+    kind: 'stable',
+    label: '账号设置',
+    // 稳定入口置底（设置类惯例）；全部登录角色可见（/account 根路径对三种角色同时放行）
+    path: '/account/settings',
+    roles: ['CUSTOMER', 'ENGINEER', 'SUPER_ADMIN'],
+    tags: ['account', 'settings', 'profile', 'password', '账号设置', '资料', '密码'],
   },
   // 「文档数据库」菜单待 PR3 交付真实聚合页后再加入（审查裁定：当前 /admin 渲染
   // 的是管理员入口面板，标作「文档数据库」会形成误导性占位入口，违反
