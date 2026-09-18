@@ -5,19 +5,20 @@ import type { App } from 'supertest/types';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ApiModule } from '@src/bootstraps/api/api.module';
 import { EquipmentModelEntity } from '@src/modules/lithography/entities/equipment-model.entity';
-import { ReferenceDocumentEntity } from '@src/modules/lithography/entities/reference-document.entity';
 import { EngineerResponseEntity } from '@src/modules/lithography/entities/engineer-response.entity';
 import { RepairRequestEntity } from '@src/modules/lithography/entities/repair-request.entity';
 import { AiConversationEntity } from '@src/modules/lithography/entities/ai-conversation.entity';
 import { AiMessageEntity } from '@src/modules/lithography/entities/ai-message.entity';
 import { AiReportEntity } from '@src/modules/lithography/entities/ai-report.entity';
+import { AccountEntity } from '@src/modules/account/base/entities/account.entity';
+import { UserInfoEntity } from '@src/modules/account/base/entities/user-info.entity';
 
 import { AiConversationStatus, AiMessageRole } from '@app-types/models/ai-conversation.types';
 import { CreateAccountUsecase } from '@src/usecases/account/create-account.usecase';
-import { DataSource } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 import { initGraphQLSchema } from '../../src/adapters/api/graphql/schema/schema.init';
 import { getAccountIdByLoginName, login, postGql } from '../utils/e2e-graphql-utils';
-import { cleanupTestAccounts, seedTestAccounts, testAccountsConfig } from '../utils/test-accounts';
+import { seedTestAccounts, testAccountsConfig } from '../utils/test-accounts';
 
 /**
  * PR3 S4：管理员文档数据库只读聚合 E2E（真实 MySQL + 真实 GraphQL 链路）。
@@ -42,6 +43,44 @@ describe('AdminDocumentDatabase (e2e)', () => {
   const CONVERSATION_A = 301;
   const TOTAL_MESSAGES = 200; // 100 轮 × 每轮 USER + ASSISTANT
 
+  // 本用例独占的固定主键/标识：清理只针对这些，不整表删除业务数据（0918 决策 #3）。
+  const FIXTURE_EQUIPMENT_MODEL_IDS = [51];
+  const FIXTURE_REQUEST_IDS = [211, 212, 213];
+  const FIXTURE_CONVERSATION_IDS = [301, 302];
+  const FIXTURE_REPORT_IDS = [401, 402];
+  const FIXTURE_ACCOUNT_LOGIN_NAMES = [
+    testAccountsConfig.admin.loginName, // testadmin
+    testAccountsConfig.staff.loginName, // teststaff
+    testAccountsConfig.guestPrimary.loginName, // testguestprimary
+  ];
+
+  /**
+   * 精确回收本用例创建的夹具：沿外键 RESTRICT 反向，按固定主键/标识删除，
+   * 只动本用例数据，不整表清空业务表，也不为清账号而删除其他账号。
+   */
+  const cleanupAdminFixture = async (ds: DataSource): Promise<void> => {
+    // 报告 → 消息 → 回复 → 会话 → 申请 → 型号（均为本用例固定 ID）
+    await ds.getRepository(AiReportEntity).delete(FIXTURE_REPORT_IDS);
+    await ds
+      .getRepository(AiMessageEntity)
+      .delete({ conversationId: In(FIXTURE_CONVERSATION_IDS) });
+    await ds.getRepository(EngineerResponseEntity).delete({ requestId: In(FIXTURE_REQUEST_IDS) });
+    await ds.getRepository(AiConversationEntity).delete(FIXTURE_CONVERSATION_IDS);
+    await ds.getRepository(RepairRequestEntity).delete(FIXTURE_REQUEST_IDS);
+    await ds.getRepository(EquipmentModelEntity).delete(FIXTURE_EQUIPMENT_MODEL_IDS);
+    // 账号域：先按本用例 loginName 定位 accountId，再 user_info → account
+    const accountRepo = ds.getRepository(AccountEntity);
+    const accounts = await accountRepo.find({
+      where: { loginName: In(FIXTURE_ACCOUNT_LOGIN_NAMES) },
+      select: { id: true },
+    });
+    const accountIds = accounts.map((account) => account.id);
+    if (accountIds.length > 0) {
+      await ds.getRepository(UserInfoEntity).delete({ accountId: In(accountIds) });
+      await accountRepo.delete({ id: In(accountIds) });
+    }
+  };
+
   beforeAll(async () => {
     initGraphQLSchema();
 
@@ -54,15 +93,8 @@ describe('AdminDocumentDatabase (e2e)', () => {
 
     await app.init();
 
-    // 清理顺序沿外键 RESTRICT 反向：报告 → 消息 → 会话 → 回复 → 申请 → 资料 → 账号 → 型号
-    await dataSource.getRepository(AiReportEntity).createQueryBuilder().delete().execute();
-    await dataSource.getRepository(AiMessageEntity).createQueryBuilder().delete().execute();
-    await dataSource.getRepository(AiConversationEntity).createQueryBuilder().delete().execute();
-    await dataSource.getRepository(EngineerResponseEntity).createQueryBuilder().delete().execute();
-    await dataSource.getRepository(RepairRequestEntity).createQueryBuilder().delete().execute();
-    await dataSource.getRepository(ReferenceDocumentEntity).createQueryBuilder().delete().execute();
-    await cleanupTestAccounts(dataSource);
-    await dataSource.getRepository(EquipmentModelEntity).createQueryBuilder().delete().execute();
+    // 造数前精确回收同名夹具（保证连跑两遍幂等），不整表删除业务数据
+    await cleanupAdminFixture(dataSource);
 
     await seedTestAccounts({
       dataSource,
@@ -227,6 +259,8 @@ describe('AdminDocumentDatabase (e2e)', () => {
   });
 
   afterAll(async () => {
+    // 用例结束后精确回收本夹具数据，不留残留、不触碰非本用例数据
+    await cleanupAdminFixture(dataSource);
     await app.close();
   });
 

@@ -220,7 +220,72 @@ git switch -c feat/<page-or-scope>
 
 只能推送功能分支并向 `main` 创建 PR，不得直接 push 或 force push `main`。页面任务按前端、GraphQL 契约、后端行为、权限和测试组成一个纵向切片，验收标准见 [任务验收标准](./task-acceptance.md)。
 
-## 10. 常见问题
+## 10. 运行后端 E2E（隔离测试库）
+
+后端 E2E 的 `globalSetup` 会在跑测前清空目标库。为杜绝误毁开发数据，E2E **必须**使用与日常开发库（`lithography_drill`）物理隔离的专用可清空库 `lithography_e2e`，并配一个**只能操作该库**的受限账号（不要用具备全局权限的账号）。
+
+### 10.1 创建隔离库与受限账号
+
+```sql
+-- 专用 E2E 库（可反复清空，不承载任何需保留数据）
+CREATE DATABASE lithography_e2e
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_0900_ai_ci;
+
+-- 专用 E2E 账号：仅授权 lithography_e2e，连不上也删不了 lithography_drill
+CREATE USER 'litho_e2e'@'%' IDENTIFIED BY '<E2E 专用密码>';
+GRANT ALL PRIVILEGES ON `lithography_e2e`.* TO 'litho_e2e'@'%';
+FLUSH PRIVILEGES;
+```
+
+### 10.2 为 E2E 库建 schema（一次性）
+
+E2E 只清数据、不建表，因此需先用 Migration 把结构灌入 `lithography_e2e`：
+
+```powershell
+cd backend
+$env:MIGRATION_DRILL_DOTENV='env/.env.e2e'
+$env:MIGRATION_DRILL_DATABASE='lithography_e2e'
+npm run migration:drill:empty-db
+```
+
+### 10.3 配置 `backend/env/.env.e2e`（被 Git 忽略，禁止提交）
+
+```dotenv
+NODE_ENV=e2e
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=litho_e2e
+DB_PASS=<E2E 专用密码>
+DB_NAME=lithography_e2e
+DB_SYNCHRONIZE=false
+
+# 全库清理的安全开关（见 10.4）
+E2E_ALLOWED_DB_NAMES=lithography_e2e
+E2E_ALLOW_DB_CLEANUP=1
+```
+
+其余密钥类变量（`FIELD_ENCRYPTION_*`、`JWT_SECRET`、`PAGINATION_HMAC_SECRET`、`MOCK_SEED_PASSWORD` 等）由负责人经私密渠道提供，与开发环境同值。
+
+### 10.4 破坏性清理的守卫（必须理解）
+
+`test/global-setup-e2e.ts` 在执行全库 `TRUNCATE` 前做两道**删数据之前**的硬校验：
+
+1. **库名白名单**：实际连接的库必须属于 `E2E_ALLOWED_DB_NAMES`（默认 `lithography_e2e`）。不在白名单内即抛错退出，**任何开关都无法绕过此校验**——即使误设 `E2E_ALLOW_DB_CLEANUP=1`，只要 `DB_NAME` 指向非白名单库（例如 `lithography_drill`），也会在任何删除前拒绝。
+2. **显式同意**：全库清理还需 `E2E_ALLOW_DB_CLEANUP=1`。
+
+此外，全局清理**永不清空 Migration 执行记录表**（`migrations`），保证 schema 版本可追溯；`DB_SYNCHRONIZE` 必须保持 `false`。用例内部清理只按本用例创建的主键精确回收，不整表删除业务数据。
+
+### 10.5 执行
+
+```powershell
+# 全量 core 组
+npm run test:e2e:core
+# 或单个文件
+npm run test:e2e:file -- test/10-admin-document-database/admin-document-database.e2e-spec.ts
+```
+
+## 11. 常见问题
 
 - API 启动时报 Redis 连接失败：确认本机 Redis 已启动且端口、DB 与 `.env.development` 一致。
 - API 启动时报字段加密配置缺失：补齐 `FIELD_ENCRYPTION_KEY` 和 `FIELD_ENCRYPTION_IV`。

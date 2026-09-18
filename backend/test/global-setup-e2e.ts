@@ -15,9 +15,31 @@ import databaseConfig from '../src/infrastructure/config/database.config';
  * 这里设置的 global 变量无法直接被测试文件复用为「同一个对象」。
  * 因此这里不暴露 DataSource，也不预插用户数据。
  * 仅做：环境变量加载 + 一次性的全库清理。
+ *
+ * 🔒 破坏性清理的安全边界（0918 决策）：
+ * - 全库 TRUNCATE 只允许发生在「明确允许的 E2E 库」白名单内（默认 lithography_e2e），
+ *   库名校验是硬性前置，任何开关都无法绕过；
+ * - 在全库清理之外，另需显式 E2E_ALLOW_DB_CLEANUP=1 表示同意清空数据；
+ * - 任一条件不满足即在「开始删数据之前」抛错退出；
+ * - 全局清理不得清空 Migration 执行记录表，保证 schema 版本可追溯。
  */
 
 type InfraNeed = 'mysql' | 'redis' | 'bullmq' | 'external';
+
+/**
+ * 全库清理时必须保留的系统/基线表（大小写不敏感）。
+ * Migration 执行记录一旦丢失，DB 版本将无法追溯，故永不 TRUNCATE。
+ */
+const PROTECTED_TABLES = new Set(['migrations']);
+
+/** 允许被 E2E 全库清理的库名白名单，逗号分隔；默认仅隔离测试库。 */
+const resolveAllowedE2eDatabases = (): string[] => {
+  const raw = process.env.E2E_ALLOWED_DB_NAMES || 'lithography_e2e';
+  return raw
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0);
+};
 
 const GROUP_NEEDS: Record<string, ReadonlyArray<InfraNeed>> = {
   core: ['mysql'],
@@ -46,9 +68,10 @@ const cleanupTestDatabase = async (dataSource: DataSource): Promise<void> => {
     )) as unknown[];
     const tables = rows
       .map((row) => extractTableName(row))
-      .filter((name): name is string => !!name);
+      .filter((name): name is string => !!name)
+      .filter((name) => !PROTECTED_TABLES.has(name.toLowerCase()));
     if (tables.length === 0) {
-      console.log('📝 未发现需要清理的表');
+      console.log('📝 未发现需要清理的表（Migration 记录表已保留）');
       return;
     }
     await qr.query('SET FOREIGN_KEY_CHECKS = 0');
@@ -56,7 +79,7 @@ const cleanupTestDatabase = async (dataSource: DataSource): Promise<void> => {
       await qr.query(`TRUNCATE TABLE \`${name}\``);
     }
     await qr.query('SET FOREIGN_KEY_CHECKS = 1');
-    console.log(`✅ 已清理 ${tables.length} 个表的数据`);
+    console.log(`✅ 已清理 ${tables.length} 个表的数据（保留 Migration 执行记录）`);
   } finally {
     await qr.release();
   }
@@ -197,7 +220,10 @@ const checkExternal = (): void => {
   console.log('✅ External 配置检查成功');
 };
 
-const verifyMysqlAndCleanup = async (skipDbCleanup: boolean): Promise<void> => {
+const verifyMysqlAndCleanup = async (
+  skipDbCleanup: boolean,
+  allowDbCleanup: boolean,
+): Promise<void> => {
   const dbConfig = databaseConfig() as { mysql: DataSourceOptions };
   const config: DataSourceOptions = {
     ...dbConfig.mysql,
@@ -212,6 +238,27 @@ const verifyMysqlAndCleanup = async (skipDbCleanup: boolean): Promise<void> => {
     if (skipDbCleanup) {
       console.log('⏭️ 已跳过 MySQL 数据清理（E2E_SKIP_DB_CLEANUP=true）');
       return;
+    }
+    // 以下仅在「准备执行全库清理」时生效：先做硬性库名校验，再做显式同意校验。
+    // 两道校验都在任何删除语句之前，任一不满足立即抛错退出，绝不开始删数据。
+    const rows: Array<{ current_database: string | null }> = await ds.query(
+      'SELECT DATABASE() AS current_database',
+    );
+    const currentDatabase = (rows[0]?.current_database ?? '').trim().toLowerCase();
+    const allowedDatabases = resolveAllowedE2eDatabases();
+    console.log(
+      `🔎 全库清理目标库=${currentDatabase || '(未知)'}，允许白名单=[${allowedDatabases.join(', ')}]`,
+    );
+    if (!currentDatabase || !allowedDatabases.includes(currentDatabase)) {
+      throw new Error(
+        `拒绝全库清理：当前连接库 "${currentDatabase || '(未知)'}" 不在允许的 E2E 库白名单 [${allowedDatabases.join(', ')}] 内。` +
+          `库名校验为硬性前置，任何开关都无法绕过；请确认 .env.e2e 的 DB_NAME 指向隔离测试库。`,
+      );
+    }
+    if (!allowDbCleanup) {
+      throw new Error(
+        `拒绝全库清理：目标库 ${currentDatabase} 虽在白名单内，但全库清理需显式设置 E2E_ALLOW_DB_CLEANUP=1 表示同意。`,
+      );
     }
     await cleanupTestDatabase(ds);
   } finally {
@@ -268,16 +315,17 @@ export default async (): Promise<void> => {
     const group = (process.env.E2E_GROUP || 'core').trim();
     const skipInfraChecks = parseBoolean(process.env.E2E_SKIP_INFRA_CHECKS);
     const skipDbCleanup = parseBoolean(process.env.E2E_SKIP_DB_CLEANUP);
+    const allowDbCleanup = parseBoolean(process.env.E2E_ALLOW_DB_CLEANUP);
     const needs = resolveInfraNeeds();
     console.log(
-      `🧩 E2E 运行上下文: group=${group || 'core'}, needs=${Array.from(needs).join(',') || 'none'}, skipInfraChecks=${String(skipInfraChecks)}, skipDbCleanup=${String(skipDbCleanup)}`,
+      `🧩 E2E 运行上下文: group=${group || 'core'}, needs=${Array.from(needs).join(',') || 'none'}, skipInfraChecks=${String(skipInfraChecks)}, skipDbCleanup=${String(skipDbCleanup)}, allowDbCleanup=${String(allowDbCleanup)}`,
     );
     if (skipInfraChecks) {
       console.log('⏭️ 已跳过基础依赖检查');
       return;
     }
     if (needs.has('mysql')) {
-      await verifyMysqlAndCleanup(skipDbCleanup);
+      await verifyMysqlAndCleanup(skipDbCleanup, allowDbCleanup);
     }
     if (needs.has('redis')) {
       await checkRedis();
