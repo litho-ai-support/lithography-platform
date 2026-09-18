@@ -299,7 +299,7 @@ test.describe('real backend admin document database', () => {
     // 维修申请：故障码等值筛选（后端 errorCode 契约为等值匹配，非 LIKE）+ 接单状态组合
     // seed 0001 = E-CHUCK-101 待接单，0002 = E-LASER-207 已接单
     await page.getByRole('tab', { name: '维修申请' }).click();
-    await activePane(page).getByPlaceholder('按故障码搜索').fill('E-CHUCK-101');
+    await activePane(page).getByPlaceholder('输入完整故障码').fill('E-CHUCK-101');
     await expect(activePane(page).getByRole('cell', { name: 'MOCK-RR-2026-0001' })).toBeVisible();
     await activePane(page).getByRole('combobox').nth(0).click();
     await page.locator('.ant-select-item-option', { hasText: '待接单' }).click();
@@ -307,11 +307,11 @@ test.describe('real backend admin document database', () => {
     await expect(activePane(page).getByRole('cell', { name: 'MOCK-RR-2026-0002' })).toHaveCount(0);
 
     // 无命中 → 正式空态文案（不报错、不残留旧数据）
-    await activePane(page).getByPlaceholder('按故障码搜索').fill('E2E-无命中-999');
+    await activePane(page).getByPlaceholder('输入完整故障码').fill('E2E-无命中-999');
     await expect(activePane(page).getByText('没有符合筛选条件的维修申请。')).toBeVisible();
 
     // 清空故障码：恢复到「待接单 + 无故障码」的组合结果
-    await activePane(page).getByPlaceholder('按故障码搜索').fill('');
+    await activePane(page).getByPlaceholder('输入完整故障码').fill('');
     await expect(activePane(page).getByText('没有符合筛选条件的维修申请。')).toHaveCount(0);
     await expect(activePane(page).getByRole('cell', { name: 'MOCK-RR-2026-0001' })).toBeVisible();
 
@@ -381,7 +381,7 @@ test.describe('real backend admin document database', () => {
       await loginAs(page, env, 'mock_super_admin', /\/admin$/);
       await page.goto(PAGE_PATH);
       await page.getByRole('tab', { name: '维修申请' }).click();
-      await activePane(page).getByPlaceholder('按故障码搜索').fill(RUN_ERROR_CODE);
+      await activePane(page).getByPlaceholder('输入完整故障码').fill(RUN_ERROR_CODE);
 
       // 第 1 页：真实 total 12，pageSize 10 → 10 行 + 两页指示
       await expect(activePane(page).getByText(`共 ${RUN_REQUEST_COUNT} 条`)).toBeVisible();

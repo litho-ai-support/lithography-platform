@@ -196,7 +196,7 @@ export function AdminRepairRequestsTab() {
         />
         <Input
           allowClear
-          placeholder="按故障码搜索"
+          placeholder="输入完整故障码"
           style={{ width: 150 }}
           value={errorCode}
           onChange={(event) => setErrorCode(event.target.value)}
