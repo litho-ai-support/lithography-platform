@@ -246,4 +246,26 @@ describe('AdminDocumentDatabasePage（PR3 S3）', () => {
     // 统计失败不影响列表：默认参考资料标签仍完成加载
     expect(await screen.findByText('参考资料列表')).toBeInTheDocument();
   });
+
+  // PR3 review M-01：统计失败态必须提供可操作的重试入口（S3 退出条件：加载/空/错误/重试完整）
+  it('统计加载失败后可点击重试恢复四张统计卡', async () => {
+    fetchStatsMock.mockRejectedValueOnce(new Error('stats down'));
+    render(<AdminDocumentDatabasePage />);
+
+    // 失败态：错误提示 + 重试按钮均可见
+    expect(await screen.findByText(/统计加载失败：/)).toBeInTheDocument();
+    const retryButton = screen.getByRole('button', { name: /重\s*试/ });
+
+    // 点击重试：beforeEach 默认 resolve 兜住第二次取数 → 统计卡恢复
+    await act(async () => {
+      fireEvent.click(retryButton);
+    });
+
+    await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument());
+    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText('9')).toBeInTheDocument();
+    expect(screen.queryByText(/统计加载失败：/)).not.toBeInTheDocument();
+    expect(fetchStatsMock).toHaveBeenCalledTimes(2);
+  });
 });

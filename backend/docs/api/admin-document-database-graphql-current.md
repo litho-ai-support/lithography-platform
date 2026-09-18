@@ -51,7 +51,7 @@ Global error contract: 遵循 `docs/api/graphql-error-contract-current.md`；本
 `AdminAiConversationFilterInput`：`requestNo`(模糊)、`engineerKeyword`(模糊→账号集)、`status`(`AiConversationStatus` 枚举等值)、`createdAtFrom/To`。
 `AdminAiReportFilterInput`：`requestNo`(模糊)、`engineerKeyword`(模糊→账号集)、`reportType`(等值≤100)、`createdAtFrom/To`。
 
-> 注：`errorCode` 当前为等值精确匹配，前端占位符为「按故障码搜索」——该语义差异是否改为 LIKE 属待产品裁定的开放项，未落地前以本契约（精确匹配）为准。
+> 注：`errorCode` 为等值精确匹配（稳定契约）。前端占位符已对齐为「输入完整故障码」，与本契约一致，不再暗示模糊搜索。是否将来新增 LIKE 模糊筛选属产品层的待决策项，不影响当前实现口径。
 
 ## 分页与排序契约
 

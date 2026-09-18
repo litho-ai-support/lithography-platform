@@ -44,8 +44,10 @@ export function AdminRepairRequestsTab() {
   const [equipmentModelId, setEquipmentModelId] = useState<number | undefined>(undefined);
   const [createdAtRange, setCreatedAtRange] = useState<AdminCreatedAtRangeState>(null);
   const [summaryRequestId, setSummaryRequestId] = useState<number | null>(null);
-  // 设备型号下拉：消费 reference-document 公开 adapter（equipmentModels 为公开查询），
-  // 不跨 feature 引用其 application 内部 hooks（frontend/docs/dependency-rules.md）
+  // 设备型号下拉：调用本 feature 自己的 adapter（fetchAdminEquipmentModelOptions），
+  // 保持 feature 之间不直接跨依赖（frontend/docs/dependency-rules.md）。
+  // 注：equipmentModels 查询目前在 reference-document / repair-request / 本 feature
+  //   三处各自实现，后续宜提升为 entity/shared 公开读 API 统一去重（PR3 review 建议项）。
   const [modelOptions, setModelOptions] = useState<
     { id: number; modelCode: string; modelName: string }[]
   >([]);

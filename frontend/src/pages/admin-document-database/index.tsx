@@ -1,6 +1,6 @@
 // src/pages/admin-document-database/index.tsx
 
-import { Skeleton, Tabs } from 'antd';
+import { Alert, Button, Skeleton, Tabs } from 'antd';
 
 import {
   AdminAiConversationsTab,
@@ -38,9 +38,17 @@ export function AdminDocumentDatabasePage() {
 
       {stats.state.status === 'loading' ? <Skeleton active paragraph={{ rows: 1 }} /> : null}
       {stats.state.status === 'failed' ? (
-        <p className="m-0 text-sm text-[var(--text-muted)]">
-          统计加载失败：{stats.state.message}（列表功能不受影响）
-        </p>
+        <Alert
+          action={
+            <Button onClick={stats.reload} size="small">
+              重试
+            </Button>
+          }
+          description="列表功能不受影响。"
+          showIcon
+          title={`统计加载失败：${stats.state.message}`}
+          type="error"
+        />
       ) : null}
       {stats.state.status === 'ready' ? (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
