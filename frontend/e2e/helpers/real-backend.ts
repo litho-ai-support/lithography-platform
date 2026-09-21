@@ -13,6 +13,11 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  DEDICATED_BACKEND_ORIGIN,
+  DEDICATED_E2E_DB_NAME,
+} from '../../e2e-real/dedicated-e2e-environment';
+
 // 后端源（origin）收口：默认仍指向本地 dev 后端 127.0.0.1:3000（既有真实链路 spec 口径不变）。
 // 专用账号设置联调（playwright.account-settings-real.config.ts）经进程级环境变量
 // E2E_BACKEND_ORIGIN 指向专用后端（http://127.0.0.1:3100），浏览器 / Node GraphQL helper /
@@ -117,8 +122,24 @@ export function hasFrontendGraphQLEndpoint(): boolean {
   }
 }
 
+// 专用真实链路同一性检查（R4 复核修正轮 P2）：当 E2E_BACKEND_ORIGIN 指向专用后端时，
+// SQL helper 的 DB_NAME 必须等于专用库，杜绝「浏览器/Node GraphQL 打到专用后端，
+// SQL 清理却连接其他库」的错位。普通真实链路（默认 127.0.0.1:3000）不受影响。
+function assertDedicatedLinkDatabaseConsistency(env: Record<string, string>): void {
+  if (BACKEND_ORIGIN !== DEDICATED_BACKEND_ORIGIN) {
+    return;
+  }
+
+  if (env.DB_NAME !== DEDICATED_E2E_DB_NAME) {
+    throw new Error(
+      `专用真实链路配置不一致：E2E_BACKEND_ORIGIN 指向专用后端，但 SQL helper DB_NAME=${JSON.stringify(env.DB_NAME)} ≠ ${JSON.stringify(DEDICATED_E2E_DB_NAME)}，拒绝访问数据库`,
+    );
+  }
+}
+
 export function mysqlQuery(sql: string): string {
   const env = readBackendEnv();
+  assertDedicatedLinkDatabaseConsistency(env);
 
   return execFileSync(
     'mysql',
