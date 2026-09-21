@@ -265,9 +265,14 @@ describe('AdminDocumentDatabase (e2e)', () => {
   });
 
   afterAll(async () => {
-    // 用例结束后精确回收本夹具数据，不留残留、不触碰非本用例数据
-    await cleanupAdminFixture(dataSource);
-    await app.close();
+    // beforeAll 若在 Nest 装配/连接阶段失败，dataSource 与 app 可能尚未完成赋值。
+    // 此时不得让清理路径掩盖首个启动错误；已初始化时仍按固定主键精确回收夹具。
+    if (dataSource?.isInitialized) {
+      await cleanupAdminFixture(dataSource);
+    }
+    if (app) {
+      await app.close();
+    }
   });
 
   const executeGql = (query: string, token?: string, variables?: unknown) =>

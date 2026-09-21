@@ -4,6 +4,7 @@ import { AccountUsecasesModule } from '@src/usecases/account/account-usecases.mo
 import { AiQueueUsecasesModule } from '@src/usecases/ai-queue/ai-queue-usecases.module';
 import { AuthUsecasesModule } from '@src/usecases/auth/auth-usecases.module';
 import { AsyncTaskRecordUsecasesModule } from '@src/usecases/async-task-record/async-task-record-usecases.module';
+import { AdminDocumentDatabaseUsecasesModule } from '@src/usecases/admin-document-database/admin-document-database-usecases.module';
 import { EmailQueueUsecasesModule } from '@src/usecases/email-queue/email-queue-usecases.module';
 import { RegistrationUsecasesModule } from '@src/usecases/registration/registration-usecases.module';
 import { ReferenceDocumentUsecasesModule } from '@src/usecases/reference-document/reference-document-usecases.module';
@@ -51,6 +52,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   imports: [
     // 导入业务模块以获取服务
     AccountUsecasesModule,
+    AdminDocumentDatabaseUsecasesModule,
     AiQueueUsecasesModule,
     AsyncTaskRecordUsecasesModule,
     AuthUsecasesModule,
