@@ -32,6 +32,22 @@ import type {
   ChangeMyPasswordResult,
 } from './account-settings.types';
 
+/** Hook 级可选项：账号身份采样与资料保存成功回调（均由页面装配层注入） */
+export type UseAccountSettingsOptions = {
+  /**
+   * 请求发起前的账号身份采样：页面装配层借此在**发起时**固化「这次保存属于哪个账号」，
+   * 供迟到响应做身份裁决。不得在响应返回后重读当前会话账号——那时可能已切换账号，
+   * 采到的将是另一个人的身份。
+   */
+  sampleAccountId?: () => number | null;
+  /**
+   * 资料保存成功且结果未过期时的回调（页面装配层借此把昵称回写会话真源）。
+   * 第二参为请求发起前采样的账号 ID（可能为 null：装配层未接入采样），
+   * 与权威昵称一起交给窄入口，由 store 与当前会话比对后决定是否落盘。
+   */
+  onProfileSaved?: (settings: AccountSettingsView, expectedAccountId: number | null) => void;
+};
+
 export type AccountSettingsState =
   | { message: string; status: 'failed' }
   | { settings: AccountSettingsView; status: 'ready' }
@@ -52,7 +68,8 @@ function toUnhandledUserMessage(error: unknown): string {
 
 const LOAD_FAILED_MESSAGE = '账号设置加载失败，请稍后重试。';
 
-export function useAccountSettings() {
+export function useAccountSettings(options: UseAccountSettingsOptions = {}) {
+  const { onProfileSaved, sampleAccountId } = options;
   const [state, setState] = useState<AccountSettingsState>({ status: 'loading' });
   // 单调递增的动作序列：每次读取 / 写命令发起时 +1，结果回来时不再等于发起值即陈旧
   const actionSeqRef = useRef(0);
@@ -133,7 +150,10 @@ export function useAccountSettings() {
 
   /**
    * 资料更新：成功时把 adapter 返回的权威视图写回状态（仅当序列未推进——
-   * 期间若用户又发起了别的动作，过期结果不得覆盖新状态）。
+   * 期间若用户又发起了别的动作，过期结果不得覆盖新状态），并在结果未过期时
+   * 触发 onProfileSaved（页面装配层借此把昵称回写会话真源，侧栏显示随之更新）。
+   * 身份口径：expectedAccountId 在**请求发起前**采样固化；响应返回后即使当前
+   * 会话已切换成他人，迟到响应携带的仍是发起者的身份，由 store 侧比对拒绝。
    */
   const updateProfile = useCallback(
     async (
@@ -142,6 +162,9 @@ export function useAccountSettings() {
       if (pendingKeysRef.current.has('update-profile')) {
         return { kind: 'in-flight' };
       }
+
+      // 请求发起前固化本次保存的账号身份（响应返回后不得重读，见类型注释）
+      const expectedAccountId = sampleAccountId?.() ?? null;
 
       actionSeqRef.current += 1;
       const actionSeq = actionSeqRef.current;
@@ -152,6 +175,7 @@ export function useAccountSettings() {
 
         if (result.ok && actionSeqRef.current === actionSeq) {
           setState({ settings: result.settings, status: 'ready' });
+          onProfileSaved?.(result.settings, expectedAccountId);
         }
 
         return { kind: 'ok', result };
@@ -165,10 +189,11 @@ export function useAccountSettings() {
         setPending('update-profile', false);
       }
     },
-    [setPending],
+    [onProfileSaved, sampleAccountId, setPending],
   );
 
-  /** 修改密码：成功结果只回传固定提示，会话收口由页面装配层接线执行。 */
+  /** 修改密码：成功结果只回传固定提示，会话收口由页面装配层接线执行。
+   *  凭据更新不触发 onProfileSaved：昵称同步只属于资料保存链路。 */
   const updatePassword = useCallback(
     async (
       input: ChangeMyPasswordInput,

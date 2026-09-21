@@ -32,6 +32,12 @@ const FRONTEND_VITE_CONFIG_FILE = fileURLToPath(new URL('../../vite.config.ts', 
 // 仅白名单匹配的编号才允许进入 SQL 拼接（由受保护 helper 强制，见下方守卫说明）。
 export const REQUEST_NO_PATTERN = /^RR\d{14}[A-Z0-9]{6}$/;
 
+// 数据库连接键允许进程级运行时覆盖（仅这 5 个键，其他键仍只读文件值）：
+// 真实 E2E 需要在不改写任何 .env 文件的前提下，把 mysqlQuery / 物理清理安全门
+// 与应用后端指向同一个独立测试库。空白值不覆盖，避免 `DB_NAME=` 误清空文件值；
+// 覆盖后的 DB_NAME 依旧要过 assertPhysicalCleanupAllowed 的显式 opt-in + 测试库命名门。
+const DB_CONNECTION_KEYS = ['DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASS', 'DB_NAME'] as const;
+
 export function readBackendEnv(): Record<string, string> {
   const entries: Record<string, string> = {};
 
@@ -39,6 +45,14 @@ export function readBackendEnv(): Record<string, string> {
     const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
     if (match) {
       entries[match[1]] = match[2];
+    }
+  }
+
+  for (const key of DB_CONNECTION_KEYS) {
+    const runtimeValue = process.env[key];
+
+    if (runtimeValue !== undefined && runtimeValue.trim() !== '') {
+      entries[key] = runtimeValue;
     }
   }
 

@@ -91,10 +91,11 @@ const SUPPRESSED_MESSAGE_PHASES: ReadonlyArray<AdminResetUserPasswordPhase> = [
  * `loadWritableAdminUserTarget()` 内部的三源角色收敛失败（`ROLE_DATA_INCONSISTENT`）或
  * 资料行缺失（`READ_FAILED`）时，密码重置同样被驳回——即使密码重置本身不消费这些数据。
  * 这是刻意的：收敛不出单一角色就无法安全确认目标「不是 SUPER_ADMIN」，放行等于允许对
- * 身份不明的账号覆盖登录凭据。代价是三源脏数据的存量普通账号会被锁在本功能外
- * （与列表「整次失败关闭」同源的既有风险面，`updateAccessGroup` 多元素写入等触发面
+ * 身份不明的账号覆盖登录凭据。代价是三源脏数据的存量普通账号会被锁在本功能外。
+ * 该口径与列表「整次失败关闭」同源；公开角色修改入口已经下线，但本用例仍对任何
+ * 无法收敛的历史或异常数据保持失败关闭，不静默选择任一字段为真源。
  *
- * 普通账号。`PENDING` / `SUSPENDED` / `BANNED` / `DELETED`、双字段不一致与状态缺失
+ * 目标状态只允许双字段一致的 `ACTIVE` / `INACTIVE` 普通账号。`PENDING` / `SUSPENDED` / `BANNED` / `DELETED`、双字段不一致与状态缺失
  * 一律拒绝（`PASSWORD_RESET_TARGET_STATUS_NOT_ALLOWED`，对外 `CONFLICT`，不复用
  * `STATUS_TRANSITION_NOT_ALLOWED`——后者专指启停状态转换），拒绝发生在哈希生成与
  * 任何写入之前——停用 / 封禁语义被尊重，`INACTIVE` 账号重置后仍是 `INACTIVE`

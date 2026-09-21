@@ -17,7 +17,10 @@ import { formatDateTimeText } from '@/shared/ui/format-date-time';
 import { LoadingState } from '@/shared/ui/loading-state';
 import { StatusPill, type StatusPillTone } from '@/shared/ui/status-pill';
 
-import type { AccountSettingsStatus } from '../application/account-settings.types';
+import type {
+  AccountSettingsStatus,
+  AccountSettingsView,
+} from '../application/account-settings.types';
 import {
   ACCOUNT_SETTINGS_ROLE_LABELS,
   ACCOUNT_SETTINGS_STATUS_LABELS,
@@ -41,10 +44,27 @@ const STATUS_PILL_TONES: Record<AccountSettingsStatus, StatusPillTone> = {
 type AccountSettingsPanelProps = {
   /** 修改密码成功后的会话收口（登出 + 跳转登录页），由页面装配层提供 */
   onPasswordChangeSucceeded?: () => void | Promise<void>;
+  /**
+   * 资料保存成功且结果未过期时的回调（页面装配层借此把昵称回写会话真源）。
+   * 第二参为请求发起前采样的账号 ID（null 表示装配层未接入采样）。
+   */
+  onProfileSaveSucceeded?: (
+    settings: AccountSettingsView,
+    expectedAccountId: number | null,
+  ) => void;
+  /** 请求发起前的账号身份采样（页面装配层注入会话真源读取），见 useAccountSettings */
+  sampleAccountId?: () => number | null;
 };
 
-export function AccountSettingsPanel({ onPasswordChangeSucceeded }: AccountSettingsPanelProps) {
-  const { isPending, reload, state, updatePassword, updateProfile } = useAccountSettings();
+export function AccountSettingsPanel({
+  onPasswordChangeSucceeded,
+  onProfileSaveSucceeded,
+  sampleAccountId,
+}: AccountSettingsPanelProps) {
+  const { isPending, reload, state, updatePassword, updateProfile } = useAccountSettings({
+    onProfileSaved: onProfileSaveSucceeded,
+    sampleAccountId,
+  });
 
   if (state.status === 'loading') {
     return <LoadingState label="账号设置加载中…" />;

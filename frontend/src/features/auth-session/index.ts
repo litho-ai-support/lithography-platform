@@ -25,6 +25,7 @@ export {
   getCurrentAuthSession,
   hasCurrentAuthSession,
   logoutAuthSession,
+  updateCurrentAuthSessionNickname,
 } from './auth-session-entry';
 export {
   AUTH_LOGIN_REASON_PARAM_KEY,

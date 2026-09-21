@@ -1,5 +1,5 @@
 // e2e/account-settings-real.spec.ts
-// 账号设置定向真实页面 e2e（写链路测试补齐阶段 · 裁决第四项）。
+// 账号设置定向真实页面 e2e（R3 测试安全收口）：
 //
 // 五条真实页面流程，全部以 DOM / URL / 后端权威视图断言，不把截图或录像当作
 // 自动化断言（人工证据留到下一阶段）：
@@ -9,17 +9,27 @@
 // 4. 角色与状态没有编辑控件；
 // 5. 改密成功后清理会话并跳转登录页。
 //
-// 共享开发库数据边界：本 spec 只真改一处 Mock 数据——基础资料的电话字段，且在 finally 内
-// 按运行前快照恢复（走 updateMyAccountSettings 且只提交 `phone` 键，三态语义下其余字段
-// 不修改），不触碰凭据、密码与 seed 计数。改密用例**不落库**：seed 密码不满足现行密码
-// 策略，真改密后无法经任何 API 改回原值（详见该用例上方注释），故只在网络边界拦截
-// changeMyPassword 的响应，请求侧与会话收口仍然是真实链路。
-// 前提不满足（无本地后端 / 无 env / 无前端真实通道）时用例自动跳过，不以失败阻塞。
+// 共享开发库数据边界：资料用例只真改一处 Mock 数据——基础资料的电话字段，且在 finally
+// 内按运行前快照恢复（走 updateMyAccountSettings 且只提交 `phone` 键，三态语义下其余
+// 字段不修改），不触碰凭据与 seed 计数。真实改密用例（R3 修正轮）：
+// - 专用账号在**独立 E2E 数据库**创建（DB_NAME 必须命中 e2e/test 段）；
+// - 专用账号删除经单一事务包裹（START TRANSACTION → 精确 DELETE → 残留核对 → COMMIT），
+//   任一步失败自动回滚；
+// - 用例开始前预检：权限（E2E_ALLOW_PHYSICAL_CLEANUP）、目标库模式、连接连通性，
+//   环境不满足时在写入前即 skip/失败；
+// - 连续执行两次，每次结束后核对主记录 0 + 业务表 0 孤儿。
+// 前提不满足（无本地后端 / 无 env / 无前端真实通道 / 非独立 E2E 库）时用例自动跳过，不以失败阻塞。
 
 import { expect, type Page, test } from '@playwright/test';
 
 import { readStoredAuthSession } from './helpers/auth-session-seed';
 import {
+  deleteE2EDedicatedAccountById,
+  preflightDedicatedAccountCleanup,
+  readDedicatedAccountCleanupResidue,
+} from './helpers/dedicated-account-cleanup';
+import {
+  BACKEND_GRAPHQL,
   hasFrontendGraphQLEndpoint,
   isRealBackendAvailable,
   readBackendEnv,
@@ -319,9 +329,10 @@ test.describe('account settings real backend flow', () => {
   // 为什么不让改密真落库：seed 密码 MOCK_SEED_PASSWORD（lithoai）本身不满足现行密码策略
   // （8～128 位 + 小写字母 + 数字 + 特殊字符），changeMyPassword 会把它拒为 BAD_USER_INPUT，
   // 共享 Mock 账号一旦被真改密就无法经任何 API 改回原值——既污染基线，也让本用例失去
-  // 可重复执行性（下一次运行用 seed 密码登不进去）。真实改密写链路（旧密码失效 / 新密码
-  // 可登录 / 响应不含密码派生物）由 backend test/04-user-info/my-account-settings-write
-  // .e2e-spec.ts 覆盖，本用例只负责页面装配层的请求构造与会话收口契约。
+  // 可重复执行性（下一次运行用 seed 密码登不进去）。本用例只负责页面装配层的请求构造
+  // 与会话收口契约（带真实 Token、入参只含两个密码字段、确认密码不外发）；完整真实
+  // 改密链路（真落库 + 旧密码失效 + 新密码登录 + 受保护 Query）由本文件下方
+  // 「真实改密链路」用例以 adminCreateUser 创建的专用账号覆盖。
   test('修改密码成功后清理会话并跳转登录页', async ({ page }) => {
     // 含真实登录 + 导航 + 提交 + 跳转，dev server 串行门禁下需要独立预算
     test.setTimeout(60_000);
@@ -391,4 +402,150 @@ test.describe('account settings real backend flow', () => {
     await expect(page.getByLabel('账号或邮箱')).toBeVisible();
     expect(page.url()).not.toContain(NEW_PASSWORD);
   });
+
+  // ---------------------------------------------------------------------------
+  // 真实改密链路（零拦截）：专用账号端到端
+  // ---------------------------------------------------------------------------
+
+  const ADMIN_CREATE_USER_MUTATION = `
+    mutation AdminCreateUser($input: AdminCreateUserInput!) {
+      adminCreateUser(input: $input) { id loginName status }
+    }
+  `;
+
+  const LOGIN_ATTEMPT_MUTATION = `
+    mutation LoginAttempt($input: AuthLoginInput!) {
+      login(input: $input) { accessToken }
+    }
+  `;
+
+  type LoginAttemptResult = { accessToken: string | null; errorCode: string | null };
+
+  /** Node 侧真实登录尝试：不抛错，返回是否拿到 Token 与首个错误大类（供断言用） */
+  async function attemptRealLogin(
+    env: Record<string, string>,
+    loginName: string,
+    loginPassword: string,
+  ): Promise<LoginAttemptResult> {
+    const response = await fetch(BACKEND_GRAPHQL, {
+      body: JSON.stringify({
+        query: LOGIN_ATTEMPT_MUTATION,
+        variables: {
+          input: { audience: 'SSTSWEB', loginName, loginPassword, type: 'PASSWORD' },
+        },
+      }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    });
+
+    const body = (await response.json()) as {
+      data?: { login?: { accessToken?: string } };
+      errors?: Array<{ extensions?: { code?: string } }>;
+    };
+
+    return {
+      accessToken: body.data?.login?.accessToken ?? null,
+      errorCode: body.errors?.[0]?.extensions?.code ?? null,
+    };
+  }
+
+  // 完整真实链路：登录 → 改密（真落库）→ 会话清理跳登录页 → 旧密码登录失败 →
+  // 新密码登录成功 → 受保护 Query 成功。全部流量放行到真实后端，无任何 route 拦截。
+  // 专用账号：共享 Mock 账号的 seed 密码不满足现行密码策略、真改密后无法改回，故经
+  // adminCreateUser 以策略合规密码创建一次性 ENGINEER 账号；finally 内经
+  // deleteE2EDedicatedAccountById 按本次 accountId 精确物理删除该账号及关联记录
+  // （复用项目统一物理清理授权：显式 opt-in 且 DB_NAME 必须含 e2e/test 段）。创建前
+  // 先预检授权、目标库与连接；清理后分别核对主记录、userInfo 与关联业务表均为 0。
+  for (const run of [1, 2]) {
+    test(`真实改密链路（第 ${run} 次）：专用账号改密后旧密码失效、新密码可登录受保护页`, async ({
+      page,
+    }) => {
+      // 创建账号 + 两次真实登录 + 两次导航进入 + 改密 + 登录尝试，需独立预算
+      test.setTimeout(120_000);
+      const env = readBackendEnv();
+
+      try {
+        preflightDedicatedAccountCleanup();
+      } catch (error) {
+        test.skip(true, `专用账号创建前的清理预检未通过：${(error as Error).message}`);
+      }
+
+      // 登录名口径：4~30 位字母/数字/下划线/短横线；时间戳保证共享库内唯一
+      const dedicatedLoginName = `e2e-pw-${Date.now()}`;
+      // 两个密码均满足现行策略（8～128 位、含小写字母/数字/特殊字符、非黑名单、无连续序列）
+      const INITIAL_PASSWORD = 'E2eInit#2026Pass';
+      const NEW_PASSWORD = 'E2eChanged#2026Pass';
+      let dedicatedAccountId: number | null = null;
+      let restoreFailure: unknown;
+
+      try {
+        const created = await realGraphqlCall(
+          env,
+          ADMIN_CREATE_USER_MUTATION,
+          {
+            input: {
+              initialPassword: INITIAL_PASSWORD,
+              loginName: dedicatedLoginName,
+              nickname: 'E2E 改密专用账号',
+              role: 'ENGINEER',
+            },
+          },
+          'mock_super_admin',
+        );
+        const createdBody = created.body as {
+          data?: { adminCreateUser?: { id: number; status?: string } };
+        };
+        dedicatedAccountId = createdBody.data?.adminCreateUser?.id ?? null;
+
+        if (dedicatedAccountId === null) {
+          throw new Error(`专用账号创建失败：${JSON.stringify(created.body)}`);
+        }
+
+        // 初始密码真实 UI 登录 → 经导航进入账号设置 → 真实提交改密
+        await loginViaUi(page, dedicatedLoginName, INITIAL_PASSWORD, '/engineer');
+        await enterAccountSettingsFromNav(page);
+
+        const securityCard = cardByTitle(page, '安全设置');
+
+        // 「新密码」用 exact 匹配，否则会同时命中「确认新密码」触发 strict mode 冲突
+        await securityCard.getByLabel('当前密码').fill(INITIAL_PASSWORD);
+        await securityCard.getByLabel('新密码', { exact: true }).fill(NEW_PASSWORD);
+        await securityCard.getByLabel('确认新密码').fill(NEW_PASSWORD);
+        await securityCard.getByRole('button', { name: /修\s*改\s*密\s*码/ }).click();
+
+        // 会话收口：唯一会话真源被清理，随后跳转登录页（不依赖服务端撤销）
+        await expect(page).toHaveURL(/\/login$/);
+        expect(await readStoredAuthSession(page)).toBeNull();
+
+        // 旧密码经真实登录入口已失效
+        const oldAttempt = await attemptRealLogin(env, dedicatedLoginName, INITIAL_PASSWORD);
+
+        expect(oldAttempt.accessToken).toBeNull();
+        expect(oldAttempt.errorCode).toBe('UNAUTHENTICATED');
+
+        // 新密码经真实 UI 登录成功并落到受保护主页
+        await loginViaUi(page, dedicatedLoginName, NEW_PASSWORD, '/engineer');
+
+        // 受保护 Query 成功：新 Token 下 myAccountSettings 真实可达
+        await enterAccountSettingsFromNav(page);
+      } finally {
+        const cleanupAccountId = dedicatedAccountId;
+
+        if (cleanupAccountId !== null) {
+          restoreFailure = await captureRestoreFailure(async () => {
+            deleteE2EDedicatedAccountById(cleanupAccountId);
+
+            expect(readDedicatedAccountCleanupResidue(cleanupAccountId)).toEqual({
+              account: 0,
+              relatedBusiness: 0,
+              userInfo: 0,
+            });
+          });
+        }
+      }
+
+      // finally 之后再核对回收结果：主链路失败时不掩盖原始错误，物理清理失败必被发现并使本用例失败
+      expect(restoreFailure).toBeNull();
+    });
+  }
 });

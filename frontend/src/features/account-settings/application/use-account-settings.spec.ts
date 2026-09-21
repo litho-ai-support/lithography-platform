@@ -247,6 +247,131 @@ describe('useAccountSettings 资料更新命令', () => {
   });
 });
 
+describe('useAccountSettings onProfileSaved 回调（页面装配层回写会话昵称）', () => {
+  it('资料保存成功且结果未过期时，以权威视图与请求发起前采样的账号 ID 触发一次回调', async () => {
+    const onProfileSaved = vi.fn();
+    const sampleAccountId = vi.fn(() => 900201);
+    const updated: AccountSettingsView = { ...SETTINGS, nickname: '侧栏新昵称' };
+    updateProfileMock.mockResolvedValue({ isUpdated: true, ok: true, settings: updated });
+    const { result } = renderHook(() => useAccountSettings({ onProfileSaved, sampleAccountId }));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let execution: ProfileExecution = { kind: 'in-flight' };
+
+    await act(async () => {
+      execution = await result.current.updateProfile({ nickname: '侧栏新昵称' });
+    });
+
+    expect(execution).toMatchObject({ kind: 'ok' });
+    expect(sampleAccountId).toHaveBeenCalledTimes(1);
+    expect(onProfileSaved).toHaveBeenCalledTimes(1);
+    expect(onProfileSaved).toHaveBeenCalledWith(updated, 900201);
+  });
+
+  it('身份采样固化在请求发起前：发起后切换账号，迟到响应仍携带发起者身份而非当前账号', async () => {
+    const onProfileSaved = vi.fn();
+    // 请求发起时会话是 A（900201）；响应返回前会话切到 B（900202）
+    let currentAccountId = 900201;
+    const sampleAccountId = vi.fn(() => currentAccountId);
+    const updated: AccountSettingsView = { ...SETTINGS, nickname: 'A 保存的昵称' };
+    const gate = deferred<AccountSettingsProfileUpdateResult>();
+    updateProfileMock.mockReturnValue(gate.promise);
+    const { result } = renderHook(() => useAccountSettings({ onProfileSaved, sampleAccountId }));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let first: Promise<ProfileExecution> = Promise.resolve({ kind: 'in-flight' });
+
+    await act(async () => {
+      first = result.current.updateProfile({ nickname: 'A 保存的昵称' });
+    });
+    // 请求已在途，此时切换会话到 B
+    currentAccountId = 900202;
+
+    await act(async () => {
+      gate.resolve({ isUpdated: true, ok: true, settings: updated });
+      await first;
+    });
+
+    // 采样只发生在请求发起前：迟到响应不得把 B 的账号 ID 当作本次保存的身份
+    expect(sampleAccountId).toHaveBeenCalledTimes(1);
+    expect(onProfileSaved).toHaveBeenCalledTimes(1);
+    expect(onProfileSaved).toHaveBeenCalledWith(updated, 900201);
+  });
+
+  it('过期写结果（序列已推进）不触发回调', async () => {
+    const onProfileSaved = vi.fn();
+    const gate = deferred<AccountSettingsProfileUpdateResult>();
+    updateProfileMock.mockReturnValue(gate.promise);
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValueOnce(SETTINGS).mockResolvedValueOnce(RELOADED_SETTINGS);
+    const { result } = renderHook(() =>
+      useAccountSettings({ onProfileSaved, sampleAccountId: () => 900201 }),
+    );
+    await waitFor(() =>
+      expect(result.current.state).toEqual({ settings: SETTINGS, status: 'ready' }),
+    );
+
+    let first: Promise<ProfileExecution> = Promise.resolve({ kind: 'in-flight' });
+
+    await act(async () => {
+      first = result.current.updateProfile({ nickname: '过期写入' });
+      result.current.reload();
+    });
+    await waitFor(() =>
+      expect(result.current.state).toEqual({ settings: RELOADED_SETTINGS, status: 'ready' }),
+    );
+
+    await act(async () => {
+      gate.resolve({
+        isUpdated: true,
+        ok: true,
+        settings: { ...SETTINGS, nickname: '过期写入' },
+      });
+      await first;
+    });
+
+    // 写结果被整体丢弃：会话真源同样不得被过期昵称覆盖
+    expect(onProfileSaved).not.toHaveBeenCalled();
+  });
+
+  it('业务拒绝（ok=false）不触发回调', async () => {
+    const onProfileSaved = vi.fn();
+    updateProfileMock.mockResolvedValue({
+      message: '登录名或登录邮箱已被占用，请更换后重试。',
+      ok: false as const,
+      reason: 'duplicate-credential' as const,
+    });
+    const { result } = renderHook(() =>
+      useAccountSettings({ onProfileSaved, sampleAccountId: () => 900201 }),
+    );
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    await act(async () => {
+      await result.current.updateProfile(DRAFT);
+    });
+
+    expect(onProfileSaved).not.toHaveBeenCalled();
+  });
+
+  it('改密成功不触发回调：凭据更新不参与昵称同步，会话字段无从改写', async () => {
+    const onProfileSaved = vi.fn();
+    updatePasswordMock.mockResolvedValue({ notice: '密码已更新', ok: true });
+    const { result } = renderHook(() =>
+      useAccountSettings({ onProfileSaved, sampleAccountId: () => 900201 }),
+    );
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    await act(async () => {
+      await result.current.updatePassword({
+        currentPassword: 'Old#Pass2026',
+        newPassword: 'Str0ng#Pass2026',
+      });
+    });
+
+    expect(onProfileSaved).not.toHaveBeenCalled();
+  });
+});
+
 describe('useAccountSettings 陈旧响应与并发边界', () => {
   it('写命令进行中发起 reload 后，过期写结果被整体丢弃', async () => {
     const gate = deferred<AccountSettingsProfileUpdateResult>();

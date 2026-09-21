@@ -16,6 +16,7 @@ const GROUPS = {
       'test/04-user-info/admin-user-management.e2e-spec.ts',
       'test/04-user-info/my-account-settings.e2e-spec.ts',
       'test/04-user-info/my-account-settings-write.e2e-spec.ts',
+      'test/04-user-info/my-account-settings-write-production.e2e-spec.ts',
       'test/05-verification-record/verification-record-types.e2e-spec.ts',
       'test/05-verification-record/verification-record-invite.e2e-spec.ts',
       'test/06-repair-request/repair-request-auth.e2e-spec.ts',
