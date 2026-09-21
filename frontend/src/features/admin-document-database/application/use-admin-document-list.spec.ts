@@ -164,9 +164,15 @@ describe('useAdminDocumentList', () => {
       result.current.goToPage(2);
     });
     rerender({ reloadKey: 'filter-b' });
-    await waitFor(() => expect(fetcher).toHaveBeenNthCalledWith(3, 1, 10));
-    if (result.current.state.status !== 'ready') throw new Error('unreachable');
-    expect(result.current.state.items).toEqual(['fresh-page-1']);
+    // 等「新页就绪」这一结果态，而非 fetch 调用次数：调用发生 ≠ 响应已落到 reducer，
+    // 只等调用次数会在微任务未 flush 时瞬时读到 loading，造成偶发失败。
+    await waitFor(() => {
+      if (result.current.state.status !== 'ready') {
+        throw new Error('等待新页 ready 超时');
+      }
+      expect(result.current.state.items).toEqual(['fresh-page-1']);
+    });
+    expect(fetcher).toHaveBeenNthCalledWith(3, 1, 10);
 
     // 旧的第 2 页请求最后才失败：不得把已就绪的第 1 页打回 failed
     await act(async () => {

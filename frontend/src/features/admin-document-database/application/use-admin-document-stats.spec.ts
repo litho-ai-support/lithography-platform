@@ -96,4 +96,34 @@ describe('useAdminDocumentStats', () => {
     if (result.current.state.status !== 'ready') throw new Error('unreachable');
     expect(result.current.state.stats).toEqual(STATS);
   });
+
+  it('晚到的旧统计响应不得覆盖新 reload 的结果（requestSeq 竞态防护）', async () => {
+    // 与列表/详情 hook 同级的分支×时序回归：初次挂载请求（#1）挂起，
+    // reload（#2）先成功就绪，再让 #1 的旧响应晚到——必须被丢弃，
+    // 不得把已就绪的新统计打回旧值。
+    let resolveStale: (stats: AdminDocumentDatabaseStats) => void = () => {};
+    const stalePromise = new Promise<AdminDocumentDatabaseStats>((resolve) => {
+      resolveStale = resolve;
+    });
+    const freshStats: AdminDocumentDatabaseStats = { ...STATS, repairRequestTotal: 999 };
+    mockFetchStats.mockReturnValueOnce(stalePromise).mockResolvedValueOnce(freshStats);
+
+    const { result } = renderHook(() => useAdminDocumentStats());
+    await waitFor(() => expect(mockFetchStats).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await result.current.reload();
+    });
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+    if (result.current.state.status !== 'ready') throw new Error('unreachable');
+    expect(result.current.state.stats.repairRequestTotal).toBe(999);
+
+    // 旧的第 1 次请求最后才落地：不得覆盖 reload 已就绪的 999
+    await act(async () => {
+      resolveStale(STATS);
+    });
+    await waitFor(() => expect(mockFetchStats).toHaveBeenCalledTimes(2));
+    if (result.current.state.status !== 'ready') throw new Error('unreachable');
+    expect(result.current.state.stats.repairRequestTotal).toBe(999);
+  });
 });

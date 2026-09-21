@@ -243,7 +243,7 @@ export function AdminRepairRequestsTab() {
         onRetry={reload}
         state={state}
       >
-        {state.status === 'ready' && state.total > 0 && state.items.length > 0 ? (
+        {state.status === 'ready' && state.total > 0 ? (
           <div className="flex flex-col gap-4">
             <Table<AdminRepairRequestListItem>
               columns={columns}
