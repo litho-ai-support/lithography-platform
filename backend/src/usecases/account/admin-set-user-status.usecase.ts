@@ -9,6 +9,7 @@ import {
   isDomainError,
   PERMISSION_ERROR,
 } from '@core/common/errors/domain-error';
+import { isDualStatusFieldsConsistent } from '@core/account/policy/dual-status-consistency.policy';
 import { Inject, Injectable } from '@nestjs/common';
 import type { AdminUserStatusFacts, AdminUserView } from '@src/modules/account/account.types';
 import { AccountService } from '@src/modules/account/base/services/account.service';
@@ -24,11 +25,7 @@ import {
 } from './admin-user-management.input.normalize';
 import type { AdminSetUserStatusCommand } from './admin-user-management.types';
 import { assertAdminUserManagementPermission } from './admin-user-permission';
-import {
-  isDualStatusFieldsConsistent,
-  loadWritableAdminUserTarget,
-  logAdminUserWriteFailure,
-} from './admin-user-write-support';
+import { loadWritableAdminUserTarget, logAdminUserWriteFailure } from './admin-user-write-support';
 
 /** 事务内的写入阶段标记，只用于服务端日志定位，不出现在任何对外响应中。 */
 type AdminSetUserStatusPhase =
@@ -257,7 +254,7 @@ export class AdminSetUserStatusUsecase {
    * - 当前状态为 `PENDING` / `SUSPENDED` / `BANNED` / `DELETED`（含无法识别的值——
    *   数据库列是 enum，但应用不信任这一层：任何不在两态白名单内的当前值都进不了矩阵）；
    * - `account.status` 与 `userInfo.userState` 不一致（两枚举类型不同、成员字符串当前
-   *   逐字相同，一致性判定共用 `isDualStatusFieldsConsistent()` 单一实现，
+   *   逐字相同；一致性判定上收 core `dual-status-consistency.policy.ts` 单一实现）；
    * - 当前状态缺失（`findAdminUserStatusFacts()` 返回 `null`，上方已按系统侧读失败关闭）。
    *
    * 全部使用独立错误码 `STATUS_TRANSITION_NOT_ALLOWED`（对外 `CONFLICT`）：
@@ -282,7 +279,12 @@ export class AdminSetUserStatusUsecase {
         },
       );
     }
-    if (!isDualStatusFieldsConsistent(facts)) {
+    if (
+      !isDualStatusFieldsConsistent({
+        accountStatus: facts.accountStatus,
+        userState: facts.userState,
+      })
+    ) {
       throw new DomainError(
         ADMIN_USER_ERROR.STATUS_TRANSITION_NOT_ALLOWED,
         '账号当前状态不一致，无法执行启用或停用',

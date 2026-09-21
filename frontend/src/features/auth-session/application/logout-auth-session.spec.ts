@@ -2,7 +2,10 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createLogoutAuthSessionUsecase } from './logout-auth-session';
+import {
+  createConditionalLogoutAuthSessionUsecase,
+  createLogoutAuthSessionUsecase,
+} from './logout-auth-session';
 
 describe('logout auth session usecase', () => {
   it('clears the single session owner and the GraphQL cache', async () => {
@@ -63,5 +66,67 @@ describe('logout auth session usecase', () => {
 
     expect(clearSession).toHaveBeenCalledTimes(2);
     expect(clearCache).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('conditional logout usecase（迟到响应裁决）', () => {
+  const IDENTITY = { accountId: 900201, epoch: 1 };
+
+  it('身份匹配时清理会话真源与缓存并返回 true', async () => {
+    const callOrder: string[] = [];
+    const logoutIfMatches = createConditionalLogoutAuthSessionUsecase({
+      cache: {
+        clearCache: async () => {
+          callOrder.push('cache');
+        },
+      },
+      session: {
+        clearSessionIfIdentityMatches: (identity) => {
+          expect(identity).toEqual(IDENTITY);
+          callOrder.push('session');
+
+          return true;
+        },
+      },
+    });
+
+    await expect(logoutIfMatches(IDENTITY)).resolves.toBe(true);
+    expect(callOrder).toEqual(['session', 'cache']);
+  });
+
+  it('身份不匹配（退出重登 / 已切换账号的迟到响应）时不做任何清理并返回 false', async () => {
+    const clearSessionIfIdentityMatches = vi.fn().mockReturnValue(false);
+    const clearCache = vi.fn().mockResolvedValue(undefined);
+    const logoutIfMatches = createConditionalLogoutAuthSessionUsecase({
+      cache: { clearCache },
+      session: { clearSessionIfIdentityMatches },
+    });
+
+    await expect(logoutIfMatches(IDENTITY)).resolves.toBe(false);
+    expect(clearSessionIfIdentityMatches).toHaveBeenCalledTimes(1);
+    expect(clearCache).not.toHaveBeenCalled();
+  });
+
+  it('null 身份（装配层未接入采样）fail-closed：不清理、不触碰缓存', async () => {
+    const clearSessionIfIdentityMatches = vi.fn().mockReturnValue(false);
+    const clearCache = vi.fn().mockResolvedValue(undefined);
+    const logoutIfMatches = createConditionalLogoutAuthSessionUsecase({
+      cache: { clearCache },
+      session: { clearSessionIfIdentityMatches },
+    });
+
+    await expect(logoutIfMatches(null)).resolves.toBe(false);
+    expect(clearCache).not.toHaveBeenCalled();
+  });
+
+  it('身份匹配但缓存清理失败：会话已清理，错误向外传播（调用方决定是否继续跳转）', async () => {
+    const clearSessionIfIdentityMatches = vi.fn().mockReturnValue(true);
+    const logoutIfMatches = createConditionalLogoutAuthSessionUsecase({
+      cache: { clearCache: vi.fn().mockRejectedValue(new Error('cache reset failed')) },
+      session: { clearSessionIfIdentityMatches },
+    });
+
+    await expect(logoutIfMatches(IDENTITY)).rejects.toThrow('cache reset failed');
+    expect(clearSessionIfIdentityMatches).toHaveBeenCalledTimes(1);
   });
 });

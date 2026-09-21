@@ -1,6 +1,7 @@
 import {
   CAPABILITY_ERROR,
   DomainError,
+  INPUT_NORMALIZE_ERROR,
   REFERENCE_DOCUMENT_ERROR,
   REPAIR_REQUEST_ERROR,
 } from '@core/common/errors';
@@ -88,6 +89,33 @@ describe(GqlAllExceptionsFilter.name, () => {
     expect(error.extensions).toMatchObject({
       code: gqlCode,
       errorCode,
+    });
+  });
+
+  // 生产环境错误分类关键路径：弱密码等输入类拒绝走 DomainError 路径时，其
+  // BAD_USER_INPUT 分类在生产环境保持不变（HttpException 路径在生产环境会把
+  // 一切收敛为 INTERNAL_SERVER_ERROR，输入类业务拒绝因此必须走 DomainError）
+  it('maps input normalize error to BAD_USER_INPUT in production via the DomainError path', () => {
+    const configService = {
+      get: jest.fn().mockReturnValue('production'),
+    } as unknown as ConfigService;
+    const host = {
+      getType: () => 'graphql',
+      getArgs: () => [undefined, {}, {}, { fieldName: 'changeMyPassword' }],
+    } as unknown as ArgumentsHost;
+    const filter = new GqlAllExceptionsFilter(configService);
+
+    const error = filter.catch(
+      new DomainError(
+        INPUT_NORMALIZE_ERROR.INVALID_TEXT,
+        '新密码不符合安全要求: 密码长度至少为 8 位',
+      ),
+      host,
+    ) as GraphQLError;
+
+    expect(error.extensions).toMatchObject({
+      code: 'BAD_USER_INPUT',
+      errorCode: INPUT_NORMALIZE_ERROR.INVALID_TEXT,
     });
   });
 });

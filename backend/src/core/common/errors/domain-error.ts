@@ -243,6 +243,38 @@ export const ADMIN_USER_ERROR = {
 } as const;
 Object.freeze(ADMIN_USER_ERROR);
 
+/**
+ * 当前用户账号设置（自助场景，P2/P3）写链路专用错误码。
+ *
+ * 与 `ADMIN_USER_ERROR` 的关系：自助设置不复用
+ * admin 命名的 DTO / Command / View 作为公开契约，可复用其「底层事实与设计经验」；
+ * 系统侧读写失败没有自助语义，继续复用 `ADMIN_USER_ERROR.READ_FAILED` / `WRITE_FAILED`
+ * （P1 已确立的先例，见 `AccountQueryService.toMyAccountSettingsSnapshot()` 注释），
+ * 本目录只收管理员场景**没有**的三类自助语义：
+ *
+ * - `LOGIN_CREDENTIAL_BOTH_EMPTY`：合并当前值后登录名与登录邮箱双空（「至少保留一个登录
+ *   方式」被违反）。判定发生在锁内合并之后（输入层无法裁决——用户清空一个凭据时另一个
+ *   可能早已为空），因此不是纯输入收敛错误，但对外仍按客户端输入类表达，
+ *   映射 `BAD_USER_INPUT`，不得使用 `AUTH_ERROR.*` / `JWT_ERROR.*`（UNAUTHENTICATED）；
+ * - `CREDENTIAL_CONFLICT`：登录名 / 登录邮箱被其他账号占用。语义与
+ *   `ADMIN_USER_ERROR.CREDENTIAL_CONFLICT` 同构但场景不同（自助改自己的 vs 管理员改他人的），
+ *   独立收码、独立映射 CONFLICT，错误文案可定位到字段；不携带被占用者的任何身份信息；
+ * - `CURRENT_PASSWORD_MISMATCH`：当前密码验证未通过（含 `verifyPassword()` 的
+ *   `preprocessPassword` 对首尾空白 / 纯空白抛 `AUTH_ERROR.INVALID_PASSWORD` 的收敛——
+ *   该码映射 `UNAUTHENTICATED`，会让前端误判会话失效并清理 Session 跳转登录页，
+ *   而此类输入形态不可能是正确密码，收敛为「当前密码不正确」语义等价且安全）。
+ *   映射 `BAD_USER_INPUT`（当前密码不正确不得触发全局 Session 失效跳转）。
+ *
+ * `details` 一律留空：字段级提示走 `message`，账号主键与诊断分类只进 `DomainError.cause`
+ * （全局过滤器不序列化 `cause`）。
+ */
+export const MY_ACCOUNT_ERROR = {
+  LOGIN_CREDENTIAL_BOTH_EMPTY: 'MY_ACCOUNT_LOGIN_CREDENTIAL_BOTH_EMPTY',
+  CREDENTIAL_CONFLICT: 'MY_ACCOUNT_CREDENTIAL_CONFLICT',
+  CURRENT_PASSWORD_MISMATCH: 'MY_ACCOUNT_CURRENT_PASSWORD_MISMATCH',
+} as const;
+Object.freeze(MY_ACCOUNT_ERROR);
+
 export const INPUT_NORMALIZE_ERROR = {
   INVALID_TEXT: 'INPUT_NORMALIZE_INVALID_TEXT',
   REQUIRED_TEXT_EMPTY: 'INPUT_NORMALIZE_REQUIRED_TEXT_EMPTY',
@@ -275,6 +307,7 @@ export type RepairRequestErrorCode =
 export type ReferenceDocumentErrorCode =
   (typeof REFERENCE_DOCUMENT_ERROR)[keyof typeof REFERENCE_DOCUMENT_ERROR];
 export type AdminUserErrorCode = (typeof ADMIN_USER_ERROR)[keyof typeof ADMIN_USER_ERROR];
+export type MyAccountErrorCode = (typeof MY_ACCOUNT_ERROR)[keyof typeof MY_ACCOUNT_ERROR];
 export type InputNormalizeErrorCode =
   (typeof INPUT_NORMALIZE_ERROR)[keyof typeof INPUT_NORMALIZE_ERROR];
 
@@ -302,6 +335,7 @@ export type DomainErrorCode =
   | RepairRequestErrorCode
   | ReferenceDocumentErrorCode
   | AdminUserErrorCode
+  | MyAccountErrorCode
   | InputNormalizeErrorCode
   | PaginationErrorCode;
 

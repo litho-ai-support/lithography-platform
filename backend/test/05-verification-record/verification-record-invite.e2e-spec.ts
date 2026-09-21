@@ -112,8 +112,13 @@ describe('05-VerificationRecord 邀请停用 E2E', () => {
   let dataSource: DataSource;
   let createAccountUsecase: CreateAccountUsecase;
   let staffAccessToken: string;
+  let previousIntrospectionEnabled: string | undefined;
 
   beforeAll(async () => {
+    // E2E 基线默认关闭 introspection；本 spec 仅在自身 API 初始化期间临时开启，
+    // 用于验证 enum 公开契约，不修改 .env、生产 GraphQL 配置或 schema 生成物。
+    previousIntrospectionEnabled = process.env.GRAPHQL_INTROSPECTION_ENABLED;
+    process.env.GRAPHQL_INTROSPECTION_ENABLED = 'true';
     initGraphQLSchema();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -144,6 +149,12 @@ describe('05-VerificationRecord 邀请停用 E2E', () => {
   afterAll(async () => {
     if (app) {
       await app.close();
+    }
+
+    if (previousIntrospectionEnabled === undefined) {
+      delete process.env.GRAPHQL_INTROSPECTION_ENABLED;
+    } else {
+      process.env.GRAPHQL_INTROSPECTION_ENABLED = previousIntrospectionEnabled;
     }
   });
 

@@ -1,8 +1,12 @@
 // src/features/auth-session/auth-session-entry.ts
 
+import type { AuthSessionIdentity } from './application/auth-session.types';
 import { createAuthSessionStore } from './application/auth-session-store';
 import { createLoginWithPasswordUsecase } from './application/login-with-password';
-import { createLogoutAuthSessionUsecase } from './application/logout-auth-session';
+import {
+  createConditionalLogoutAuthSessionUsecase,
+  createLogoutAuthSessionUsecase,
+} from './application/logout-auth-session';
 import { apolloAuthSessionCache } from './infrastructure/apollo-session-cache';
 import { graphQLAuthLoginGateway } from './infrastructure/auth-login-graphql';
 import { browserAuthSessionPersistence } from './infrastructure/auth-session-storage';
@@ -13,6 +17,10 @@ const executeLoginWithPassword = createLoginWithPasswordUsecase({
   session: authSessionStore,
 });
 export const logoutAuthSession = createLogoutAuthSessionUsecase({
+  cache: apolloAuthSessionCache,
+  session: authSessionStore,
+});
+export const logoutAuthSessionIfIdentityMatches = createConditionalLogoutAuthSessionUsecase({
   cache: apolloAuthSessionCache,
   session: authSessionStore,
 });
@@ -27,6 +35,27 @@ export function hasCurrentAuthSession(): boolean {
 
 export function getAuthSessionAccessToken(): string | null {
   return getCurrentAuthSession()?.accessToken ?? null;
+}
+
+/**
+ * 请求发起前采样当前会话身份（不含 Token 的窄身份：accountId + 会话代次）。
+ * 供改密等动作在发起时固化「这次动作属于哪个会话」，迟到响应由条件登出
+ * 与当前会话比对裁决；无会话时返回 null。
+ */
+export function sampleCurrentAuthSessionIdentity(): AuthSessionIdentity | null {
+  return authSessionStore.sampleSessionIdentity();
+}
+
+/**
+ * 仅更新当前会话显示昵称的窄入口（账号设置资料保存成功后的回写面）。
+ *
+ * 只收窄到「昵称」这一件事：accountId 必须与当前会话一致、新昵称经 snapshot
+ * 工厂校验后，内存状态与 sessionStorage 持久化同步更新并发布订阅；其余情况
+ * 一律不更新。返回是否发生了更新。不暴露 Token / 角色等任何其他会话字段的
+ * 写入口。
+ */
+export function updateCurrentAuthSessionNickname(accountId: number, nickname: string): boolean {
+  return authSessionStore.updateNickname({ accountId, nickname });
 }
 
 // loginWithPassword 仅供 feature 内部（LoginForm）相对导入使用，不属于模块公开 API；

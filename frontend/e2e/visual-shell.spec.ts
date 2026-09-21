@@ -33,6 +33,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('seeded roles see only their own stable menu items in the sidebar', async ({ page }) => {
+  // 本用例含多次真实页面导航，在 dev server 串行门禁中需要独立预算。
+  test.setTimeout(40_000);
   const expectations: Array<{
     path: string;
     role: 'CUSTOMER' | 'ENGINEER' | 'SUPER_ADMIN';

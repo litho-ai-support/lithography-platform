@@ -18,7 +18,12 @@ import { LegacyPasswordCryptoHelper } from '@modules/common/password/legacy-pass
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { getTypeOrmEntityManager } from '@src/infrastructure/database/transaction/typeorm-persistence-transaction-context';
-import type { AccountCreateOutcome } from '@src/modules/account/account.types';
+import type {
+  AccountCredentialSnapshot,
+  AccountCreateOutcome,
+  MyAccountCredentialWriteOutcome,
+  MyAccountSettingsUpdateFacts,
+} from '@src/modules/account/account.types';
 import { QueryFailedError, Repository } from 'typeorm';
 
 // ✅ base 层实体（始终存在）
@@ -214,6 +219,135 @@ export class AccountService {
       loginPassword: params.passwordHash,
       updatedAt: new Date(),
     });
+  }
+
+  /**
+   * 自助设置更新（P2）：窄凭据写入——一次性覆盖当前账号的 `login_name` / `login_email`
+   * 两列并维护 `updated_at`，数据库唯一索引冲突收敛为稳定事实
+   * （`MyAccountCredentialWriteOutcome`，依据与 `insertAccount()` 相同的
+   * 「返回事实对象而不抛错」precedent）。
+   *
+   * 为什么不复用 `updateAccount()`：该方法接收 `Partial<AccountEntity>`（把 ORM 实体类型
+   * 暴露给调用方）且不识别唯一索引冲突。本方法只接受两个纯字符串列值，由 Usecase 在锁内
+   * 合并后传入；「至少一个非 null」已由用例侧裁决，本方法不做业务断言。
+   *
+   * 唯一冲突只表达「冲突了」，不带维度（见 `MyAccountCredentialWriteOutcome` 注释）；
+   * 其余数据库异常收敛为 `ADMIN_USER_ERROR.WRITE_FAILED`（对外 `INTERNAL_SERVER_ERROR`），
+   * 驱动错误文本可能含 SQL / 表名 / 索引名，仅以 `cause` 在内部保留。
+   */
+  async updateMyAccountCredentials(params: {
+    accountId: number;
+    loginName: string | null;
+    loginEmail: string | null;
+    transactionContext: PersistenceTransactionContext;
+  }): Promise<MyAccountCredentialWriteOutcome> {
+    const repository = this.getAccountRepository(params.transactionContext);
+    try {
+      await repository.update(params.accountId, {
+        loginName: params.loginName,
+        loginEmail: params.loginEmail,
+        updatedAt: new Date(),
+      });
+      return { kind: 'UPDATED' };
+    } catch (error) {
+      if (this.isUniqueConstraintViolation(error)) {
+        return { kind: 'CREDENTIAL_CONFLICT' };
+      }
+      throw new DomainError(
+        ADMIN_USER_ERROR.WRITE_FAILED,
+        '账号设置写入失败，请稍后重试',
+        undefined,
+        error,
+      );
+    }
+  }
+
+  /**
+   * 自助设置更新（P2）：事务内锁定当前账号的 account 行，并读取六个可写私有字段的
+   * **纯当前值事实**（`MyAccountSettingsUpdateFacts`）。
+   *
+   * 为什么不让新 Usecase 复用 `lockByIdForUpdate()`：该方法返回 ORM Entity 且缺失时抛
+   * `ACCOUNT_ERROR.ACCOUNT_NOT_FOUND`——该码值与 `AUTH_ERROR.ACCOUNT_NOT_FOUND` 相同，
+   * 会被全局过滤器映射为 `UNAUTHENTICATED`，让「自己的账号行在库中不存在」这一数据不变量
+   * 破坏被前端误判为会话失效。本方法失败关闭口径与 `AccountQueryService
+   * .findMyAccountSettingsSnapshot()` 一致：账号行缺失返回 `null`（错误口径归调用方 Usecase），
+   * 资料行缺失抛 `ADMIN_USER_ERROR.READ_FAILED`（`details` 留空，诊断只进 `cause`）。
+   *
+   * 锁顺序沿用全仓统一口径（`admin-user-write-support.ts` / `UpdateAccessGroupUsecase`）：
+   * 先对 account 行取 `pessimistic_write`，再读 userInfo——同一账号的并发设置更新由该行锁
+   * 串行化，避免两个请求分别清空一种凭据后留下双空。
+   *
+   * 刻意不做三源角色收敛与双状态一致性判定：合并裁决只需要六个可写字段当前值，写后校验
+   * 由 Usecase 在事务内回读 `findMyAccountSettingsSnapshot()` 承担（同一失败关闭口径，
+   * 不在两条路径各写一份）。`transactionContext` 必传：行锁只在真实事务内有意义。
+   */
+  async lockMyAccountSettingsFacts(params: {
+    accountId: number;
+    transactionContext: PersistenceTransactionContext;
+  }): Promise<MyAccountSettingsUpdateFacts | null> {
+    const accountRepository = this.getAccountRepository(params.transactionContext);
+    const account = await accountRepository
+      .createQueryBuilder('account')
+      .where('account.id = :accountId', { accountId: params.accountId })
+      .setLock('pessimistic_write')
+      .getOne();
+    if (!account) {
+      return null;
+    }
+
+    const userInfoRepository = this.getUserInfoRepository(params.transactionContext);
+    const userInfo = await userInfoRepository.findOne({ where: { accountId: params.accountId } });
+    if (!userInfo) {
+      // 资料行缺失属数据不变量被破坏，失败关闭（与 P1 的映射点同口径，不静默修复）
+      throw new DomainError(
+        ADMIN_USER_ERROR.READ_FAILED,
+        '账号资料缺失，无法更新账号设置',
+        undefined,
+        { diagnostic: 'USER_INFO_ROW_MISSING', accountId: params.accountId },
+      );
+    }
+
+    return {
+      accountId: account.id,
+      loginName: account.loginName,
+      loginEmail: account.loginEmail,
+      nickname: userInfo.nickname,
+      companyName: userInfo.companyName,
+      phone: userInfo.phone,
+      contactEmail: userInfo.email,
+    };
+  }
+
+  /**
+   * 自助修改密码（P3）：事务内锁定当前账号的 account 行，返回**纯 credential 快照**
+   * （`AccountCredentialSnapshot`，与登录链路 `findCredentialByLoginName()` 同一类型），
+   * 供 Usecase 用 `AccountService.verifyPassword()` + `hashPasswordWithTimestamp()` 完成验证
+   * 与再哈希。刻意新增本窄方法而不是让新 Usecase 调用返回 Entity 的
+   * `lockByIdForUpdate()`（理由同 `lockMyAccountSettingsFacts()`：Entity 不出 modules，
+   * 且缺失语义不得塌缩为 `UNAUTHENTICATED`）。
+   *
+   * `createdAt` 是密码哈希的时间盐：必须取**锁内数据库行**的权威值，不得由应用侧另取时钟
+   * （登录校验侧以库中 `created_at` 为盐，两侧同源才可验证）。
+   */
+  async lockMyAccountCredentialSnapshot(params: {
+    accountId: number;
+    transactionContext: PersistenceTransactionContext;
+  }): Promise<AccountCredentialSnapshot | null> {
+    const repository = this.getAccountRepository(params.transactionContext);
+    const account = await repository
+      .createQueryBuilder('account')
+      .where('account.id = :accountId', { accountId: params.accountId })
+      .setLock('pessimistic_write')
+      .getOne();
+    if (!account) {
+      return null;
+    }
+    return {
+      id: account.id,
+      status: account.status,
+      loginPassword: account.loginPassword,
+      createdAt: account.createdAt,
+    };
   }
 
   /**

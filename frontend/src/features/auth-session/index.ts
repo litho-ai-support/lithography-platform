@@ -1,6 +1,7 @@
 // src/features/auth-session/index.ts
 
 export type {
+  AuthSessionIdentity,
   AuthSessionRole,
   AuthSessionUserSummary,
   AuthSessionView,
@@ -25,6 +26,9 @@ export {
   getCurrentAuthSession,
   hasCurrentAuthSession,
   logoutAuthSession,
+  logoutAuthSessionIfIdentityMatches,
+  sampleCurrentAuthSessionIdentity,
+  updateCurrentAuthSessionNickname,
 } from './auth-session-entry';
 export {
   AUTH_LOGIN_REASON_PARAM_KEY,

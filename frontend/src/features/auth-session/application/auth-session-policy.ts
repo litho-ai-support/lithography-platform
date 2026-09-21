@@ -89,11 +89,12 @@ const AUTH_SESSION_ROLE_HOME_PATHS: Record<AuthSessionRole, string> = {
 // 这里登记的是各角色允许访问的路由根路径；根路径下的子页面（如 /customer/）
 // 由 isRolePathAllowed 的带边界前缀匹配统一放行，不在别处维护第二份角色路径表。
 const AUTH_SESSION_ROLE_ALLOWED_ROOT_PATHS: Record<AuthSessionRole, readonly string[]> = {
-  CUSTOMER: ['/customer'],
+  // /account：账号设置（0909 账号设置计划）对全部登录角色开放，三种角色同口径放行
+  CUSTOMER: ['/account', '/customer'],
   // /reference-documents：AI 参考资料库（0907 任务二）；读模型向 ENGINEER/SUPER_ADMIN
   // 开放，CUSTOMER 完全禁入（访问时安全跳转回个人主页，与后端读守卫口径一致）
-  ENGINEER: ['/engineer', '/reference-documents'],
-  SUPER_ADMIN: ['/admin', '/customer', '/engineer', '/reference-documents'],
+  ENGINEER: ['/account', '/engineer', '/reference-documents'],
+  SUPER_ADMIN: ['/account', '/admin', '/customer', '/engineer', '/reference-documents'],
 };
 
 // 角色路由拒绝清单：优先于根路径表生效，匹配语义与根路径表一致（精确或带边界子路径）。

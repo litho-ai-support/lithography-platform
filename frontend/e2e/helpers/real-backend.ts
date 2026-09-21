@@ -13,11 +13,40 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const BACKEND_GRAPHQL = 'http://127.0.0.1:3000/graphql';
-export const BACKEND_HEALTH = 'http://127.0.0.1:3000/health';
-export const BACKEND_REST_UPLOAD = 'http://127.0.0.1:3000/api/reference-documents/upload';
+import {
+  DEDICATED_BACKEND_ORIGIN,
+  DEDICATED_E2E_DB_NAME,
+} from '../../e2e-real/dedicated-e2e-environment';
+
+// 后端源（origin）收口：默认仍指向本地 dev 后端 127.0.0.1:3000（既有真实链路 spec 口径不变）。
+// 专用账号设置联调（playwright.account-settings-real.config.ts）经进程级环境变量
+// E2E_BACKEND_ORIGIN 指向专用后端（http://127.0.0.1:3100），浏览器 / Node GraphQL helper /
+// SQL helper 由此共享同一目标；来源必须是无路径的 http(s) origin，否则在连接前直接失败。
+const BACKEND_ORIGIN_PATTERN = /^https?:\/\/[a-z0-9._-]+(:\d+)?$/i;
+
+function resolveBackendOrigin(): string {
+  const configured = process.env.E2E_BACKEND_ORIGIN?.trim();
+
+  if (configured === undefined || configured === '') {
+    return 'http://127.0.0.1:3000';
+  }
+
+  if (!BACKEND_ORIGIN_PATTERN.test(configured)) {
+    throw new Error(
+      `E2E_BACKEND_ORIGIN 不是合法的无路径 origin，拒绝连接：${JSON.stringify(configured)}`,
+    );
+  }
+
+  return configured;
+}
+
+const BACKEND_ORIGIN = resolveBackendOrigin();
+
+export const BACKEND_GRAPHQL = `${BACKEND_ORIGIN}/graphql`;
+export const BACKEND_HEALTH = `${BACKEND_ORIGIN}/health`;
+export const BACKEND_REST_UPLOAD = `${BACKEND_ORIGIN}/api/reference-documents/upload`;
 export function backendRestDownloadUrl(id: number): string {
-  return `http://127.0.0.1:3000/api/reference-documents/${id}/download`;
+  return `${BACKEND_ORIGIN}/api/reference-documents/${id}/download`;
 }
 
 const BACKEND_ENV_FILE = fileURLToPath(
@@ -32,6 +61,12 @@ const FRONTEND_VITE_CONFIG_FILE = fileURLToPath(new URL('../../vite.config.ts', 
 // 仅白名单匹配的编号才允许进入 SQL 拼接（由受保护 helper 强制，见下方守卫说明）。
 export const REQUEST_NO_PATTERN = /^RR\d{14}[A-Z0-9]{6}$/;
 
+// 数据库连接键允许进程级运行时覆盖（仅这 5 个键，其他键仍只读文件值）：
+// 真实 E2E 需要在不改写任何 .env 文件的前提下，把 mysqlQuery / 物理清理安全门
+// 与应用后端指向同一个独立测试库。空白值不覆盖，避免 `DB_NAME=` 误清空文件值；
+// 覆盖后的 DB_NAME 依旧要过 assertPhysicalCleanupAllowed 的显式 opt-in + 测试库命名门。
+const DB_CONNECTION_KEYS = ['DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASS', 'DB_NAME'] as const;
+
 export function readBackendEnv(): Record<string, string> {
   const entries: Record<string, string> = {};
 
@@ -39,6 +74,14 @@ export function readBackendEnv(): Record<string, string> {
     const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
     if (match) {
       entries[match[1]] = match[2];
+    }
+  }
+
+  for (const key of DB_CONNECTION_KEYS) {
+    const runtimeValue = process.env[key];
+
+    if (runtimeValue !== undefined && runtimeValue.trim() !== '') {
+      entries[key] = runtimeValue;
     }
   }
 
@@ -79,8 +122,24 @@ export function hasFrontendGraphQLEndpoint(): boolean {
   }
 }
 
+// 专用真实链路同一性检查（R4 复核修正轮 P2）：当 E2E_BACKEND_ORIGIN 指向专用后端时，
+// SQL helper 的 DB_NAME 必须等于专用库，杜绝「浏览器/Node GraphQL 打到专用后端，
+// SQL 清理却连接其他库」的错位。普通真实链路（默认 127.0.0.1:3000）不受影响。
+function assertDedicatedLinkDatabaseConsistency(env: Record<string, string>): void {
+  if (BACKEND_ORIGIN !== DEDICATED_BACKEND_ORIGIN) {
+    return;
+  }
+
+  if (env.DB_NAME !== DEDICATED_E2E_DB_NAME) {
+    throw new Error(
+      `专用真实链路配置不一致：E2E_BACKEND_ORIGIN 指向专用后端，但 SQL helper DB_NAME=${JSON.stringify(env.DB_NAME)} ≠ ${JSON.stringify(DEDICATED_E2E_DB_NAME)}，拒绝访问数据库`,
+    );
+  }
+}
+
 export function mysqlQuery(sql: string): string {
   const env = readBackendEnv();
+  assertDedicatedLinkDatabaseConsistency(env);
 
   return execFileSync(
     'mysql',

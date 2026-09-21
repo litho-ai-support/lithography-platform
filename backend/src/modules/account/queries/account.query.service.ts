@@ -10,8 +10,15 @@ import { Gender, UserState } from '@app-types/models/user-info.types';
 import { UsecaseSession } from '@app-types/auth/session.types';
 import { hasRole } from '@core/account/policy/role-access.policy';
 import { canViewUserInfo } from '@core/account/policy/user-info-visibility.policy';
+import { convergeAccountRole } from '@core/account/policy/account-role-convergence.policy';
+import { isDualStatusFieldsConsistent } from '@core/account/policy/dual-status-consistency.policy';
 import { ACCOUNT_ERROR } from '@core/common/errors';
-import { DomainError, PERMISSION_ERROR } from '@core/common/errors/domain-error';
+import {
+  ADMIN_USER_ERROR,
+  DomainError,
+  isDomainError,
+  PERMISSION_ERROR,
+} from '@core/common/errors/domain-error';
 import { normalizeEmail } from '@core/common/normalize/normalize.helper';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -22,6 +29,7 @@ import type {
   AccountLoginBootstrapSnapshot,
   AccountSessionAuthoritySnapshot,
   AccountSnapshot,
+  MyAccountSettingsSnapshot,
 } from '../account.types';
 import { AccountEntity } from '../base/entities/account.entity';
 import { UserInfoEntity } from '../base/entities/user-info.entity';
@@ -153,6 +161,197 @@ export class AccountQueryService {
           }
         : null,
     };
+  }
+
+  /**
+   * 当前用户账号设置的窄读取（P1，单一语义，query-side projection）。
+   *
+   * 为 `GetMyAccountSettingsUsecase` 提供自助设置只读 View 所需的账号 + 资料事实。入参
+   * `accountId` 是**由 Session 提供的可信账号主键**，不来自任何 GraphQL 参数；本方法不接受
+   * 任意目标 ID 作为对外入参。
+   *
+   * 刻意走 entity 水合路径（`findOne` + relation）：`meta_digest` 是 varchar(1024) 的**加密列**
+   * （`AccountFieldEncryptionRegistrar` 注册），只有水合路径（`FieldEncryptionSubscriber.afterLoad`
+   * → `decryptEntity()`）才会解密并 `JSON.parse` 回数组，`getRawMany()` 拿到的是密文，会让三源
+   * 收敛对每一行都失败。与 `AdminUserQueryService` 文件头的同一强制约束同源，不新增第二套
+   * 绕过订阅者的查询路径。
+   *
+   * 失败关闭口径（P1 验收基线：资料缺失或角色/状态异常失败关闭）：
+   * - 账号行缺失：返回 `null`，由 Usecase 决定错误口径（读链路上这属数据不变量被破坏，
+   *   不是「查无此人」，不得塌缩为 `UNAUTHENTICATED`）；
+   * - 资料行缺失 / 三源角色不能收敛 / 账号与资料双状态不一致：在唯一映射点
+   *   `toMyAccountSettingsSnapshot()` 失败关闭抛错，映射 `INTERNAL_SERVER_ERROR`，`details` 刻意
+   *   留空，诊断信息（账号主键 + 失败原因分类）只进 `DomainError.cause`（过滤器不序列化 `cause`）。
+   *
+   * 只读：不写库、不开启业务事务、不产生副作用（刻意不注入 logger，诊断信息以 `cause` 上行，
+   * 由 Usecase 决定是否记录）。对上游只返回稳定 `MyAccountSettingsSnapshot`，不返回 ORM Entity。
+   *
+   * @returns 账号行缺失时返回 `null`；否则返回已完成三源收敛与双状态一致性判定的窄快照。
+   *
+   * `transactionContext` 可选（P2 起）：自助设置更新用例在**写入后的同一事务内**回读校验
+   * 时传入；缺省读已提交事实，与 P1 只读路径行为一致。
+   */
+  async findMyAccountSettingsSnapshot(params: {
+    accountId: number;
+    transactionContext?: PersistenceTransactionContext;
+  }): Promise<MyAccountSettingsSnapshot | null> {
+    try {
+      const accountRepository = this.getAccountRepository(params.transactionContext);
+      const account = await accountRepository.findOne({
+        where: { id: params.accountId },
+        relations: { userInfo: true },
+      });
+      if (!account) {
+        return null;
+      }
+      return this.toMyAccountSettingsSnapshot(account);
+    } catch (error) {
+      // 非领域异常（如驱动故障）统一收敛为读失败码，原始异常仅以 cause 保留供服务端排查；
+      // 领域异常（资料缺失 / 三源不收敛 / 双状态不一致）原样冒泡，不被改写错误码。
+      if (isDomainError(error)) {
+        throw error;
+      }
+      throw new DomainError(
+        ADMIN_USER_ERROR.READ_FAILED,
+        '账号设置读取失败，请稍后重试',
+        undefined,
+        error,
+      );
+    }
+  }
+
+  /**
+   * 账号 + 资料 → 内部窄快照 `MyAccountSettingsSnapshot` 的唯一映射点。
+   *
+   * 三类失败关闭判定集中在此，`findMyAccountSettingsSnapshot()` 不重复实现：
+   * 1. 资料行缺失 → `READ_FAILED`（`diagnostic: 'USER_INFO_ROW_MISSING'`）；
+   * 2. 三源角色不能收敛为唯一角色 → `ROLE_DATA_INCONSISTENT`（`diagnostic: 'ROLE_CONVERGENCE_FAILED'`），
+   *    与 `AdminUserView.role` 共用 `convergeAccountRole()` 单一实现，不另写一份；
+   * 3. 账号侧 `status` 与资料侧 `user_state` 双字段不一致 → `READ_FAILED`
+   *    （`diagnostic: 'STATUS_DUAL_FIELDS_INCONSISTENT'`）。两枚举成员字符串当前逐字相同，
+   *    一致性判定与 admin 写用例共用 core `dual-status-consistency.policy.ts` 单一实现，
+   *    不各写一份。
+   *
+   * 复用 `ADMIN_USER_ERROR.READ_FAILED` / `ROLE_DATA_INCONSISTENT`：二者已在全局过滤器映射为
+   * `INTERNAL_SERVER_ERROR`，语义正是「系统侧读取失败 / 账号资料不变量被破坏」，与本场景一致；
+   * P1 刻意不改错误契约过滤器，故不新增自助场景专用码。`details` 一律留空，敏感定位信息只进 `cause`。
+   *
+   * 字段口径见 `MyAccountSettingsSnapshot` 注释：`contactEmail` 取 `base_user_info.email`（联系邮箱），
+   * 与 `loginEmail`（`base_user_account.login_email`，登录凭据）严格区分；`updatedAt` 取账号侧与资料侧较新值。
+   * 逐字段显式赋值，不使用 `{ ...account }` 展开，因此新增敏感列不会自动流入快照。
+   */
+  private toMyAccountSettingsSnapshot(account: AccountEntity): MyAccountSettingsSnapshot {
+    const userInfo: UserInfoEntity | undefined = account.userInfo;
+    if (!userInfo) {
+      throw new DomainError(
+        ADMIN_USER_ERROR.READ_FAILED,
+        '账号资料缺失，无法生成账号设置视图',
+        undefined,
+        { diagnostic: 'USER_INFO_ROW_MISSING', accountId: account.id },
+      );
+    }
+
+    const convergence = convergeAccountRole({
+      identityHint: account.identityHint,
+      accessGroup: userInfo.accessGroup,
+      metaDigest: userInfo.metaDigest,
+    });
+    if (!convergence.converged) {
+      throw new DomainError(
+        ADMIN_USER_ERROR.ROLE_DATA_INCONSISTENT,
+        '账号数据异常，暂时无法加载账号设置',
+        undefined,
+        {
+          diagnostic: 'ROLE_CONVERGENCE_FAILED',
+          accountId: account.id,
+          reason: convergence.reason,
+        },
+      );
+    }
+
+    if (
+      !isDualStatusFieldsConsistent({
+        accountStatus: account.status,
+        userState: userInfo.userState,
+      })
+    ) {
+      throw new DomainError(
+        ADMIN_USER_ERROR.READ_FAILED,
+        '账号状态数据异常，暂时无法加载账号设置',
+        undefined,
+        { diagnostic: 'STATUS_DUAL_FIELDS_INCONSISTENT', accountId: account.id },
+      );
+    }
+
+    return {
+      accountId: account.id,
+      loginName: account.loginName,
+      loginEmail: account.loginEmail,
+      nickname: userInfo.nickname,
+      companyName: userInfo.companyName,
+      phone: userInfo.phone,
+      contactEmail: userInfo.email,
+      role: convergence.role,
+      status: account.status,
+      updatedAt: this.resolveSettingsUpdatedAt(account.updatedAt, userInfo.updatedAt),
+    };
+  }
+
+  /**
+   * `updatedAt` 取账号侧与资料侧 `updated_at` 的较新值，使资料编辑与状态修改都反映为同一个
+   * 「最近变更时间」。与 `AdminUserQueryService.resolveUpdatedAt()` 同口径。
+   */
+  private resolveSettingsUpdatedAt(accountUpdatedAt: Date, userInfoUpdatedAt: Date): Date {
+    return userInfoUpdatedAt.getTime() > accountUpdatedAt.getTime()
+      ? userInfoUpdatedAt
+      : accountUpdatedAt;
+  }
+
+  /**
+   * 自助设置更新（P2）的登录凭据唯一性预检查：对**发生变化的**候选值，检查是否存在
+   * 其他账号占用，排除当前 `accountId` 自身。返回先命中的冲突维度（判定顺序固定：
+   * 先 `loginName` 后 `loginEmail`），无冲突返回 `null`。
+   *
+   * 为什么不复用 `checkAccountExists()`：其入参把 `loginEmail` 声明为必填、语义是「是否存在」
+   * 布尔值且不排除自身，无法表达自助更新「排除自己、逐维度定位」的需要（与
+   * `AdminUserCredentialConflictField` 对该方法的否决理由同源）。
+   * 也不复用 admin 场景的 `findAdminUserCredentialConflict()`（可复用底层事实
+   * 与设计经验，但新能力必须有当前用户场景的窄实现）。
+   *
+   * 预检查只是友好错误提示的来源，**不能代替数据库唯一索引**：并发竞争仍由
+   * `uk_login_name` / `uk_login_email` 在窄写入方法内裁决。候选值传
+   * `undefined` 表示该维度未变化、无需检查（清空为 `null` 不冲突，多个 NULL 可共存）。
+   * 大小写口径：`login_name` / `login_email` 列继承 `_ci` 排序规则，等值比较与唯一索引
+   * 行为一致，无需额外归一。
+   */
+  async findMyAccountCredentialConflictField(params: {
+    accountId: number;
+    loginName?: string;
+    loginEmail?: string;
+    transactionContext?: PersistenceTransactionContext;
+  }): Promise<'loginName' | 'loginEmail' | null> {
+    const accountRepository = this.getAccountRepository(params.transactionContext);
+    if (params.loginName !== undefined) {
+      const count = await accountRepository
+        .createQueryBuilder('account')
+        .where('account.loginName = :loginName', { loginName: params.loginName })
+        .andWhere('account.id != :accountId', { accountId: params.accountId })
+        .getCount();
+      if (count > 0) {
+        return 'loginName';
+      }
+    }
+    if (params.loginEmail !== undefined) {
+      const count = await accountRepository
+        .createQueryBuilder('account')
+        .where('account.loginEmail = :loginEmail', { loginEmail: params.loginEmail })
+        .andWhere('account.id != :accountId', { accountId: params.accountId })
+        .getCount();
+      if (count > 0) {
+        return 'loginEmail';
+      }
+    }
+    return null;
   }
 
   async findCredentialByLoginName(params: {

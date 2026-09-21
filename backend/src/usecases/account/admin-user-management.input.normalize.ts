@@ -207,7 +207,8 @@ export function normalizeAdminUserCredentialInput(
  * 它会把用户填写的首尾空格删掉并写入，从而掩盖 `PasswordPolicyService.validatePassword()`
  * 本来会给出的「密码首尾不能包含空格」拒绝。本函数只做类型与存在判定，原值原样交给策略层。
  *
- * 调用方约束（P0-3 / P0-6）：
+ * 调用方约束（P0-3 / P0-6，P3 起含自助修改密码经
+ * `my-account-settings.input.normalize.ts` 的 `normalizeMyAccountPasswordInput()` 委托）：
  * - 本函数返回后必须紧接着调用 `PasswordPolicyService.validatePassword()`，
  *   不得依赖 `CreateAccountUsecase` 内部的 `if (loginPassword)` 分支；
  * - 策略失败时必须抛映射为 `BAD_USER_INPUT` 的码（如 `INPUT_NORMALIZE_ERROR.INVALID_TEXT`），

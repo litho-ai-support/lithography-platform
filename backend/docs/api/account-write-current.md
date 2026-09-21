@@ -1,7 +1,7 @@
 <!-- docs/api/account-write-current.md -->
 
 Purpose: Snapshot the current account / userInfo write and read contract for this repository.
-Read when: You change registration, account query, userInfo updates, public password reset, or admin user management (list / create / profile / status / password reset) flows.
+Read when: You change registration, account query, userInfo updates, public password reset, admin user management (list / create / profile / status / password reset), or self-service account settings (my settings / change password) flows.
 Do not read when: You only change unrelated APIs.
 Source of truth: Current resolver/usecase/type code remains executable truth; this file records the stable contract agents must preserve.
 
@@ -37,6 +37,12 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 - `adminUpdateUserProfile(input: AdminUpdateUserProfileInput): AdminUserDTO`
 - `adminSetUserStatus(input: AdminSetUserStatusInput): AdminUserDTO`
 - `adminResetUserPassword(input: AdminResetUserPasswordInput): AdminResetUserPasswordResultDTO`
+
+当前自助账号设置入口（仅要求已登录会话，目标账号只能来自 Session，详见「自助账号设置」）：
+
+- `myAccountSettings: MyAccountSettingsDTO`
+- `updateMyAccountSettings(input: UpdateMyAccountSettingsInput): UpdateMyAccountSettingsResultDTO`
+- `changeMyPassword(input: ChangeMyPasswordInput): ChangeMyPasswordResultDTO`
 
 `updateAccessGroup` 已下线：不再是公开 GraphQL 入口，也不存在任何 adapter 调用入口。
 
@@ -149,7 +155,7 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 - `adminUpdateUserProfile`：昵称不传 = 不修改、传 string = 修改，`null` / 空字符串 / 纯空白一律拒绝；`companyName` / `phone` / `contactEmail` 三态——不传 = 不修改，`null` = 清空。不得经由资料编辑改写角色事实（`identityHint`）；角色在创建后只读，不存在公开角色修改入口。本用例已复用 `loadWritableAdminUserTarget()` 先锁 account 行并按锁内三源角色事实保护目标，随后才读写 userInfo。
 - `adminSetUserStatus`：同一事务内双字段同步——`base_user_account.status`（`updateAccount()`）与 `base_user_info.user_state`（`updateUserInfoFields()`）写为同值，启用即两处同为 `ACTIVE`、停用即两处同为 `INACTIVE`。`AccountStatus` 与 `UserState` 是两个不同枚举类型（成员字符串当前逐字相同），映射刻意显式书写而非断言复用。转换矩阵只允许两行：当前双字段同为 `ACTIVE` → 改 `INACTIVE`；当前双字段同为 `INACTIVE` → 改 `ACTIVE`。同状态请求幂等成功，不执行任何 UPDATE、不 bump 任何时间列。其余全部失败关闭（当前值为 `PENDING` / `SUSPENDED` / `BANNED` / `DELETED` 或任何无法识别的值、双字段不一致、当前状态缺失），不自动修复、不选任一字段为真源、不继续执行双字段 UPDATE；不做硬删除。
 - `adminResetUserPassword`：独立的管理员链路，不接触任何 verification token / 验证记录 / token 预读能力，不复用其 usecase、错误码或 GraphQL 流程；两条链路只在密码**哈希与策略原语**上汇合（`PasswordPolicyService` / `hashPasswordWithTimestamp()` / `updateAccountPasswordHash()`，全仓单一实现），流程编排零共享。目标双字段状态裁决在哈希生成与任何写入之前执行，只允许双字段一致的 `ACTIVE` / `INACTIVE`；本用例不写状态字段，`INACTIVE` 账号重置后仍是 `INACTIVE`（不存在顺带启用），拒绝路径不操作 Token / Session。结果只返回 `accountId` / `isUpdated`（恒为 `true`）/ 固定 `notice`，不含新密码、旧密码、哈希或任何密码派生物。
-- 密码策略：管理员创建的初始密码与管理员重置的新密码共用 `assertAdminUserPasswordPolicy()`（内部复用全仓单一 `PasswordPolicyService`），失败抛 `INPUT_NORMALIZE_ERROR.INVALID_TEXT`（对外 `BAD_USER_INPUT`），**不使用** `AUTH_ERROR.INVALID_PASSWORD`——后者映射为 `UNAUTHENTICATED`，会让「管理员填了弱密码」被前端误判为会话失效并清理 Session 跳转登录页。
+- 密码策略：管理员创建的初始密码、管理员重置的新密码与自助修改密码的新密码共用 `assertAdminUserPasswordPolicy()`（内部复用全仓单一 `PasswordPolicyService`），失败抛 `INPUT_NORMALIZE_ERROR.INVALID_TEXT`（对外 `BAD_USER_INPUT`），**不使用** `AUTH_ERROR.INVALID_PASSWORD`——后者映射为 `UNAUTHENTICATED`，会让「管理员填了弱密码」被前端误判为会话失效并清理 Session 跳转登录页。
 
 ### 事务边界
 
@@ -183,6 +189,35 @@ Source of truth: Current resolver/usecase/type code remains executable truth; th
 - 即时失效由 `ValidateAccessTokenSessionUsecase`（P0-7，`JwtStrategy` 的唯一数据库 Session 复核入口）在每个受保护请求上承担。二者必须**同时生效**，不得以管理员断言代替 P0-7。
 - 密码重置后：旧密码立即失效（下一次登录验证必然不匹配）；已签发的 Access Token **不**立即失效，按 `JWT_EXPIRES_IN` 自然过期。固定 `notice` 逐字为「密码已重置，旧密码立即失效；已签发的登录态不会立即失效，将在 Access Token 过期后自然退出」，由后端单一持有、不是调用方可控的自由文本，不含目标账号的任何身份信息、密码策略细节或验证状态。
 - MySQL REPEATABLE READ 下，在本事务提交前已建立一致性快照、仍在进行的登录读取，可能读到旧 `login_password` 并以旧密码通过验证（极短窗口，快照隔离固有语义）；消除它需要给登录链路加锁，不可取。
+
+## 自助账号设置
+
+三个入口全部在 `MyAccountSettingsResolver`，按 `docs/api/adapters.rules.md` 只做「协议输入映射 + Usecase 调用 + View → DTO 薄映射」；DomainError 不在 Resolver 捕获，直接上抛进全局 GraphQL exception filter。
+
+### 会话准入与目标边界
+
+- 仅 `JwtAuthGuard`，不设角色门槛：任意已登录账号（含 `SUPER_ADMIN`）只能操作**自己**的账号；Command 在结构上不含目标账号 ID / 角色 / 状态 / 密码字段（`updateMyAccountSettings` 与 `changeMyPassword` 的密码字段除外），目标只能来自已认证 Session。
+- 稳定公开视图 `MyAccountSettingsDTO` 不含 `accountId`、密码、Token、`identityHint` / `metaDigest` / `accessGroup` / `userState` 等敏感或内部字段；角色与状态为只读展示字段。
+
+### 写入语义
+
+- `updateMyAccountSettings`：六字段白名单（`loginName` / `loginEmail` / `nickname` / `companyName` / `phone` / `contactEmail`），严格三态——不传 = 不修改、`null` = 清空、字符串 = 设置（`nickname` 无 `null` 成员，空值一律拒绝）；「合并当前值后至少保留一个登录凭据」由 Usecase 在锁内裁决，历史遗留的「两列均为 NULL」异常账号即使本次提交不改凭据也拒绝（失败关闭，不自动修复、不代填）；发生变化的凭据先做排除自身的唯一性预检查（友好提示），并发竞争由数据库唯一索引最终裁决并收敛为通用 `CREDENTIAL_CONFLICT`，不泄露驱动错误与索引名；全部字段同值或未提供时不落库，返回 `isUpdated: false` 与当前视图（与 admin 资料更新的「空 patch 拒绝」口径刻意不同）；`contactEmail` 映射 `base_user_info.email`（联系邮箱），与登录凭据 `loginEmail` 严格区分，patch 不含 `userState`。
+- `changeMyPassword`：当前密码 + 新密码，两个密码**不做 trim**（不丢字符）；当前密码刻意不做策略校验（存量密码可能先于现行策略设立），新密码共用 `assertAdminUserPasswordPolicy()`；当前密码验证失败收敛为 `MY_ACCOUNT_ERROR.CURRENT_PASSWORD_MISMATCH`（对外 `BAD_USER_INPUT`，不得塌缩为 `UNAUTHENTICATED`）；锁内以数据库权威 `createdAt` 为盐重新哈希覆盖写（与登录校验 / 管理员重置同源实现）；成功只返回 `isUpdated: true` 与固定 `notice`，不声称服务端撤销已签发 Token——旧 Access Token 按 `JWT_EXPIRES_IN` 自然过期，前端收到成功后清除本地会话。
+
+### 事务边界与错误类别
+
+- 事务边界由 Usecase 经 `TransactionRunner` 持有；写用例先锁 `base_user_account` 行再写 `base_user_info`，与管理员写用例同一锁顺序；失败日志复用共享 helper（自助链路传入各自的 warn 码与 Session 账号 ID），写密码哈希阶段抑制 `message`（与管理员链路同款纵深防御）。
+- 写后读复用 `findMyAccountSettingsSnapshot()`：三源角色不收敛（`ROLE_DATA_INCONSISTENT`）或账号侧 `status` 与资料侧 `user_state` 双字段不一致（`READ_FAILED`）一律失败关闭，对外 `INTERNAL_SERVER_ERROR`。
+
+| 场景 | DomainError 码 | `extensions.code` |
+| --- | --- | --- |
+| 登录名与登录邮箱合并后双空 | `MY_ACCOUNT_ERROR.LOGIN_CREDENTIAL_BOTH_EMPTY` | `BAD_USER_INPUT` |
+| 凭据占用（预检查或唯一索引竞争） | `MY_ACCOUNT_ERROR.CREDENTIAL_CONFLICT` | `CONFLICT` |
+| 当前密码不正确 | `MY_ACCOUNT_ERROR.CURRENT_PASSWORD_MISMATCH` | `BAD_USER_INPUT` |
+| 新密码策略不达标 | `INPUT_NORMALIZE_ERROR.INVALID_TEXT` | `BAD_USER_INPUT` |
+| 三源角色不收敛 / 读取失败 / 写入失败 | `ADMIN_USER_ERROR.ROLE_DATA_INCONSISTENT` / `READ_FAILED` / `WRITE_FAILED` | `INTERNAL_SERVER_ERROR` |
+
+密码策略失败口径与管理员链路一致（见「管理员用户管理 → 写入语义」密码策略条目）。
 
 ## 公开密码重置（verification token 流程）
 

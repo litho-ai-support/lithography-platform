@@ -14,6 +14,8 @@ import {
   deleteRepairRequestByRequestNo,
   findRepairRequestByRequestNo,
   hasFrontendGraphQLEndpoint,
+  mysqlQuery,
+  readBackendEnv,
 } from './real-backend';
 
 const { execFileSyncMock, existsSyncMock, readFileSyncMock, rmSyncMock } = vi.hoisted(() => ({
@@ -294,5 +296,88 @@ describe('real-backend 存储物理文件清理（0909 第二轮：按精确引�
     deleteE2EReferenceDocumentStorageFilesByIds([970005]);
 
     expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('real-backend 数据库连接键运行时覆盖（R3：不改 .env 切换独立测试库）', () => {
+  const DB_ENV_KEYS = ['DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASS', 'DB_NAME'] as const;
+  const FILE_ENV =
+    'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=app\nOTHER_KEY=file-value\n';
+  const originalValues: Partial<Record<(typeof DB_ENV_KEYS)[number], string | undefined>> = {};
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset().mockReturnValue('');
+    readFileSyncMock.mockReset().mockReturnValue(FILE_ENV);
+    for (const key of DB_ENV_KEYS) {
+      originalValues[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterAll(() => {
+    for (const key of DB_ENV_KEYS) {
+      if (originalValues[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = originalValues[key];
+      }
+    }
+  });
+
+  it('无运行时覆盖时保持文件值', () => {
+    expect(readBackendEnv()).toMatchObject({
+      DB_HOST: '127.0.0.1',
+      DB_PORT: '3306',
+      DB_USER: 'root',
+      DB_PASS: 'secret',
+      DB_NAME: 'app',
+      OTHER_KEY: 'file-value',
+    });
+  });
+
+  it('DB_NAME=lithography_e2e 运行时覆盖生效', () => {
+    process.env.DB_NAME = 'lithography_e2e';
+
+    expect(readBackendEnv().DB_NAME).toBe('lithography_e2e');
+  });
+
+  it.each([[''], ['   '], ['\t']])('空白 DB_NAME 覆盖值（%p）不覆盖文件值', (blank) => {
+    process.env.DB_NAME = blank;
+
+    expect(readBackendEnv().DB_NAME).toBe('app');
+  });
+
+  it('mysqlQuery 与安全门使用同一个覆盖后的 DB_NAME（覆盖前拒绝、覆盖后放行且 SQL 连同一库）', () => {
+    const optInKey = 'E2E_ALLOW_PHYSICAL_CLEANUP';
+    const originalOptIn = process.env[optInKey];
+
+    process.env[optInKey] = '1';
+    try {
+      // 未覆盖时：文件库名 app 不是测试库命名，安全门拒绝
+      expect(() => assertPhysicalCleanupAllowed(readBackendEnv())).toThrow('不属于测试库命名');
+
+      process.env.DB_NAME = 'lithography_e2e';
+
+      // 覆盖后：安全门放行，且 mysqlQuery 实际连接的库名与安全门读到的是同一个值
+      expect(() => assertPhysicalCleanupAllowed(readBackendEnv())).not.toThrow();
+      mysqlQuery('SELECT 1');
+
+      const args = execFileSyncMock.mock.lastCall?.[1] as string[];
+
+      expect(args).toContain('lithography_e2e');
+      expect(readBackendEnv().DB_NAME).toBe('lithography_e2e');
+    } finally {
+      if (originalOptIn === undefined) {
+        delete process.env[optInKey];
+      } else {
+        process.env[optInKey] = originalOptIn;
+      }
+    }
+  });
+
+  it('非 DB 连接键不接受运行时覆盖（其他环境变量读取行为不变）', () => {
+    process.env.OTHER_KEY = 'runtime-should-be-ignored';
+
+    expect(readBackendEnv().OTHER_KEY).toBe('file-value');
   });
 });
