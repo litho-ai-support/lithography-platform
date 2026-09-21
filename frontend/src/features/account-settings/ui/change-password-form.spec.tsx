@@ -6,7 +6,9 @@
  *
  * 走真实组件与真实 antd 校验规则，onSubmit 由测试注入：验证必填与「两次输入一致」
  * 的客户端拦截、密码强度不在前端裁决（策略以后端为准）、当前密码错误 / 弱密码等
- * 业务拒绝文案原样展示、成功后先提示再交由调用方做会话收口，以及重复提交边界。
+ * 业务拒绝文案原样展示，以及成功链路的**身份裁决先于提示**——先交由调用方
+ * （装配层）裁决发起会话身份，仅裁决为「仍是当前会话」时才展示成功提示；
+ * 身份不匹配（迟到响应）完全静默。
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -44,8 +46,11 @@ function fillPasswords(current: string, next: string, confirm: string) {
   fireEvent.change(screen.getByLabelText('确认新密码'), { target: { value: confirm } });
 }
 
-function successExecution(notice = NOTICE): SubmitExecution {
-  return { kind: 'ok', result: { notice, ok: true } };
+function successExecution(
+  notice = NOTICE,
+  initiatedIdentity: { accountId: number; epoch: number } | null = null,
+): SubmitExecution {
+  return { kind: 'ok', result: { initiatedIdentity, notice, ok: true } };
 }
 
 function failureExecution(
@@ -57,7 +62,12 @@ function failureExecution(
 
 function renderForm(
   onSubmit: (input: ChangeMyPasswordInput) => Promise<SubmitExecution>,
-  options?: { onSucceeded?: () => void | Promise<void>; submitting?: boolean },
+  options?: {
+    onSucceeded?: (
+      initiatedIdentity: { accountId: number; epoch: number } | null,
+    ) => boolean | Promise<boolean>;
+    submitting?: boolean;
+  },
 ) {
   return render(
     <ChangePasswordForm
@@ -150,7 +160,7 @@ describe('ChangePasswordForm 客户端拦截', () => {
 });
 
 describe('ChangePasswordForm 成功链路', () => {
-  it('成功后先展示后端固定提示，再触发调用方接线的会话收口', async () => {
+  it('身份裁决先于提示：先交由调用方裁决会话身份，仅匹配时展示后端固定提示', async () => {
     const order: string[] = [];
     vi.spyOn(message, 'success').mockImplementation(((text: string) => {
       order.push(`notice:${text}`);
@@ -158,7 +168,9 @@ describe('ChangePasswordForm 成功链路', () => {
       return undefined;
     }) as never);
     const onSucceeded = vi.fn().mockImplementation(async () => {
-      order.push('session-cleanup');
+      order.push('identity-check');
+
+      return true;
     });
     const onSubmit = vi.fn().mockResolvedValue(successExecution());
     renderForm(onSubmit, { onSucceeded });
@@ -167,7 +179,38 @@ describe('ChangePasswordForm 成功链路', () => {
     fireEvent.click(getSubmitButton());
 
     await waitFor(() => expect(onSucceeded).toHaveBeenCalledTimes(1));
-    expect(order).toEqual([`notice:${NOTICE}`, 'session-cleanup']);
+    expect(order).toEqual(['identity-check', `notice:${NOTICE}`]);
+    expect(onSucceeded).toHaveBeenCalledWith(null);
+  });
+
+  it('身份裁决为不匹配（迟到响应）时完全静默：不展示成功提示，也不再有任何提示行为', async () => {
+    const onSucceeded = vi.fn().mockResolvedValue(false);
+    const onSubmit = vi
+      .fn()
+      .mockResolvedValue(successExecution(NOTICE, { accountId: 900201, epoch: 1 }));
+    renderForm(onSubmit, { onSucceeded });
+
+    fillPasswords(CURRENT_PASSWORD, NEW_PASSWORD, NEW_PASSWORD);
+    fireEvent.click(getSubmitButton());
+
+    await waitFor(() => expect(onSucceeded).toHaveBeenCalledTimes(1));
+    expect(onSucceeded).toHaveBeenCalledWith({ accountId: 900201, epoch: 1 });
+    expect(message.success).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('成功结果携带的发起时会话身份原样传给调用方，不丢失、不改写', async () => {
+    const onSucceeded = vi.fn();
+    const onSubmit = vi
+      .fn()
+      .mockResolvedValue(successExecution(NOTICE, { accountId: 900201, epoch: 1 }));
+    renderForm(onSubmit, { onSucceeded });
+
+    fillPasswords(CURRENT_PASSWORD, NEW_PASSWORD, NEW_PASSWORD);
+    fireEvent.click(getSubmitButton());
+
+    await waitFor(() => expect(onSucceeded).toHaveBeenCalledTimes(1));
+    expect(onSucceeded).toHaveBeenCalledWith({ accountId: 900201, epoch: 1 });
   });
 
   it('调用方未接线会话收口时，成功链路仍只展示提示且不抛错', async () => {

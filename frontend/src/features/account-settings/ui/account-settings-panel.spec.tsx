@@ -202,13 +202,17 @@ describe('AccountSettingsPanel 命令接线', () => {
     }
   });
 
-  it('修改密码成功后触发页面装配层接线的会话收口回调', async () => {
+  it('修改密码成功后把发起时采样的会话身份交给页面装配层的会话收口回调', async () => {
     const onPasswordChangeSucceeded = vi.fn();
     mockHook({
       state: { settings: SETTINGS, status: 'ready' },
       updatePassword: async () => ({
         kind: 'ok',
-        result: { notice: '密码已更新，请使用新密码重新登录', ok: true },
+        result: {
+          initiatedIdentity: { accountId: 900201, epoch: 1 },
+          notice: '密码已更新，请使用新密码重新登录',
+          ok: true,
+        },
       }),
     });
     render(<AccountSettingsPanel onPasswordChangeSucceeded={onPasswordChangeSucceeded} />);
@@ -221,6 +225,8 @@ describe('AccountSettingsPanel 命令接线', () => {
     fireEvent.click(screen.getByRole('button', { name: /修\s*改\s*密\s*码/ }));
 
     await waitFor(() => expect(onPasswordChangeSucceeded).toHaveBeenCalledTimes(1));
+    // 迟到响应裁决依据：成功结果携带的发起时会话身份原样透传给装配层
+    expect(onPasswordChangeSucceeded).toHaveBeenCalledWith({ accountId: 900201, epoch: 1 });
   });
 
   it('资料更新成功不触发会话收口回调（只有改密会使既有会话失效）', async () => {

@@ -20,6 +20,7 @@ import { StatusPill, type StatusPillTone } from '@/shared/ui/status-pill';
 import type {
   AccountSettingsStatus,
   AccountSettingsView,
+  ChangePasswordSessionIdentity,
 } from '../application/account-settings.types';
 import {
   ACCOUNT_SETTINGS_ROLE_LABELS,
@@ -42,8 +43,15 @@ const STATUS_PILL_TONES: Record<AccountSettingsStatus, StatusPillTone> = {
 };
 
 type AccountSettingsPanelProps = {
-  /** 修改密码成功后的会话收口（登出 + 跳转登录页），由页面装配层提供 */
-  onPasswordChangeSucceeded?: () => void | Promise<void>;
+  /**
+   * 修改密码成功后的会话收口（登出 + 跳转登录页），由页面装配层提供。
+   * 第一参为请求发起前采样固化的会话身份，装配层与当前会话比对后决定是否清理。
+   * 身份裁决先于成功提示：返回 `false` 表示身份已不匹配（迟到响应被忽略），
+   * 表单对该次响应完全静默、不展示成功提示。
+   */
+  onPasswordChangeSucceeded?: (
+    initiatedIdentity: ChangePasswordSessionIdentity | null,
+  ) => boolean | Promise<boolean>;
   /**
    * 资料保存成功且结果未过期时的回调（页面装配层借此把昵称回写会话真源）。
    * 第二参为请求发起前采样的账号 ID（null 表示装配层未接入采样）。
@@ -54,16 +62,20 @@ type AccountSettingsPanelProps = {
   ) => void;
   /** 请求发起前的账号身份采样（页面装配层注入会话真源读取），见 useAccountSettings */
   sampleAccountId?: () => number | null;
+  /** 请求发起前的会话代次采样（页面装配层注入会话真源读取），见 useAccountSettings */
+  sampleSessionIdentity?: () => ChangePasswordSessionIdentity | null;
 };
 
 export function AccountSettingsPanel({
   onPasswordChangeSucceeded,
   onProfileSaveSucceeded,
   sampleAccountId,
+  sampleSessionIdentity,
 }: AccountSettingsPanelProps) {
   const { isPending, reload, state, updatePassword, updateProfile } = useAccountSettings({
     onProfileSaved: onProfileSaveSucceeded,
     sampleAccountId,
+    sampleSessionIdentity,
   });
 
   if (state.status === 'loading') {

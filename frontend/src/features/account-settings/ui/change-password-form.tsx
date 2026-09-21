@@ -21,12 +21,23 @@ import { PrimaryButton, SecondaryButton } from '@/shared/ui/buttons';
 import type {
   ChangeMyPasswordInput,
   ChangeMyPasswordResult,
+  ChangePasswordSessionIdentity,
 } from '../application/account-settings.types';
 import type { AccountSettingsCommandExecution } from '../application/use-account-settings';
 
 type ChangePasswordFormProps = {
-  /** 修改密码成功后的会话收口（登出 + 跳转登录页），由页面装配层提供 */
-  onSucceeded?: () => void | Promise<void>;
+  /**
+   * 修改密码成功后的会话收口（登出 + 跳转登录页），由页面装配层提供。
+   * 第一参为请求发起前采样固化的会话身份：装配层与当前会话比对——只有发起改密的
+   * 那个会话仍是当前会话时才清理并跳转，退出重登 / 已切换账号的迟到响应被忽略。
+   *
+   * 身份裁决先于成功提示：回调返回（resolved）`false` 表示装配层判定身份已不匹配，
+   * 本次迟到响应被完全静默——**不展示成功提示**；返回 `true` 才由本表单展示
+   * 后端固定安全提示。回调未提供时视为无裁决点，提示照常展示（表单独立可用）。
+   */
+  onSucceeded?: (
+    initiatedIdentity: ChangePasswordSessionIdentity | null,
+  ) => boolean | Promise<boolean>;
   onSubmit: (
     input: ChangeMyPasswordInput,
   ) => Promise<AccountSettingsCommandExecution<ChangeMyPasswordResult>>;
@@ -67,8 +78,15 @@ export function ChangePasswordForm({ onSucceeded, onSubmit, submitting }: Change
       return;
     }
 
+    // 身份裁决先于成功提示：装配层判定「发起会话仍是当前会话」时才展示提示；
+    // 迟到响应（退出重登 / 已切换账号）在装配层被忽略，这里完全静默。
+    const identityStillMatches = await onSucceeded?.(result.initiatedIdentity);
+
+    if (identityStillMatches === false) {
+      return;
+    }
+
     message.success(result.notice);
-    await onSucceeded?.();
   };
 
   return (

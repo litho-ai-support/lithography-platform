@@ -13,11 +13,35 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const BACKEND_GRAPHQL = 'http://127.0.0.1:3000/graphql';
-export const BACKEND_HEALTH = 'http://127.0.0.1:3000/health';
-export const BACKEND_REST_UPLOAD = 'http://127.0.0.1:3000/api/reference-documents/upload';
+// 后端源（origin）收口：默认仍指向本地 dev 后端 127.0.0.1:3000（既有真实链路 spec 口径不变）。
+// 专用账号设置联调（playwright.account-settings-real.config.ts）经进程级环境变量
+// E2E_BACKEND_ORIGIN 指向专用后端（http://127.0.0.1:3100），浏览器 / Node GraphQL helper /
+// SQL helper 由此共享同一目标；来源必须是无路径的 http(s) origin，否则在连接前直接失败。
+const BACKEND_ORIGIN_PATTERN = /^https?:\/\/[a-z0-9._-]+(:\d+)?$/i;
+
+function resolveBackendOrigin(): string {
+  const configured = process.env.E2E_BACKEND_ORIGIN?.trim();
+
+  if (configured === undefined || configured === '') {
+    return 'http://127.0.0.1:3000';
+  }
+
+  if (!BACKEND_ORIGIN_PATTERN.test(configured)) {
+    throw new Error(
+      `E2E_BACKEND_ORIGIN 不是合法的无路径 origin，拒绝连接：${JSON.stringify(configured)}`,
+    );
+  }
+
+  return configured;
+}
+
+const BACKEND_ORIGIN = resolveBackendOrigin();
+
+export const BACKEND_GRAPHQL = `${BACKEND_ORIGIN}/graphql`;
+export const BACKEND_HEALTH = `${BACKEND_ORIGIN}/health`;
+export const BACKEND_REST_UPLOAD = `${BACKEND_ORIGIN}/api/reference-documents/upload`;
 export function backendRestDownloadUrl(id: number): string {
-  return `http://127.0.0.1:3000/api/reference-documents/${id}/download`;
+  return `${BACKEND_ORIGIN}/api/reference-documents/${id}/download`;
 }
 
 const BACKEND_ENV_FILE = fileURLToPath(

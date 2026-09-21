@@ -7,9 +7,10 @@
  *   UNAUTHENTICATED 的会话失效处理仍由共享 ingress 链路负责；
  * - 写命令（资料更新 / 修改密码）：各持独立的 in-flight 键，同类命令进行中
  *   拒绝重复提交；命令的显式业务结果（成功 / 业务拒绝）由 adapter 归一后透传；
- * - 陈旧响应防护：与 use-admin-user-list 的 requestSeq 同一口径——单调递增的
- *   action 序列标记每一次读取 / 写命令的发起，结果回来时序列已推进即整体丢弃，
- *   既不让过期读取覆盖新视图，也不让过期写结果覆盖用户的后续输入；
+ * - 陈旧响应防护：与 use-admin-user-list 的 requestSeq 同一口径——**设置视图序号**
+ *   只在初始加载 / reload / 资料保存这三类会改写设置视图的动作发起时推进，
+ *   结果回来时序号已推进即整体丢弃。改密不触碰视图序号（不产生设置视图事实，
+ *   成功后由页面装配层清理会话并跳转登录页），与资料保存互不阻塞、互不丢弃；
  * - 日志安全边界：命令失败日志只记录 error 对象，不得携带命令入参
  *   （changeMyPassword 的入参是明文密码）。
  */
@@ -29,7 +30,9 @@ import type {
   AccountSettingsProfileUpdateResult,
   AccountSettingsView,
   ChangeMyPasswordInput,
+  ChangeMyPasswordOutcome,
   ChangeMyPasswordResult,
+  ChangePasswordSessionIdentity,
 } from './account-settings.types';
 
 /** Hook 级可选项：账号身份采样与资料保存成功回调（均由页面装配层注入） */
@@ -40,6 +43,12 @@ export type UseAccountSettingsOptions = {
    * 采到的将是另一个人的身份。
    */
   sampleAccountId?: () => number | null;
+  /**
+   * 请求发起前的会话代次采样：页面装配层借此在**发起时**固化「这次改密属于哪个会话」，
+   * 成功结果携带该身份返回，由页面装配层与当前会话比对后决定是否清理会话。
+   * 不得在响应返回后重读——那时可能已退出重登或切换账号。
+   */
+  sampleSessionIdentity?: () => ChangePasswordSessionIdentity | null;
   /**
    * 资料保存成功且结果未过期时的回调（页面装配层借此把昵称回写会话真源）。
    * 第二参为请求发起前采样的账号 ID（可能为 null：装配层未接入采样），
@@ -69,10 +78,11 @@ function toUnhandledUserMessage(error: unknown): string {
 const LOAD_FAILED_MESSAGE = '账号设置加载失败，请稍后重试。';
 
 export function useAccountSettings(options: UseAccountSettingsOptions = {}) {
-  const { onProfileSaved, sampleAccountId } = options;
+  const { onProfileSaved, sampleAccountId, sampleSessionIdentity } = options;
   const [state, setState] = useState<AccountSettingsState>({ status: 'loading' });
-  // 单调递增的动作序列：每次读取 / 写命令发起时 +1，结果回来时不再等于发起值即陈旧
-  const actionSeqRef = useRef(0);
+  // 设置视图序号：仅在初始加载 / reload / 资料保存（会改写设置视图的动作）发起时
+  // +1，结果回来时不再等于发起值即陈旧；改密不推进它（见文件头注释）
+  const viewSeqRef = useRef(0);
   const [pendingKeys, setPendingKeys] = useState<ReadonlySet<AccountSettingsCommandKey>>(new Set());
   const pendingKeysRef = useRef<ReadonlySet<AccountSettingsCommandKey>>(new Set());
 
@@ -93,15 +103,15 @@ export function useAccountSettings(options: UseAccountSettingsOptions = {}) {
     let cancelled = false;
 
     async function load() {
-      actionSeqRef.current += 1;
-      const actionSeq = actionSeqRef.current;
+      viewSeqRef.current += 1;
+      const viewSeq = viewSeqRef.current;
 
       setState({ status: 'loading' });
 
       try {
         const settings = await fetchMyAccountSettings();
 
-        if (!cancelled && actionSeqRef.current === actionSeq) {
+        if (!cancelled && viewSeqRef.current === viewSeq) {
           setState({ settings, status: 'ready' });
         }
       } catch (error) {
@@ -111,7 +121,7 @@ export function useAccountSettings(options: UseAccountSettingsOptions = {}) {
           console.error('账号设置加载出现未分类错误：', error);
         }
 
-        if (!cancelled && actionSeqRef.current === actionSeq) {
+        if (!cancelled && viewSeqRef.current === viewSeq) {
           setState({ message: LOAD_FAILED_MESSAGE, status: 'failed' });
         }
       }
@@ -126,14 +136,14 @@ export function useAccountSettings(options: UseAccountSettingsOptions = {}) {
 
   /** 按当前事实重新加载（写命令不走本入口：写结果自带权威视图，见 updateProfile） */
   const reload = useCallback(() => {
-    actionSeqRef.current += 1;
-    const actionSeq = actionSeqRef.current;
+    viewSeqRef.current += 1;
+    const viewSeq = viewSeqRef.current;
 
     setState({ status: 'loading' });
 
     void fetchMyAccountSettings()
       .then((settings) => {
-        if (actionSeqRef.current === actionSeq) {
+        if (viewSeqRef.current === viewSeq) {
           setState({ settings, status: 'ready' });
         }
       })
@@ -142,7 +152,7 @@ export function useAccountSettings(options: UseAccountSettingsOptions = {}) {
           console.error('账号设置加载出现未分类错误：', error);
         }
 
-        if (actionSeqRef.current === actionSeq) {
+        if (viewSeqRef.current === viewSeq) {
           setState({ message: LOAD_FAILED_MESSAGE, status: 'failed' });
         }
       });
@@ -166,14 +176,14 @@ export function useAccountSettings(options: UseAccountSettingsOptions = {}) {
       // 请求发起前固化本次保存的账号身份（响应返回后不得重读，见类型注释）
       const expectedAccountId = sampleAccountId?.() ?? null;
 
-      actionSeqRef.current += 1;
-      const actionSeq = actionSeqRef.current;
+      viewSeqRef.current += 1;
+      const viewSeq = viewSeqRef.current;
       setPending('update-profile', true);
 
       try {
         const result = await updateMyAccountSettingsProfile(draft);
 
-        if (result.ok && actionSeqRef.current === actionSeq) {
+        if (result.ok && viewSeqRef.current === viewSeq) {
           setState({ settings: result.settings, status: 'ready' });
           onProfileSaved?.(result.settings, expectedAccountId);
         }
@@ -192,7 +202,8 @@ export function useAccountSettings(options: UseAccountSettingsOptions = {}) {
     [onProfileSaved, sampleAccountId, setPending],
   );
 
-  /** 修改密码：成功结果只回传固定提示，会话收口由页面装配层接线执行。
+  /** 修改密码：成功结果只回传固定提示与**发起前采样**的会话身份（迟到响应由
+   *  页面装配层与当前会话比对裁决），会话收口由页面装配层接线执行。
    *  凭据更新不触发 onProfileSaved：昵称同步只属于资料保存链路。 */
   const updatePassword = useCallback(
     async (
@@ -202,11 +213,18 @@ export function useAccountSettings(options: UseAccountSettingsOptions = {}) {
         return { kind: 'in-flight' };
       }
 
-      actionSeqRef.current += 1;
+      // 请求发起前固化本次改密的会话身份（响应返回后不得重读，见类型注释）
+      const initiatedIdentity = sampleSessionIdentity?.() ?? null;
+
+      // 不触碰设置视图序号：改密不产生设置视图事实，与资料保存互不丢弃（见文件头注释）
       setPending('change-password', true);
 
       try {
-        const result = await changeMyPassword(input);
+        const result: ChangeMyPasswordOutcome = await changeMyPassword(input);
+
+        if (result.ok) {
+          return { kind: 'ok', result: { ...result, initiatedIdentity } };
+        }
 
         return { kind: 'ok', result };
       } catch (error) {
@@ -221,7 +239,7 @@ export function useAccountSettings(options: UseAccountSettingsOptions = {}) {
         setPending('change-password', false);
       }
     },
-    [setPending],
+    [sampleSessionIdentity, setPending],
   );
 
   const isPending = useCallback(

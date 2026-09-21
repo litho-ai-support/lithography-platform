@@ -84,6 +84,24 @@ export type ChangeMyPasswordInput = {
 
 export type ChangeMyPasswordFailureReason = 'forbidden' | 'invalid-input' | 'update-failed';
 
-export type ChangeMyPasswordResult =
+/**
+ * 改密请求发起时采样的会话身份（不含 Token；与 auth-session 的窄身份同构，
+ * feature 之间禁止互相引用，故在本 feature 内独立声明）。epoch 为会话代次：
+ * 同一账号退出后重新登录会得到不同代次。null 表示装配层未接入采样。
+ */
+export type ChangePasswordSessionIdentity = {
+  accountId: number;
+  epoch: number;
+};
+
+/**
+ * adapter 归一后的改密业务结果（尚未附加发起时会话身份；身份采样发生在
+ * useAccountSettings 的请求发起前，见 updatePassword）。
+ */
+export type ChangeMyPasswordOutcome =
   | { notice: string; ok: true }
+  | { message: string; ok: false; reason: ChangeMyPasswordFailureReason };
+
+export type ChangeMyPasswordResult =
+  | { initiatedIdentity: ChangePasswordSessionIdentity | null; notice: string; ok: true }
   | { message: string; ok: false; reason: ChangeMyPasswordFailureReason };

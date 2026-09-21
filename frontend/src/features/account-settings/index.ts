@@ -5,4 +5,8 @@
  * 页面装配层从这里取面板组件，不深入 feature 内部结构。
  */
 
+export type {
+  AccountSettingsView,
+  ChangePasswordSessionIdentity,
+} from './application/account-settings.types';
 export { AccountSettingsPanel } from './ui/account-settings-panel';

@@ -2,7 +2,6 @@
 import { AudienceTypeEnum, LoginTypeEnum } from '@app-types/models/account.types';
 import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { APP_FILTER } from '@nestjs/core';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { decode, sign, type JwtPayload } from 'jsonwebtoken';
@@ -24,6 +23,14 @@ import { cleanupTestAccounts, seedTestAccounts, testAccountsConfig } from '../ut
  * R3 修正：应用以 E2E 日志配置初始化，不依赖 /var/log/backend 或 sudo。仅实际
  * `GqlAllExceptionsFilter` 注入 production 判定；DTO、Resolver、Usecase 与密码策略服务
  * 均保持真实链路，生产日志默认目录不受测试修改。
+ *
+ * R4 修正：ApiModule 已把全局过滤器收口为 `GqlAllExceptionsFilter` 具名 provider +
+ * `APP_FILTER useExisting` 别名，本文件 override 的正是**实际生效的过滤器 token**；
+ * 并以两个等价哨兵证明链路真实生效——
+ * 1. `filterFactoryCalls`：override 工厂被调用（单例装配，非默认 useClass 路径）；
+ * 2. `filterNodeEnvReads`：每个拒绝请求恰好触发一次过滤器的 `NODE_ENV` production
+ *    判定读取（过滤器 catch() 首行每次异常读取一次），证明请求确实走进了被
+ *    override 的过滤器实例而非其他装配。
  */
 
 type GqlError = {
@@ -53,6 +60,29 @@ const E2E_LOGGER_PARAMS = {
     level: 'info',
   },
 } as unknown as Params;
+
+/** 哨兵 1：override 工厂被调用的次数（期望恰 1：单例装配） */
+let filterFactoryCalls = 0;
+/** 哨兵 2：被 override 的过滤器实例读取 NODE_ENV production 判定的次数 */
+let filterNodeEnvReads = 0;
+
+/**
+ * production 判定包装：NODE_ENV 恒读作 'production'（每次读取计数），
+ * 其余配置键透传真实 ConfigService——保证除 production 判定外链路全部真实。
+ */
+function wrapConfigForProduction(configService: ConfigService): ConfigService {
+  return {
+    get: (key: string, defaultValue?: unknown) => {
+      if (key === 'NODE_ENV') {
+        filterNodeEnvReads += 1;
+
+        return 'production';
+      }
+
+      return configService.get(key, defaultValue);
+    },
+  } as unknown as ConfigService;
+}
 
 /** 造数纪律同源：只 seed staffPrimary，数据库仅用于只读核验 */
 const STAFF = testAccountsConfig.staffPrimary;
@@ -94,14 +124,16 @@ describe('changeMyPassword 生产环境错误分类 (e2e, NODE_ENV=production)',
       // E2E 日志配置仅走 stdout；不修改生产默认日志目录。
       .overrideProvider(PARAMS_PROVIDER_TOKEN)
       .useValue(E2E_LOGGER_PARAMS)
-      .overrideProvider(APP_FILTER)
+      // R4：override 实际生效的过滤器 token（ApiModule 已收口为具名 provider +
+      // APP_FILTER useExisting 别名）；工厂调用与 NODE_ENV 读取均以计数哨兵记录。
+      .overrideProvider(GqlAllExceptionsFilter)
       .useFactory({
         inject: [ConfigService],
-        factory: (configService: ConfigService) =>
-          new GqlAllExceptionsFilter({
-            get: (key: string, defaultValue?: unknown) =>
-              key === 'NODE_ENV' ? 'production' : configService.get(key, defaultValue),
-          } as ConfigService),
+        factory: (configService: ConfigService) => {
+          filterFactoryCalls += 1;
+
+          return new GqlAllExceptionsFilter(wrapConfigForProduction(configService));
+        },
       })
       .compile();
     app = moduleFixture.createNestApplication();
@@ -156,19 +188,38 @@ describe('changeMyPassword 生产环境错误分类 (e2e, NODE_ENV=production)',
     expect(body.errors?.[0]?.extensions?.errorCode).toBe(errorCode);
   };
 
+  /**
+   * 断言被 override 的过滤器真实处理了本次请求：catch() 首行每异常恰好读取一次
+   * NODE_ENV，故拒绝请求后读取计数必须精确 +1（缺失即证明 override 未生效）。
+   */
+  const expectRejectionViaOverriddenFilter = async (run: () => Promise<unknown>): Promise<void> => {
+    const readsBefore = filterNodeEnvReads;
+
+    await run();
+
+    expect(filterNodeEnvReads).toBe(readsBefore + 1);
+  };
+
+  it('生产分类链路有效性：全局过滤器来自 override 工厂（单例装配）而非默认 useClass 路径', () => {
+    expect(filterFactoryCalls).toBe(1);
+    expect(app.get(GqlAllExceptionsFilter)).toBeDefined();
+  });
+
   it.each(INVALID_NEW_PASSWORDS)(
     '生产分类：$label 的新密码被拒为 BAD_USER_INPUT 且哈希不变',
     async ({ newPassword }) => {
       const hashBefore = (await readAccountRow())?.loginPassword;
       expect(hashBefore).toBeDefined();
 
-      const body = await changePassword(staffToken, {
-        currentPassword: CORRECT_CURRENT_PASSWORD,
-        newPassword,
-      });
+      await expectRejectionViaOverriddenFilter(async () => {
+        const body = await changePassword(staffToken, {
+          currentPassword: CORRECT_CURRENT_PASSWORD,
+          newPassword,
+        });
 
-      expectSingleError(body, 'BAD_USER_INPUT', 'INPUT_NORMALIZE_INVALID_TEXT');
-      expect(body.data?.changeMyPassword).toBeUndefined();
+        expectSingleError(body, 'BAD_USER_INPUT', 'INPUT_NORMALIZE_INVALID_TEXT');
+        expect(body.data?.changeMyPassword).toBeUndefined();
+      });
       expect((await readAccountRow())?.loginPassword).toBe(hashBefore);
     },
   );
@@ -177,12 +228,14 @@ describe('changeMyPassword 生产环境错误分类 (e2e, NODE_ENV=production)',
     const hashBefore = (await readAccountRow())?.loginPassword;
     expect(hashBefore).toBeDefined();
 
-    const body = await changePassword(staffToken, {
-      currentPassword: 'Totally#Wrong2026',
-      newPassword: VALID_NEW_PASSWORD,
-    });
+    await expectRejectionViaOverriddenFilter(async () => {
+      const body = await changePassword(staffToken, {
+        currentPassword: 'Totally#Wrong2026',
+        newPassword: VALID_NEW_PASSWORD,
+      });
 
-    expectSingleError(body, 'BAD_USER_INPUT', 'MY_ACCOUNT_CURRENT_PASSWORD_MISMATCH');
+      expectSingleError(body, 'BAD_USER_INPUT', 'MY_ACCOUNT_CURRENT_PASSWORD_MISMATCH');
+    });
     expect((await readAccountRow())?.loginPassword).toBe(hashBefore);
 
     const attemptLogin = (
@@ -225,18 +278,20 @@ describe('changeMyPassword 生产环境错误分类 (e2e, NODE_ENV=production)',
     const hashBefore = (await readAccountRow())?.loginPassword;
     expect(hashBefore).toBeDefined();
 
-    const body = await changePassword(expiredToken, {
-      currentPassword: CORRECT_CURRENT_PASSWORD,
-      newPassword: VALID_NEW_PASSWORD,
-    });
+    await expectRejectionViaOverriddenFilter(async () => {
+      const body = await changePassword(expiredToken, {
+        currentPassword: CORRECT_CURRENT_PASSWORD,
+        newPassword: VALID_NEW_PASSWORD,
+      });
 
-    // 过期 Token 的真实生产链路：passport-jwt 在 Strategy.validate 之前即以
-    // ignoreExpiration=false 拒绝过期 Token，guard 收到的是原始 TokenExpiredError
-    //（非 DomainError），按统一口径包装为 JWT_ERROR.AUTHENTICATION_FAILED，
-    // 再由过滤器稳定映射为 UNAUTHENTICATED（生产与开发一致）。
-    // token.helper 的 JWT_TOKEN_EXPIRED 只出现在手动验签路径（如 refresh），不在本链路。
-    expectSingleError(body, 'UNAUTHENTICATED', 'JWT_AUTHENTICATION_FAILED');
-    expect(body.data?.changeMyPassword).toBeUndefined();
+      // 过期 Token 的真实生产链路：passport-jwt 在 Strategy.validate 之前即以
+      // ignoreExpiration=false 拒绝过期 Token，guard 收到的是原始 TokenExpiredError
+      //（非 DomainError），按统一口径包装为 JWT_ERROR.AUTHENTICATION_FAILED，
+      // 再由过滤器稳定映射为 UNAUTHENTICATED（生产与开发一致）。
+      // token.helper 的 JWT_TOKEN_EXPIRED 只出现在手动验签路径（如 refresh），不在本链路。
+      expectSingleError(body, 'UNAUTHENTICATED', 'JWT_AUTHENTICATION_FAILED');
+      expect(body.data?.changeMyPassword).toBeUndefined();
+    });
     expect((await readAccountRow())?.loginPassword).toBe(hashBefore);
   });
 });

@@ -31,7 +31,7 @@ import type {
   AccountSettingsView,
   ChangeMyPasswordFailureReason,
   ChangeMyPasswordInput,
-  ChangeMyPasswordResult,
+  ChangeMyPasswordOutcome,
 } from '../application/account-settings.types';
 
 import type {
@@ -219,11 +219,12 @@ export async function updateMyAccountSettingsProfile(
 /**
  * 当前用户自助修改密码（受保护 mutation）。
  * 密码本身不出现在任何结果中，成功只回传后端固定安全提示；
- * 客户端会话收口（清理唯一会话真源并跳转登录）由页面装配层执行。
+ * 客户端会话收口（与当前会话比对后清理唯一会话真源并跳转登录）由页面装配层执行，
+ * 发起时的会话身份采样发生在 useAccountSettings（adapter 不接触会话）。
  */
 export async function changeMyPassword(
   input: ChangeMyPasswordInput,
-): Promise<ChangeMyPasswordResult> {
+): Promise<ChangeMyPasswordOutcome> {
   try {
     const data = await executeGraphQL<ChangeMyPasswordData, { input: ChangeMyPasswordInput }>(
       CHANGE_MY_PASSWORD_MUTATION,

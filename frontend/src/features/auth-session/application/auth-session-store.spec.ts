@@ -190,4 +190,107 @@ describe('auth session store', () => {
       expect(listener).not.toHaveBeenCalled();
     });
   });
+
+  describe('会话代次（迟到响应裁决）', () => {
+    it('建立会话后采样到不含 Token 的身份：accountId + 初始代次', () => {
+      const { persistence } = createMemoryPersistence();
+      const store = createAuthSessionStore(persistence);
+
+      store.establishSession(ENGINEER_SESSION);
+
+      const identity = store.sampleSessionIdentity();
+
+      expect(identity).toEqual({ accountId: 900101, epoch: 1 });
+      // 窄身份绝不携带 Token：JSON 序列化后也不得出现任何会话凭据
+      expect(JSON.stringify(identity)).not.toContain('access-token');
+    });
+
+    it('昵称回写不推进代次：回写后采样身份仍与发起时一致', () => {
+      const { persistence } = createMemoryPersistence();
+      const store = createAuthSessionStore(persistence);
+
+      store.establishSession(ENGINEER_SESSION);
+      const identityBefore = store.sampleSessionIdentity();
+
+      store.updateNickname({ accountId: 900101, nickname: '新昵称' });
+
+      expect(store.sampleSessionIdentity()).toEqual(identityBefore);
+      expect(store.sampleSessionIdentity()).toEqual({ accountId: 900101, epoch: 1 });
+    });
+
+    it('清除会话推进代次：清除后采样为 null，旧身份不再匹配', () => {
+      const { persistence } = createMemoryPersistence(ENGINEER_SESSION);
+      const store = createAuthSessionStore(persistence);
+      const identityBefore = store.sampleSessionIdentity();
+
+      store.clearSession();
+
+      expect(store.sampleSessionIdentity()).toBeNull();
+      expect(store.clearSessionIfIdentityMatches(identityBefore)).toBe(false);
+    });
+
+    it('同一账号退出后重新登录得到新代次：发起时的旧身份不再匹配新会话', () => {
+      const { persistence } = createMemoryPersistence();
+      const store = createAuthSessionStore(persistence);
+
+      store.establishSession(ENGINEER_SESSION);
+      const identityOfFirstLogin = store.sampleSessionIdentity();
+
+      store.clearSession();
+      store.establishSession(ENGINEER_SESSION);
+
+      // 同一个账号、同一个 Token 值，但这是「退出后重新登录」的新会话
+      expect(store.sampleSessionIdentity()).not.toEqual(identityOfFirstLogin);
+      expect(store.getSnapshot().session?.accountId).toBe(identityOfFirstLogin?.accountId);
+      expect(store.clearSessionIfIdentityMatches(identityOfFirstLogin)).toBe(false);
+      expect(store.getSnapshot().status).toBe('authenticated');
+    });
+
+    it('刷新后恢复会话建立新代次：恢复前采样的身份不再匹配', () => {
+      const { persistence } = createMemoryPersistence(ENGINEER_SESSION);
+      const store = createAuthSessionStore(persistence);
+      const identityBeforeRestore = store.sampleSessionIdentity();
+
+      store.restoreSession();
+
+      expect(store.sampleSessionIdentity()).not.toEqual(identityBeforeRestore);
+      expect(store.clearSessionIfIdentityMatches(identityBeforeRestore)).toBe(false);
+    });
+
+    it('身份匹配时清理会话并返回 true，持久化同步清空', () => {
+      const { getStoredSession, persistence } = createMemoryPersistence(ENGINEER_SESSION);
+      const store = createAuthSessionStore(persistence);
+      const identity = store.sampleSessionIdentity();
+
+      expect(store.clearSessionIfIdentityMatches(identity)).toBe(true);
+      expect(store.getSnapshot()).toEqual({ session: null, status: 'anonymous' });
+      expect(getStoredSession()).toBeNull();
+    });
+
+    it('账号不同的身份不匹配：迟到响应不得清除他人会话', () => {
+      const { getStoredSession, persistence } = createMemoryPersistence(ENGINEER_SESSION);
+      const store = createAuthSessionStore(persistence);
+
+      expect(store.clearSessionIfIdentityMatches({ accountId: 999999, epoch: 1 })).toBe(false);
+      expect(store.getSnapshot().status).toBe('authenticated');
+      expect(getStoredSession()).toEqual(ENGINEER_SESSION);
+    });
+
+    it('null 身份（装配层未接入采样）fail-closed：绝不清除任何会话', () => {
+      const { getStoredSession, persistence } = createMemoryPersistence(ENGINEER_SESSION);
+      const store = createAuthSessionStore(persistence);
+
+      expect(store.clearSessionIfIdentityMatches(null)).toBe(false);
+      expect(store.getSnapshot().status).toBe('authenticated');
+      expect(getStoredSession()).toEqual(ENGINEER_SESSION);
+    });
+
+    it('无会话时条件清除返回 false', () => {
+      const { persistence } = createMemoryPersistence();
+      const store = createAuthSessionStore(persistence);
+
+      expect(store.clearSessionIfIdentityMatches({ accountId: 900101, epoch: 1 })).toBe(false);
+      expect(store.sampleSessionIdentity()).toBeNull();
+    });
+  });
 });

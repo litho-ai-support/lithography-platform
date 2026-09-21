@@ -41,9 +41,13 @@ import { ApiService } from './api.service';
   controllers: [ApiController],
   providers: [
     ApiService,
+    // 全局异常过滤器以类为 token 注册为具名 provider，再由 APP_FILTER useExisting
+    // 别名引用：E2E override GqlAllExceptionsFilter 时改的就是实际生效的那个实例，
+    // 不会出现「override 命中的是别名而真实过滤器仍走默认装配」的测试假阳性。
+    GqlAllExceptionsFilter,
     {
       provide: APP_FILTER,
-      useClass: GqlAllExceptionsFilter,
+      useExisting: GqlAllExceptionsFilter,
     },
   ],
 })

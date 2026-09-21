@@ -20,6 +20,7 @@ import type {
   AccountSettingsProfileDraft,
   AccountSettingsProfileUpdateResult,
   AccountSettingsView,
+  ChangeMyPasswordOutcome,
   ChangeMyPasswordResult,
 } from './account-settings.types';
 import type { AccountSettingsCommandExecution } from './use-account-settings';
@@ -424,7 +425,10 @@ describe('useAccountSettings 陈旧响应与并发边界', () => {
       });
     });
 
-    expect(passwordExecution).toEqual({ kind: 'ok', result: { notice: '密码已更新', ok: true } });
+    expect(passwordExecution).toEqual({
+      kind: 'ok',
+      result: { initiatedIdentity: null, notice: '密码已更新', ok: true },
+    });
     expect(result.current.isPending('update-profile')).toBe(true);
     expect(result.current.isPending('change-password')).toBe(false);
 
@@ -435,7 +439,7 @@ describe('useAccountSettings 陈旧响应与并发边界', () => {
   });
 
   it('改密进行中重复提交被拒，adapter 只被调用一次', async () => {
-    const gate = deferred<ChangeMyPasswordResult>();
+    const gate = deferred<ChangeMyPasswordOutcome>();
     updatePasswordMock.mockReturnValue(gate.promise);
     const { result } = renderHook(() => useAccountSettings());
     await waitFor(() => expect(result.current.state.status).toBe('ready'));
@@ -463,6 +467,282 @@ describe('useAccountSettings 陈旧响应与并发边界', () => {
       expect(await first).toMatchObject({ kind: 'ok' });
     });
     expect(result.current.isPending('change-password')).toBe(false);
+  });
+
+  it('P3 解耦：改密成功不丢弃在途的资料保存结果（改密不推进设置视图序号）', async () => {
+    const profileGate = deferred<AccountSettingsProfileUpdateResult>();
+    updateProfileMock.mockReturnValue(profileGate.promise);
+    updatePasswordMock.mockResolvedValue({ notice: '密码已更新', ok: true });
+    const onProfileSaved = vi.fn();
+    const { result } = renderHook(() =>
+      useAccountSettings({ onProfileSaved, sampleAccountId: () => 900201 }),
+    );
+    await waitFor(() =>
+      expect(result.current.state).toEqual({ settings: SETTINGS, status: 'ready' }),
+    );
+
+    let profileExecution: Promise<ProfileExecution> = Promise.resolve({ kind: 'in-flight' });
+    let passwordExecution: PasswordExecution = { kind: 'in-flight' };
+
+    await act(async () => {
+      // 资料保存在途；随后发起改密并等它完成（旧实现：改密推进序号会把资料保存判旧丢弃）
+      profileExecution = result.current.updateProfile({ nickname: '并发保存的昵称' });
+    });
+    await act(async () => {
+      passwordExecution = await result.current.updatePassword({
+        currentPassword: 'Old#Pass2026',
+        newPassword: 'Str0ng#Pass2026',
+      });
+    });
+    expect(passwordExecution).toMatchObject({ kind: 'ok' });
+
+    const updated: AccountSettingsView = { ...SETTINGS, nickname: '并发保存的昵称' };
+
+    await act(async () => {
+      profileGate.resolve({ isUpdated: true, ok: true, settings: updated });
+      await profileExecution;
+    });
+
+    // 改密与资料保存序号解耦：资料保存的权威视图照常落盘，昵称照常回写会话真源
+    expect(result.current.state).toEqual({ settings: updated, status: 'ready' });
+    expect(onProfileSaved).toHaveBeenCalledTimes(1);
+    expect(onProfileSaved).toHaveBeenCalledWith(updated, 900201);
+  });
+
+  it('P3 失败时序：资料保存在途 + 改密业务失败——资料保存结果照常落盘并触发回写', async () => {
+    const profileGate = deferred<AccountSettingsProfileUpdateResult>();
+    updateProfileMock.mockReturnValue(profileGate.promise);
+    // 改密被后端业务拒绝（BAD_USER_INPUT 大类，如当前密码错误）
+    updatePasswordMock.mockResolvedValue({
+      message: '当前密码不正确，请重试。',
+      ok: false,
+      reason: 'invalid-input',
+    });
+    const onProfileSaved = vi.fn();
+    const { result } = renderHook(() =>
+      useAccountSettings({ onProfileSaved, sampleAccountId: () => 900201 }),
+    );
+    await waitFor(() =>
+      expect(result.current.state).toEqual({ settings: SETTINGS, status: 'ready' }),
+    );
+
+    let profileExecution: Promise<ProfileExecution> = Promise.resolve({ kind: 'in-flight' });
+    let passwordExecution: PasswordExecution = { kind: 'in-flight' };
+
+    await act(async () => {
+      profileExecution = result.current.updateProfile({ nickname: '并发保存的昵称' });
+    });
+    await act(async () => {
+      passwordExecution = await result.current.updatePassword({
+        currentPassword: 'Wrong#Pass2026',
+        newPassword: 'Str0ng#Pass2026',
+      });
+    });
+    // 业务失败收敛为显式失败结果，不产生任何设置视图事实
+    expect(passwordExecution).toEqual({
+      kind: 'ok',
+      result: {
+        message: '当前密码不正确，请重试。',
+        ok: false,
+        reason: 'invalid-input',
+      },
+    });
+    expect(result.current.state).toEqual({ settings: SETTINGS, status: 'ready' });
+
+    const updated: AccountSettingsView = { ...SETTINGS, nickname: '并发保存的昵称' };
+
+    await act(async () => {
+      profileGate.resolve({ isUpdated: true, ok: true, settings: updated });
+      await profileExecution;
+    });
+
+    // 改密失败同样不推进设置视图序号：在途资料保存的权威视图照常写回，
+    // onProfileSaved 照常触发（装配层借此回写侧栏昵称 + sessionStorage 会话真源）
+    expect(result.current.state).toEqual({ settings: updated, status: 'ready' });
+    expect(onProfileSaved).toHaveBeenCalledTimes(1);
+    expect(onProfileSaved).toHaveBeenCalledWith(updated, 900201);
+  });
+
+  it('P3 失败时序：资料保存在途 + 改密网络失败——资料保存结果照常落盘并触发回写', async () => {
+    const profileGate = deferred<AccountSettingsProfileUpdateResult>();
+    updateProfileMock.mockReturnValue(profileGate.promise);
+    // transport 类失败（网络中断等）由 adapter reject 上抛，hook 收敛为
+    // unhandled-error + 兜底文案（非 ingress 错误走 UNHANDLED_FALLBACK_MESSAGE）
+    updatePasswordMock.mockRejectedValue(new Error('network interrupted'));
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onProfileSaved = vi.fn();
+    const { result } = renderHook(() =>
+      useAccountSettings({ onProfileSaved, sampleAccountId: () => 900201 }),
+    );
+    await waitFor(() =>
+      expect(result.current.state).toEqual({ settings: SETTINGS, status: 'ready' }),
+    );
+
+    let profileExecution: Promise<ProfileExecution> = Promise.resolve({ kind: 'in-flight' });
+    let passwordExecution: PasswordExecution = { kind: 'in-flight' };
+
+    await act(async () => {
+      profileExecution = result.current.updateProfile({ nickname: '并发保存的昵称' });
+    });
+    await act(async () => {
+      passwordExecution = await result.current.updatePassword({
+        currentPassword: 'Old#Pass2026',
+        newPassword: 'Str0ng#Pass2026',
+      });
+    });
+    expect(passwordExecution).toEqual({
+      kind: 'unhandled-error',
+      message: '操作失败，请稍后重试。',
+    });
+    expect(result.current.state).toEqual({ settings: SETTINGS, status: 'ready' });
+
+    const updated: AccountSettingsView = { ...SETTINGS, nickname: '并发保存的昵称' };
+
+    await act(async () => {
+      profileGate.resolve({ isUpdated: true, ok: true, settings: updated });
+      await profileExecution;
+    });
+
+    // 网络失败路径同样不推进设置视图序号：资料保存结果照常写回并触发回写回调
+    expect(result.current.state).toEqual({ settings: updated, status: 'ready' });
+    expect(onProfileSaved).toHaveBeenCalledTimes(1);
+    expect(onProfileSaved).toHaveBeenCalledWith(updated, 900201);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('P3 解耦：改密在途不干扰 reload 读取（读取结果照常呈现）', async () => {
+    const gate = deferred<ChangeMyPasswordOutcome>();
+    updatePasswordMock.mockReturnValue(gate.promise);
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValueOnce(SETTINGS).mockResolvedValueOnce(RELOADED_SETTINGS);
+    const { result } = renderHook(() => useAccountSettings());
+    await waitFor(() =>
+      expect(result.current.state).toEqual({ settings: SETTINGS, status: 'ready' }),
+    );
+
+    let passwordExecution: Promise<PasswordExecution> = Promise.resolve({ kind: 'in-flight' });
+
+    await act(async () => {
+      passwordExecution = result.current.updatePassword({
+        currentPassword: 'Old#Pass2026',
+        newPassword: 'Str0ng#Pass2026',
+      });
+      result.current.reload();
+    });
+    await waitFor(() =>
+      expect(result.current.state).toEqual({ settings: RELOADED_SETTINGS, status: 'ready' }),
+    );
+
+    await act(async () => {
+      gate.resolve({ notice: '密码已更新，请使用新密码重新登录', ok: true });
+      await passwordExecution;
+    });
+
+    // 改密完成不推翻 reload 已呈现的视图（改密本就不写设置视图）
+    expect(result.current.state).toEqual({ settings: RELOADED_SETTINGS, status: 'ready' });
+  });
+});
+
+describe('useAccountSettings 改密会话代次采样（迟到响应裁决依据）', () => {
+  it('改密成功结果携带请求发起前采样的会话身份，采样只发生一次', async () => {
+    const sampleSessionIdentity = vi.fn(() => ({ accountId: 900201, epoch: 1 }));
+    updatePasswordMock.mockResolvedValue({ notice: '密码已更新', ok: true });
+    const { result } = renderHook(() => useAccountSettings({ sampleSessionIdentity }));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let execution: PasswordExecution = { kind: 'in-flight' };
+
+    await act(async () => {
+      execution = await result.current.updatePassword({
+        currentPassword: 'Old#Pass2026',
+        newPassword: 'Str0ng#Pass2026',
+      });
+    });
+
+    expect(sampleSessionIdentity).toHaveBeenCalledTimes(1);
+    expect(execution).toEqual({
+      kind: 'ok',
+      result: {
+        initiatedIdentity: { accountId: 900201, epoch: 1 },
+        notice: '密码已更新',
+        ok: true,
+      },
+    });
+  });
+
+  it('身份固化在请求发起前：响应在途期间切换会话，迟到结果仍携带发起时身份', async () => {
+    let currentIdentity: { accountId: number; epoch: number } | null = {
+      accountId: 900201,
+      epoch: 1,
+    };
+    const sampleSessionIdentity = vi.fn(() => currentIdentity);
+    const gate = deferred<ChangeMyPasswordOutcome>();
+    updatePasswordMock.mockReturnValue(gate.promise);
+    const { result } = renderHook(() => useAccountSettings({ sampleSessionIdentity }));
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let first: Promise<PasswordExecution> = Promise.resolve({ kind: 'in-flight' });
+
+    await act(async () => {
+      first = result.current.updatePassword({
+        currentPassword: 'Old#Pass2026',
+        newPassword: 'Str0ng#Pass2026',
+      });
+    });
+    // 请求已在途，此时退出重登（同账号新代次）或切换账号：采样面返回新身份
+    currentIdentity = { accountId: 900202, epoch: 3 };
+
+    await act(async () => {
+      gate.resolve({ notice: '密码已更新，请使用新密码重新登录', ok: true });
+      await first;
+    });
+
+    // 采样只发生在请求发起前：迟到响应不得把切换后的会话身份当作本次改密的身份
+    expect(sampleSessionIdentity).toHaveBeenCalledTimes(1);
+    expect(await first).toEqual({
+      kind: 'ok',
+      result: {
+        initiatedIdentity: { accountId: 900201, epoch: 1 },
+        notice: '密码已更新，请使用新密码重新登录',
+        ok: true,
+      },
+    });
+  });
+
+  it('装配层未接入采样时成功结果携带 null 身份，业务拒绝结果不携带身份', async () => {
+    updatePasswordMock
+      .mockResolvedValueOnce({ notice: '密码已更新', ok: true })
+      .mockResolvedValueOnce({ message: '当前密码不正确', ok: false, reason: 'invalid-input' });
+    const { result } = renderHook(() => useAccountSettings());
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+
+    let success: PasswordExecution = { kind: 'in-flight' };
+
+    await act(async () => {
+      success = await result.current.updatePassword({
+        currentPassword: 'Old#Pass2026',
+        newPassword: 'Str0ng#Pass2026',
+      });
+    });
+
+    expect(success).toEqual({
+      kind: 'ok',
+      result: { initiatedIdentity: null, notice: '密码已更新', ok: true },
+    });
+
+    let failure: PasswordExecution = { kind: 'in-flight' };
+
+    await act(async () => {
+      failure = await result.current.updatePassword({
+        currentPassword: 'Wrong#Pass2026',
+        newPassword: 'Str0ng#Pass2026',
+      });
+    });
+
+    expect(failure).toEqual({
+      kind: 'ok',
+      result: { message: '当前密码不正确', ok: false, reason: 'invalid-input' },
+    });
   });
 });
 
