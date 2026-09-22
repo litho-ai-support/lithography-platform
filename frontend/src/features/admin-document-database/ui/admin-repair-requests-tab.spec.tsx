@@ -2,10 +2,10 @@
 // @vitest-environment jsdom
 
 /**
- * 维修申请 Tab 页面级测试（R3 + R4）。
+ * 维修申请 Tab 页面级测试（R3 + R4 + R7 S5）。
  *
- * R3：筛选控件在 FilterBar 内、loading/失败/空/数据各状态与表格分页同处
- * TableContainer 内、Drawer 在容器外；筛选/分页/Drawer 可操作。
+ * R3/S5：主搜索在卡内工具区、loading/失败/空/数据各状态与表格分页同处
+ * .kb-card 内、Drawer 在卡外；筛选/分页/Drawer 可操作。
  * R4：默认空态使用「暂无…」而非筛选空文案、清空/纯空格恢复默认态、
  * isAccepted=false 是有效筛选且进入请求变量、旧请求晚到不覆盖新结果。
  *
@@ -90,48 +90,60 @@ beforeEach(() => {
   ]);
 });
 
-describe('AdminRepairRequestsTab（R3 视觉容器）', () => {
-  it('筛选控件包在 FilterBar 内，loading 骨架在 TableContainer 内', async () => {
+describe('AdminRepairRequestsTab（R3/R7 S5 知识库卡容器）', () => {
+  it('主搜索在卡内工具区，loading 骨架在同一知识库卡内', async () => {
     const { container } = render(<AdminRepairRequestsTab />);
 
-    const filterBar = container.querySelector('.filter-bar');
-    expect(filterBar).not.toBeNull();
-    expect(filterBar?.querySelector('input')).not.toBeNull();
-
-    const tableContainer = container.querySelector('.table-container');
-    expect(tableContainer).not.toBeNull();
-    expect(tableContainer?.querySelector('.ant-skeleton')).not.toBeNull();
+    const card = container.querySelector('.kb-card');
+    expect(card).not.toBeNull();
+    expect(card?.querySelector('.table-container')).toBeNull();
+    const toolbar = card?.querySelector('.kb-toolbar');
+    expect(toolbar).not.toBeNull();
+    expect(toolbar?.querySelector('input')).not.toBeNull();
+    expect(card?.querySelector('.kb-card-state .ant-skeleton')).not.toBeNull();
 
     // flush 初始取数的落定，避免测试结束后才 dispatch 的 act 警告
     await act(async () => {});
   });
 
-  it('有数据：表格与分页在 TableContainer 内，摘要 Drawer 在容器外且可打开', async () => {
+  it('有数据：表格与卡底分页在知识库卡内，摘要 Drawer 在卡外且可打开', async () => {
     const { container } = render(<AdminRepairRequestsTab />);
 
     expect(await screen.findByText('RR-20260901-001')).toBeInTheDocument();
-    const tableContainer = container.querySelector('.table-container');
-    expect(tableContainer?.querySelector('table')).not.toBeNull();
-    expect(tableContainer?.querySelector('.ant-pagination')).not.toBeNull();
+    const card = container.querySelector('.kb-card');
+    expect(card?.querySelector('.kb-table-scope table')).not.toBeNull();
+    expect(card?.querySelector('.kb-card-footer .ant-pagination')).not.toBeNull();
 
     fireEvent.click(screen.getAllByRole('button', { name: /摘\s*要/ })[0]);
 
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(await screen.findByText(/维修申请摘要/)).toBeInTheDocument();
-    expect(container.querySelector('.table-container .ant-drawer')).toBeNull();
+    expect(container.querySelector('.kb-card .ant-drawer')).toBeNull();
   });
 
-  it('加载失败：错误告警在 TableContainer 内呈现，重试可恢复数据', async () => {
+  it('加载失败：错误告警在知识库卡内呈现，重试可恢复数据', async () => {
     fetchRepairMock.mockRejectedValueOnce(new Error('network down'));
     const { container } = render(<AdminRepairRequestsTab />);
 
     expect(await screen.findByText('维修申请列表加载失败，请稍后重试。')).toBeInTheDocument();
-    expect(container.querySelector('.table-container .ant-alert-error')).not.toBeNull();
+    expect(container.querySelector('.kb-card .kb-card-state .ant-alert-error')).not.toBeNull();
 
     // AntD 两字按钮在中间插入全角空格（「重 试」），用正则容忍
     fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
 
     expect(await screen.findByText('RR-20260901-001')).toBeInTheDocument();
+  });
+
+  it('设备型号加载失败：告警与表格同卡显示（四态同卡，型号告警不单独带框）', async () => {
+    fetchModelOptionsMock.mockRejectedValueOnce(new Error('models down'));
+    const { container } = render(<AdminRepairRequestsTab />);
+
+    expect(
+      await screen.findByText('设备型号选项加载失败，型号筛选暂不可用，可继续使用其他筛选。'),
+    ).toBeInTheDocument();
+    const card = container.querySelector('.kb-card');
+    expect(card?.querySelector('.kb-card-state .ant-alert-warning')).not.toBeNull();
+    expect(card?.querySelector('table')).not.toBeNull();
   });
 });
 
@@ -180,13 +192,36 @@ describe('AdminRepairRequestsTab（R4 有效筛选单一真源）', () => {
     render(<AdminRepairRequestsTab />);
     await waitFor(() => expect(fetchRepairMock).toHaveBeenCalledTimes(1));
 
-    // 筛选区第一个下拉为「接单状态」
+    // 接单状态位于「筛选」展开区内，先展开再操作
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.mouseDown(screen.getAllByRole('combobox')[0]);
     fireEvent.click(await screen.findByText('待接单'));
 
     await waitFor(() => expect(fetchRepairMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
     expect(fetchRepairMock).toHaveBeenLastCalledWith(1, 10, { isAccepted: false });
     expect(await screen.findByText('没有符合筛选条件的维修申请。')).toBeInTheDocument();
+  });
+
+  it('筛选入口可展开/收起，重置清空主搜索与展开区条件回到空请求参数', async () => {
+    fetchRepairMock.mockResolvedValue(buildPage([]));
+    render(<AdminRepairRequestsTab />);
+    await waitFor(() => expect(fetchRepairMock).toHaveBeenCalledTimes(1));
+
+    const filterButton = screen.getByRole('button', { name: '筛选' });
+    expect(filterButton).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(filterButton);
+    expect(filterButton).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.change(screen.getByPlaceholderText('按申请编号搜索'), {
+      target: { value: 'RR-999' },
+    });
+    await waitFor(() => expect(fetchRepairMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    expect(fetchRepairMock).toHaveBeenLastCalledWith(1, 10, { requestNo: 'RR-999' });
+
+    fireEvent.click(screen.getByRole('button', { name: '重置' }));
+    await waitFor(() => expect(fetchRepairMock).toHaveBeenCalledTimes(3), { timeout: 2000 });
+    expect(fetchRepairMock).toHaveBeenLastCalledWith(1, 10, {});
+    expect(await screen.findByText('暂无维修申请。')).toBeInTheDocument();
   });
 
   it('分页可操作：翻页请求同时保留筛选参数并回带 page=2', async () => {

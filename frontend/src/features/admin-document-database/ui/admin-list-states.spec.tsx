@@ -138,3 +138,54 @@ describe('AdminListStates', () => {
     expect(container.querySelector('.ant-alert-warning')).toBeNull();
   });
 });
+
+/** 知识库变体（PR3 R7 S5）：各状态包 .kb-card-state，样式与卡外壳由 .kb-card 承担 */
+describe('AdminListStates（knowledge-base 变体）', () => {
+  function renderKbStates(state: AdminListState<Item>) {
+    return render(
+      <AdminListStates<Item>
+        emptyLabel={EMPTY_LABEL}
+        filteredEmptyLabel={FILTERED_EMPTY_LABEL}
+        hasActiveFilter={false}
+        onRetry={vi.fn()}
+        state={state}
+        variant="knowledge-base"
+      >
+        <div data-testid="table-body">表格内容</div>
+      </AdminListStates>,
+    );
+  }
+
+  it('加载态：骨架包在 .kb-card-state 内', () => {
+    const { container } = renderKbStates(loadingState);
+
+    const stateBox = container.querySelector('.kb-card-state');
+    expect(stateBox).not.toBeNull();
+    expect(stateBox?.querySelector('.ant-skeleton')).not.toBeNull();
+  });
+
+  it('失败态：错误告警包在 .kb-card-state 内且可重试', () => {
+    const { container } = renderKbStates(failedState);
+
+    const stateBox = container.querySelector('.kb-card-state');
+    expect(stateBox).not.toBeNull();
+    expect(stateBox?.querySelector('.ant-alert-error')).not.toBeNull();
+  });
+
+  it('空态：空文案包在 .kb-card-state 内', () => {
+    const { container } = renderKbStates(readyEmpty);
+
+    const stateBox = container.querySelector('.kb-card-state');
+    expect(stateBox).not.toBeNull();
+    expect(stateBox?.textContent).toContain(EMPTY_LABEL);
+  });
+
+  it('越界空页：可恢复提示同样包在 .kb-card-state 内，children 仍渲染', () => {
+    const { container } = renderKbStates(readyOutOfRange);
+
+    const stateBox = container.querySelector('.kb-card-state');
+    expect(stateBox).not.toBeNull();
+    expect(stateBox?.querySelector('.ant-alert-warning')).not.toBeNull();
+    expect(screen.getByTestId('table-body')).toBeInTheDocument();
+  });
+});

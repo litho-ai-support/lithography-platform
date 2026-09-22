@@ -237,4 +237,89 @@ describe('ReferenceDocumentList', () => {
     fireEvent.click(screen.getByText('新增资料'));
     expect(navigateMock).toHaveBeenCalledWith('/reference-documents/new');
   });
+
+  describe('knowledge-base 变体（PR3 R7）', () => {
+    it('渲染 kb-card 工具区/紧凑表格/卡底统计，不渲染卡片标题与新增入口', async () => {
+      fetchListMock.mockResolvedValue(buildPage([buildItem(970001)], 1));
+
+      render(<ReferenceDocumentList canManage variant="knowledge-base" />);
+      await screen.findByText('参考资料 970001');
+
+      expect(document.querySelector('.kb-card')).not.toBeNull();
+      expect(document.querySelector('.kb-toolbar')).not.toBeNull();
+      expect(document.querySelector('.kb-table-scope')).not.toBeNull();
+      expect(document.querySelector('.kb-card-footer')?.textContent).toContain('共 1 条');
+      // 新增入口由页面右上主操作区承担：变体内不渲染
+      expect(screen.queryByText('新增资料')).toBeNull();
+      expect(screen.getByPlaceholderText('按文档标题搜索')).toBeTruthy();
+      expect(screen.getByRole('button', { name: '筛选' })).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      );
+    });
+
+    it('筛选默认收起，展开后选择类型触发组合筛选，重置清除全部条件', async () => {
+      fetchListMock.mockResolvedValue(buildPage([buildItem(970001)], 1));
+
+      render(<ReferenceDocumentList canManage variant="knowledge-base" />);
+      await screen.findByText('参考资料 970001');
+
+      // 默认收起：无可见 combobox
+      expect(screen.queryAllByRole('combobox')).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+      const [typeSelect] = screen.getAllByRole('combobox');
+      await act(async () => {
+        fireEvent.mouseDown(typeSelect);
+      });
+      fireEvent.click(await screen.findByText('维护指南'));
+
+      await waitFor(() => {
+        expect(fetchListMock).toHaveBeenLastCalledWith(
+          { page: 1, pageSize: 10 },
+          { documentType: 'MAINTENANCE_GUIDE' },
+        );
+      });
+
+      // 有生效筛选后按钮出现 active 提示
+      expect(screen.getByRole('button', { name: '筛选' })).toHaveClass('kb-toolbar-button--active');
+
+      fireEvent.click(screen.getByRole('button', { name: '重置' }));
+      await waitFor(() => {
+        expect(fetchListMock).toHaveBeenLastCalledWith({ page: 1, pageSize: 10 }, undefined);
+      });
+    });
+
+    it('主搜索框输入经防抖后按关键词请求，清除按钮回传空值恢复全量', async () => {
+      vi.useFakeTimers();
+
+      try {
+        fetchListMock.mockResolvedValue(buildPage([buildItem(970001)]));
+
+        render(<ReferenceDocumentList canManage variant="knowledge-base" />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        fireEvent.change(screen.getByPlaceholderText('按文档标题搜索'), {
+          target: { value: '维护指南' },
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(300);
+        });
+        expect(fetchListMock).toHaveBeenLastCalledWith(
+          { page: 1, pageSize: 10 },
+          { titleKeyword: '维护指南' },
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: '清除标题搜索' }));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(300);
+        });
+        expect(fetchListMock).toHaveBeenLastCalledWith({ page: 1, pageSize: 10 }, undefined);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

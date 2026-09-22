@@ -12,12 +12,12 @@ import {
   Select,
   Skeleton,
   Table,
+  Tooltip,
 } from 'antd';
 
-import { FilterBar } from '@/shared/ui/filter-bar';
 import { formatDateTimeText } from '@/shared/ui/format-date-time';
+import { KbSearchField, KbToolbarButton } from '@/shared/ui/knowledge-base';
 import { StatusPill } from '@/shared/ui/status-pill';
-import { TableContainer } from '@/shared/ui/table-container';
 
 import { useAdminRepairRequestSummary } from '../application/use-admin-document-detail';
 import { useAdminDocumentList } from '../application/use-admin-document-list';
@@ -41,7 +41,10 @@ const RESOLUTION_STATUS_LABELS: Record<'PENDING' | 'RESOLVED', string> = {
   RESOLVED: '已解决',
 };
 
-/** 维修申请标签：管理员全局只读列表 + 组合筛选 + 只读摘要（不创建维护记录管理） */
+/** 维修申请标签：管理员全局只读列表 + 组合筛选 + 只读摘要（不创建维护记录管理）
+ *
+ * PR3 R7 S5：整体迁入单张知识库卡（卡内工具区 + 主搜索 + 筛选展开区 +
+ * 紧凑表格 + 卡底分页）；精确条件全部保留，仅常态入口收进「筛选」。 */
 export function AdminRepairRequestsTab() {
   const [requestNoKeyword, setRequestNoKeyword] = useState('');
   const [customerKeyword, setCustomerKeyword] = useState('');
@@ -49,6 +52,7 @@ export function AdminRepairRequestsTab() {
   const [isAccepted, setIsAccepted] = useState<boolean | undefined>(undefined);
   const [equipmentModelId, setEquipmentModelId] = useState<number | undefined>(undefined);
   const [createdAtRange, setCreatedAtRange] = useState<AdminCreatedAtRangeState>(null);
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [summaryRequestId, setSummaryRequestId] = useState<number | null>(null);
   // 设备型号下拉：调用本 feature 自己的 adapter（fetchAdminEquipmentModelOptions），
   // 保持 feature 之间不直接跨依赖（frontend/docs/dependency-rules.md）。
@@ -108,6 +112,15 @@ export function AdminRepairRequestsTab() {
   const reloadKey = JSON.stringify(effectiveFilter);
   const hasActiveFilter = Object.keys(effectiveFilter).length > 0;
 
+  const resetFilters = () => {
+    setRequestNoKeyword('');
+    setCustomerKeyword('');
+    setErrorCode('');
+    setIsAccepted(undefined);
+    setEquipmentModelId(undefined);
+    setCreatedAtRange(null);
+  };
+
   const fetcher = useMemo(
     () => (page: number, pageSize: number) =>
       fetchAdminRepairRequests(page, pageSize, effectiveFilter),
@@ -123,26 +136,61 @@ export function AdminRepairRequestsTab() {
   );
   const summary = useAdminRepairRequestSummary(summaryRequestId);
 
+  // 紧凑列宽 + ellipsis/Tooltip：scroll.x 由 1350 收紧到 1040，1366 视口即可完整可见；
+  // 操作列 fixed right 作为窄视口下的可发现性保障（字段一个不删，PR3 R7 S5/视觉报告 3.5）
   const columns = useMemo<TableColumnsType<AdminRepairRequestListItem>>(
     () => [
-      { dataIndex: 'requestNo', key: 'requestNo', title: '申请编号', width: 160 },
-      { dataIndex: 'customerNickname', key: 'customerNickname', title: '客户', width: 120 },
+      // 申请编号 / 客户为变长文本：与公司、设备型号同用 ellipsis + Tooltip，
+      // 避免长昵称或真实 RR 编号在紧凑列宽下换行把行高撑到两行（PR3 R7 S5 表格密度）
+      {
+        dataIndex: 'requestNo',
+        key: 'requestNo',
+        ellipsis: true,
+        render: (value: string) => (
+          <Tooltip title={value}>
+            <span>{value}</span>
+          </Tooltip>
+        ),
+        title: '申请编号',
+        width: 136,
+      },
+      {
+        dataIndex: 'customerNickname',
+        key: 'customerNickname',
+        ellipsis: true,
+        render: (value: string) => (
+          <Tooltip title={value}>
+            <span>{value}</span>
+          </Tooltip>
+        ),
+        title: '客户',
+        width: 92,
+      },
       {
         dataIndex: 'companyName',
         key: 'companyName',
         ellipsis: true,
-        render: (value: string | null) => value ?? '—',
+        render: (value: string | null) => (
+          <Tooltip title={value ?? '—'}>
+            <span>{value ?? '—'}</span>
+          </Tooltip>
+        ),
         title: '公司',
-        width: 150,
+        width: 136,
       },
       {
         dataIndex: 'equipmentModelName',
         key: 'equipmentModelName',
         ellipsis: true,
+        render: (value: string) => (
+          <Tooltip title={value}>
+            <span>{value}</span>
+          </Tooltip>
+        ),
         title: '设备型号',
-        width: 170,
+        width: 168,
       },
-      { dataIndex: 'errorCode', key: 'errorCode', title: '故障码', width: 120 },
+      { dataIndex: 'errorCode', key: 'errorCode', title: '故障码', width: 92 },
       {
         dataIndex: 'isAccepted',
         key: 'isAccepted',
@@ -153,7 +201,7 @@ export function AdminRepairRequestsTab() {
             <StatusPill tone="warn">待接单</StatusPill>
           ),
         title: '接单状态',
-        width: 100,
+        width: 92,
       },
       {
         dataIndex: 'latestResolutionStatus',
@@ -161,16 +209,17 @@ export function AdminRepairRequestsTab() {
         render: (value: 'PENDING' | 'RESOLVED' | null) =>
           value ? RESOLUTION_STATUS_LABELS[value] : '—',
         title: '处理状态',
-        width: 100,
+        width: 92,
       },
       {
         dataIndex: 'createdAt',
         key: 'createdAt',
         render: (value: string) => formatDateTimeText(value),
         title: '创建时间',
-        width: 170,
+        width: 140,
       },
       {
+        fixed: 'right',
         key: 'actions',
         render: (_value, record) => (
           <Button onClick={() => setSummaryRequestId(record.id)} size="small" type="link">
@@ -178,70 +227,80 @@ export function AdminRepairRequestsTab() {
           </Button>
         ),
         title: '操作',
-        width: 80,
+        width: 92,
       },
     ],
     [],
   );
 
   return (
-    <div className="flex min-w-0 flex-col">
-      {/* 根层不设 gap：FilterBar 自带 margin（12px 0 14px）即唯一边距真源，
-          避免其 14px 下边距再叠加 16px flex gap（负责人 0922 复查 B1）。 */}
-      <FilterBar>
-        <Input
-          allowClear
-          maxLength={64}
+    <div className="kb-card">
+      {/* 卡内工具区（PR3 R7 S5）：主搜索 + 筛选入口；其余精确条件全部保留，
+          只是从常态平铺收进「筛选」展开区（视觉报告 3.4 工具区差异） */}
+      <div className="kb-toolbar">
+        <KbSearchField
+          clearLabel="清除申请编号搜索"
+          onChange={setRequestNoKeyword}
           placeholder="按申请编号搜索"
-          style={{ width: 180 }}
           value={requestNoKeyword}
-          onChange={(event) => setRequestNoKeyword(event.target.value)}
         />
-        <Input
-          allowClear
-          maxLength={100}
-          placeholder="按客户昵称/公司搜索"
-          style={{ width: 200 }}
-          value={customerKeyword}
-          onChange={(event) => setCustomerKeyword(event.target.value)}
-        />
-        <Input
-          allowClear
-          maxLength={100}
-          placeholder="输入完整故障码"
-          style={{ width: 150 }}
-          value={errorCode}
-          onChange={(event) => setErrorCode(event.target.value)}
-        />
-        <Select
-          allowClear
-          placeholder="接单状态"
-          style={{ width: 130 }}
-          value={isAccepted}
-          onChange={(value) => setIsAccepted(value)}
-          options={[
-            { label: '已接单', value: true },
-            { label: '待接单', value: false },
-          ]}
-        />
-        <Select
-          allowClear
-          placeholder="设备型号"
-          style={{ width: 220 }}
-          value={equipmentModelId}
-          onChange={(value) => setEquipmentModelId(value)}
-          options={modelOptions.map((model) => ({
-            label: `${model.modelName}（${model.modelCode}）`,
-            value: model.id,
-          }))}
-        />
-        <AdminCreatedAtFilter onChange={setCreatedAtRange} value={createdAtRange} />
-      </FilterBar>
+        <KbToolbarButton
+          active={hasActiveFilter}
+          aria-expanded={filterPanelOpen}
+          onClick={() => setFilterPanelOpen((previous) => !previous)}
+        >
+          筛选
+        </KbToolbarButton>
+      </div>
+
+      {filterPanelOpen ? (
+        <div className="kb-filter-panel">
+          <Input
+            allowClear
+            maxLength={100}
+            placeholder="按客户昵称/公司搜索"
+            style={{ width: 200 }}
+            value={customerKeyword}
+            onChange={(event) => setCustomerKeyword(event.target.value)}
+          />
+          <Input
+            allowClear
+            maxLength={100}
+            placeholder="输入完整故障码"
+            style={{ width: 150 }}
+            value={errorCode}
+            onChange={(event) => setErrorCode(event.target.value)}
+          />
+          <Select
+            allowClear
+            placeholder="接单状态"
+            style={{ width: 130 }}
+            value={isAccepted}
+            onChange={(value) => setIsAccepted(value)}
+            options={[
+              { label: '已接单', value: true },
+              { label: '待接单', value: false },
+            ]}
+          />
+          <Select
+            allowClear
+            placeholder="设备型号"
+            style={{ width: 220 }}
+            value={equipmentModelId}
+            onChange={(value) => setEquipmentModelId(value)}
+            options={modelOptions.map((model) => ({
+              label: `${model.modelName}（${model.modelCode}）`,
+              value: model.id,
+            }))}
+          />
+          <AdminCreatedAtFilter onChange={setCreatedAtRange} value={createdAtRange} />
+          <KbToolbarButton onClick={resetFilters}>重置</KbToolbarButton>
+        </div>
+      ) : null}
 
       {modelsFailed ? (
-        /* 型号告警非公共容器：包裹层补 14px 下边距，保持 FilterBar → 告警 →
-           表格容器的行距节奏一致（0922 复查 B1） */
-        <div className="mb-[14px]">
+        /* 型号告警与表格同卡（PR3 R7 S5 四态同卡要求） */
+        <div className="kb-card-state">
           <Alert
             showIcon
             title="设备型号选项加载失败，型号筛选暂不可用，可继续使用其他筛选。"
@@ -250,37 +309,39 @@ export function AdminRepairRequestsTab() {
         </div>
       ) : null}
 
-      <TableContainer>
-        <AdminListStates
-          emptyLabel="暂无维修申请。"
-          filteredEmptyLabel="没有符合筛选条件的维修申请。"
-          hasActiveFilter={hasActiveFilter}
-          onRetry={reload}
-          state={state}
-        >
-          {state.status === 'ready' && state.total > 0 ? (
-            <div className="flex min-w-0 flex-col gap-4">
+      <AdminListStates
+        emptyLabel="暂无维修申请。"
+        filteredEmptyLabel="没有符合筛选条件的维修申请。"
+        hasActiveFilter={hasActiveFilter}
+        onRetry={reload}
+        state={state}
+        variant="knowledge-base"
+      >
+        {state.status === 'ready' && state.total > 0 ? (
+          <>
+            <div className="kb-table-scope">
               <Table<AdminRepairRequestListItem>
                 columns={columns}
                 dataSource={state.items}
                 pagination={false}
                 rowKey="id"
-                scroll={{ x: 1350 }}
+                scroll={{ x: 1040 }}
               />
-              <div className="flex justify-end">
-                <Pagination
-                  current={state.page}
-                  onChange={goToPage}
-                  pageSize={state.pageSize}
-                  showSizeChanger={false}
-                  showTotal={(total) => `共 ${total} 条`}
-                  total={state.total}
-                />
-              </div>
             </div>
-          ) : null}
-        </AdminListStates>
-      </TableContainer>
+            <div className="kb-card-footer">
+              <span>共 {state.total} 条</span>
+              <Pagination
+                current={state.page}
+                onChange={goToPage}
+                pageSize={state.pageSize}
+                showSizeChanger={false}
+                size="small"
+                total={state.total}
+              />
+            </div>
+          </>
+        ) : null}
+      </AdminListStates>
 
       <Drawer
         destroyOnHidden

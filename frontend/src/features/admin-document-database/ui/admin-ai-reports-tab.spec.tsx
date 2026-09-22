@@ -2,10 +2,10 @@
 // @vitest-environment jsdom
 
 /**
- * AI 报告 Tab 页面级测试（R3 + R4）。
+ * AI 报告 Tab 页面级测试（R3 + R4 + R7 S5）。
  *
- * R3：筛选控件在 FilterBar 内、各状态与表格分页同处 TableContainer 内、
- * 正文 Drawer 在容器外；筛选/分页/Drawer 可操作。
+ * R3/S5：主搜索在卡内工具区、各状态与表格分页同处 .kb-card 内、
+ * 正文 Drawer 在卡外；筛选/分页/Drawer 可操作。
  * R4：默认空态「暂无 AI 报告。」、筛选空文案、请求参数与筛选状态一致。
  *
  * 只 mock 本 feature 的 adapter 模块，其余走真实组件与状态机。
@@ -74,29 +74,29 @@ beforeEach(() => {
   fetchReportDetailMock.mockResolvedValue({ ok: true, detail: buildReportDetail(1) });
 });
 
-describe('AdminAiReportsTab（R3 视觉容器）', () => {
-  it('筛选控件包在 FilterBar 内，loading 骨架在 TableContainer 内', async () => {
+describe('AdminAiReportsTab（R3/R7 S5 知识库卡容器）', () => {
+  it('主搜索在卡内工具区，loading 骨架在同一知识库卡内', async () => {
     const { container } = render(<AdminAiReportsTab />);
 
-    const filterBar = container.querySelector('.filter-bar');
-    expect(filterBar).not.toBeNull();
-    expect(filterBar?.querySelector('input')).not.toBeNull();
-
-    const tableContainer = container.querySelector('.table-container');
-    expect(tableContainer).not.toBeNull();
-    expect(tableContainer?.querySelector('.ant-skeleton')).not.toBeNull();
+    const card = container.querySelector('.kb-card');
+    expect(card).not.toBeNull();
+    expect(card?.querySelector('.table-container')).toBeNull();
+    const toolbar = card?.querySelector('.kb-toolbar');
+    expect(toolbar).not.toBeNull();
+    expect(toolbar?.querySelector('input')).not.toBeNull();
+    expect(card?.querySelector('.kb-card-state .ant-skeleton')).not.toBeNull();
 
     // flush 初始取数的落定，避免测试结束后才 dispatch 的 act 警告
     await act(async () => {});
   });
 
-  it('有数据：表格与分页在 TableContainer 内，正文 Drawer 在容器外且可打开', async () => {
+  it('有数据：表格与卡底分页在知识库卡内，正文 Drawer 在卡外且可打开', async () => {
     const { container } = render(<AdminAiReportsTab />);
 
     expect(await screen.findByText('报告标题 1')).toBeInTheDocument();
-    const tableContainer = container.querySelector('.table-container');
-    expect(tableContainer?.querySelector('table')).not.toBeNull();
-    expect(tableContainer?.querySelector('.ant-pagination')).not.toBeNull();
+    const card = container.querySelector('.kb-card');
+    expect(card?.querySelector('.kb-table-scope table')).not.toBeNull();
+    expect(card?.querySelector('.kb-card-footer .ant-pagination')).not.toBeNull();
 
     // AntD 两字按钮在中间插入全角空格（「正 文」），用正则容忍
     fireEvent.click(screen.getByRole('button', { name: /正\s*文/ }));
@@ -104,15 +104,15 @@ describe('AdminAiReportsTab（R3 视觉容器）', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(await screen.findByText('## 报告正文 1')).toBeInTheDocument();
     expect(fetchReportDetailMock).toHaveBeenCalledWith(1);
-    expect(container.querySelector('.table-container .ant-drawer')).toBeNull();
+    expect(container.querySelector('.kb-card .ant-drawer')).toBeNull();
   });
 
-  it('加载失败：错误告警在 TableContainer 内呈现，重试可恢复数据', async () => {
+  it('加载失败：错误告警在知识库卡内呈现，重试可恢复数据', async () => {
     fetchReportsMock.mockRejectedValueOnce(new Error('network down'));
     const { container } = render(<AdminAiReportsTab />);
 
     expect(await screen.findByText('AI 报告列表加载失败，请稍后重试。')).toBeInTheDocument();
-    expect(container.querySelector('.table-container .ant-alert-error')).not.toBeNull();
+    expect(container.querySelector('.kb-card .kb-card-state .ant-alert-error')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
 
@@ -130,11 +130,12 @@ describe('AdminAiReportsTab（R4 有效筛选单一真源）', () => {
     expect(fetchReportsMock).toHaveBeenCalledWith(1, 10, {});
   });
 
-  it('真实筛选无结果：显示筛选空文案，请求变量保留筛选字段', async () => {
+  it('真实筛选无结果：展开筛选后显示筛选空文案，请求变量保留筛选字段', async () => {
     fetchReportsMock.mockResolvedValue(buildPage([]));
     render(<AdminAiReportsTab />);
     await waitFor(() => expect(fetchReportsMock).toHaveBeenCalledTimes(1));
 
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.change(screen.getByPlaceholderText('按报告类型筛选'), {
       target: { value: 'FAULT' },
     });
@@ -142,6 +143,27 @@ describe('AdminAiReportsTab（R4 有效筛选单一真源）', () => {
     await waitFor(() => expect(fetchReportsMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
     expect(fetchReportsMock).toHaveBeenLastCalledWith(1, 10, { reportType: 'FAULT' });
     expect(await screen.findByText('没有符合筛选条件的 AI 报告。')).toBeInTheDocument();
+  });
+
+  it('筛选入口可展开/收起，重置清空全部条件回到空请求参数', async () => {
+    fetchReportsMock.mockResolvedValue(buildPage([]));
+    render(<AdminAiReportsTab />);
+    await waitFor(() => expect(fetchReportsMock).toHaveBeenCalledTimes(1));
+
+    const filterButton = screen.getByRole('button', { name: '筛选' });
+    expect(filterButton).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(filterButton);
+    expect(filterButton).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.change(screen.getByPlaceholderText('按报告类型筛选'), {
+      target: { value: 'FAULT' },
+    });
+    await waitFor(() => expect(fetchReportsMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
+
+    fireEvent.click(screen.getByRole('button', { name: '重置' }));
+    await waitFor(() => expect(fetchReportsMock).toHaveBeenCalledTimes(3), { timeout: 2000 });
+    expect(fetchReportsMock).toHaveBeenLastCalledWith(1, 10, {});
+    expect(await screen.findByText('暂无 AI 报告。')).toBeInTheDocument();
   });
 
   it('分页可操作：翻页请求回带 page=2', async () => {

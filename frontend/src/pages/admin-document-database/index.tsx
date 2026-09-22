@@ -1,6 +1,9 @@
 // src/pages/admin-document-database/index.tsx
 
+import { useState } from 'react';
+import { PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Skeleton, Tabs } from 'antd';
+import { useNavigate } from 'react-router';
 
 import {
   AdminAiConversationsTab,
@@ -8,10 +11,9 @@ import {
   AdminRepairRequestsTab,
   useAdminDocumentStats,
 } from '@/features/admin-document-database';
-import { ReferenceDocumentList } from '@/features/reference-document';
+import { REFERENCE_DOCUMENT_NEW_PATH, ReferenceDocumentList } from '@/features/reference-document';
 
 import { PageHeader } from '@/shared/ui/page-header';
-import { StatCard } from '@/shared/ui/stat-card';
 
 /**
  * 文档数据库页（PR3 S3）：页头四类真实统计 + 四标签。
@@ -29,74 +31,116 @@ import { StatCard } from '@/shared/ui/stat-card';
  */
 export function AdminDocumentDatabasePage() {
   const stats = useAdminDocumentStats();
+  const navigate = useNavigate();
+  // Tabs 受控：右上「新增资料」主操作仅在默认参考资料标签激活时出现（PR3 R7 S4）；
+  // 受控不改变 AntD 默认懒挂载与已挂载标签的保留行为。
+  const [activeTabKey, setActiveTabKey] = useState('reference-documents');
 
   return (
-    <div className="page-stack">
+    <div className="kb-page">
       <PageHeader
-        description="面向 SUPER_ADMIN 的数据聚合视图：维修申请、AI 会话、AI 报告为只读聚合，参考资料标签复用既有管理能力；各标签独立分页筛选。"
+        description="集中管理诊断模型所需的精选手册、维修报告与问题解决报告，及平台 AI 会话与报告。"
+        eyebrow="Knowledge Management"
+        extra={
+          activeTabKey === 'reference-documents' ? (
+            <span className="kb-primary-action">
+              <Button
+                icon={<PlusOutlined />}
+                type="primary"
+                onClick={() => void navigate(REFERENCE_DOCUMENT_NEW_PATH)}
+              >
+                新增资料
+              </Button>
+            </span>
+          ) : null
+        }
         title="文档数据库"
+        variant="knowledge-base"
       />
 
-      {stats.state.status === 'loading' ? <Skeleton active paragraph={{ rows: 1 }} /> : null}
+      {stats.state.status === 'loading' ? (
+        <div className="mb-4">
+          <Skeleton active paragraph={{ rows: 1 }} />
+        </div>
+      ) : null}
       {stats.state.status === 'failed' ? (
-        <Alert
-          action={
-            <Button onClick={stats.reload} size="small">
-              重试
-            </Button>
-          }
-          description="列表功能不受影响。"
-          showIcon
-          title={`统计加载失败：${stats.state.message}`}
-          type="error"
-        />
+        <div className="mb-4">
+          <Alert
+            action={
+              <Button onClick={stats.reload} size="small">
+                重试
+              </Button>
+            }
+            description="列表功能不受影响。"
+            showIcon
+            title={`统计加载失败：${stats.state.message}`}
+            type="error"
+          />
+        </div>
       ) : null}
       {stats.state.status === 'ready' ? (
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <StatCard
-            hint="不含软删除"
-            label="维修申请"
-            value={stats.state.stats.repairRequestTotal}
-          />
-          <StatCard
-            hint="不含软删除"
-            label="参考资料"
-            value={stats.state.stats.referenceDocumentTotal}
-          />
-          <StatCard
-            hint="全部工程师会话"
-            label="AI 会话"
-            value={stats.state.stats.aiConversationTotal}
-          />
-          <StatCard hint="全部生成报告" label="AI 报告" value={stats.state.stats.aiReportTotal} />
+        /* 四分区紧凑汇总条：业务保留四类真实统计（原型为演示元数据，属登记偏差）；
+           口径提示以小字附在数值后，不破坏原型 67.5px 行高 */
+        <div className="kb-card kb-summary">
+          <div className="kb-summary-cell">
+            <div className="kb-summary-label">维修申请</div>
+            <div className="kb-summary-value">
+              {stats.state.stats.repairRequestTotal}
+              <span className="kb-summary-hint">不含软删除</span>
+            </div>
+          </div>
+          <div className="kb-summary-cell">
+            <div className="kb-summary-label">参考资料</div>
+            <div className="kb-summary-value">
+              {stats.state.stats.referenceDocumentTotal}
+              <span className="kb-summary-hint">不含软删除</span>
+            </div>
+          </div>
+          <div className="kb-summary-cell">
+            <div className="kb-summary-label">AI 会话</div>
+            <div className="kb-summary-value">
+              {stats.state.stats.aiConversationTotal}
+              <span className="kb-summary-hint">全部工程师会话</span>
+            </div>
+          </div>
+          <div className="kb-summary-cell">
+            <div className="kb-summary-label">AI 报告</div>
+            <div className="kb-summary-value">
+              {stats.state.stats.aiReportTotal}
+              <span className="kb-summary-hint">全部生成报告</span>
+            </div>
+          </div>
         </div>
       ) : null}
 
-      <Tabs
-        defaultActiveKey="reference-documents"
-        items={[
-          {
-            children: <ReferenceDocumentList canManage />,
-            key: 'reference-documents',
-            label: '参考资料',
-          },
-          {
-            children: <AdminRepairRequestsTab />,
-            key: 'repair-requests',
-            label: '维修申请',
-          },
-          {
-            children: <AdminAiConversationsTab />,
-            key: 'ai-conversations',
-            label: 'AI 会话',
-          },
-          {
-            children: <AdminAiReportsTab />,
-            key: 'ai-reports',
-            label: 'AI 报告',
-          },
-        ]}
-      />
+      <div className="kb-tabs">
+        <Tabs
+          activeKey={activeTabKey}
+          items={[
+            {
+              children: <ReferenceDocumentList canManage variant="knowledge-base" />,
+              key: 'reference-documents',
+              label: '参考资料',
+            },
+            {
+              children: <AdminRepairRequestsTab />,
+              key: 'repair-requests',
+              label: '维修申请',
+            },
+            {
+              children: <AdminAiConversationsTab />,
+              key: 'ai-conversations',
+              label: 'AI 会话',
+            },
+            {
+              children: <AdminAiReportsTab />,
+              key: 'ai-reports',
+              label: 'AI 报告',
+            },
+          ]}
+          onChange={setActiveTabKey}
+        />
+      </div>
     </div>
   );
 }

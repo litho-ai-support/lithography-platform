@@ -2,10 +2,10 @@
 // @vitest-environment jsdom
 
 /**
- * AI 会话 Tab 页面级测试（R3 + R4）。
+ * AI 会话 Tab 页面级测试（R3 + R4 + R7 S5）。
  *
- * R3：筛选控件在 FilterBar 内、各状态与表格分页同处 TableContainer 内、
- * 消息详情 Drawer 在容器外；筛选/分页/Drawer 可操作。
+ * R3/S5：主搜索在卡内工具区、各状态与表格分页同处 .kb-card 内、
+ * 消息详情 Drawer 在卡外；筛选/分页/Drawer 可操作。
  * R4：默认空态「暂无 AI 会话。」、筛选空文案、会话状态枚举是有效筛选、
  * 请求参数与筛选状态一致。
  *
@@ -84,45 +84,45 @@ beforeEach(() => {
   fetchMessagesMock.mockResolvedValue(buildPage([buildMessageItem(101, 1)]));
 });
 
-describe('AdminAiConversationsTab（R3 视觉容器）', () => {
-  it('筛选控件包在 FilterBar 内，loading 骨架在 TableContainer 内', async () => {
+describe('AdminAiConversationsTab（R3/R7 S5 知识库卡容器）', () => {
+  it('主搜索在卡内工具区，loading 骨架在同一知识库卡内', async () => {
     const { container } = render(<AdminAiConversationsTab />);
 
-    const filterBar = container.querySelector('.filter-bar');
-    expect(filterBar).not.toBeNull();
-    expect(filterBar?.querySelector('input')).not.toBeNull();
-
-    const tableContainer = container.querySelector('.table-container');
-    expect(tableContainer).not.toBeNull();
-    expect(tableContainer?.querySelector('.ant-skeleton')).not.toBeNull();
+    const card = container.querySelector('.kb-card');
+    expect(card).not.toBeNull();
+    expect(card?.querySelector('.table-container')).toBeNull();
+    const toolbar = card?.querySelector('.kb-toolbar');
+    expect(toolbar).not.toBeNull();
+    expect(toolbar?.querySelector('input')).not.toBeNull();
+    expect(card?.querySelector('.kb-card-state .ant-skeleton')).not.toBeNull();
 
     // flush 初始取数的落定，避免测试结束后才 dispatch 的 act 警告
     await act(async () => {});
   });
 
-  it('有数据：表格与分页在 TableContainer 内，消息详情 Drawer 在容器外且可打开', async () => {
+  it('有数据：表格与卡底分页在知识库卡内，消息详情 Drawer 在卡外且可打开', async () => {
     const { container } = render(<AdminAiConversationsTab />);
 
     expect(await screen.findByText('RR-20260901-001')).toBeInTheDocument();
     expect(screen.getByText('陈工程师')).toBeInTheDocument();
-    const tableContainer = container.querySelector('.table-container');
-    expect(tableContainer?.querySelector('table')).not.toBeNull();
-    expect(tableContainer?.querySelector('.ant-pagination')).not.toBeNull();
+    const card = container.querySelector('.kb-card');
+    expect(card?.querySelector('.kb-table-scope table')).not.toBeNull();
+    expect(card?.querySelector('.kb-card-footer .ant-pagination')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '消息详情' }));
 
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(await screen.findByText('消息正文 1')).toBeInTheDocument();
     expect(fetchMessagesMock).toHaveBeenCalledWith(1, 1, 50);
-    expect(container.querySelector('.table-container .ant-drawer')).toBeNull();
+    expect(container.querySelector('.kb-card .ant-drawer')).toBeNull();
   });
 
-  it('加载失败：错误告警在 TableContainer 内呈现，重试可恢复数据', async () => {
+  it('加载失败：错误告警在知识库卡内呈现，重试可恢复数据', async () => {
     fetchConversationsMock.mockRejectedValueOnce(new Error('network down'));
     const { container } = render(<AdminAiConversationsTab />);
 
     expect(await screen.findByText('AI 会话列表加载失败，请稍后重试。')).toBeInTheDocument();
-    expect(container.querySelector('.table-container .ant-alert-error')).not.toBeNull();
+    expect(container.querySelector('.kb-card .kb-card-state .ant-alert-error')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
 
@@ -140,11 +140,12 @@ describe('AdminAiConversationsTab（R4 有效筛选单一真源）', () => {
     expect(fetchConversationsMock).toHaveBeenCalledWith(1, 10, {});
   });
 
-  it('真实筛选无结果：显示筛选空文案，请求变量保留筛选字段', async () => {
+  it('真实筛选无结果：展开筛选后显示筛选空文案，请求变量保留筛选字段', async () => {
     fetchConversationsMock.mockResolvedValue(buildPage([]));
     render(<AdminAiConversationsTab />);
     await waitFor(() => expect(fetchConversationsMock).toHaveBeenCalledTimes(1));
 
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.change(screen.getByPlaceholderText('按工程师昵称/公司搜索'), {
       target: { value: '陈' },
     });
@@ -159,12 +160,34 @@ describe('AdminAiConversationsTab（R4 有效筛选单一真源）', () => {
     render(<AdminAiConversationsTab />);
     await waitFor(() => expect(fetchConversationsMock).toHaveBeenCalledTimes(1));
 
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.mouseDown(screen.getAllByRole('combobox')[0]);
     fireEvent.click(await screen.findByText('已完成'));
 
     await waitFor(() => expect(fetchConversationsMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
     expect(fetchConversationsMock).toHaveBeenLastCalledWith(1, 10, { status: 'COMPLETED' });
     expect(await screen.findByText('没有符合筛选条件的 AI 会话。')).toBeInTheDocument();
+  });
+
+  it('筛选入口可展开/收起，重置清空全部条件回到空请求参数', async () => {
+    fetchConversationsMock.mockResolvedValue(buildPage([]));
+    render(<AdminAiConversationsTab />);
+    await waitFor(() => expect(fetchConversationsMock).toHaveBeenCalledTimes(1));
+
+    const filterButton = screen.getByRole('button', { name: '筛选' });
+    expect(filterButton).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(filterButton);
+    expect(filterButton).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.change(screen.getByPlaceholderText('按工程师昵称/公司搜索'), {
+      target: { value: '陈' },
+    });
+    await waitFor(() => expect(fetchConversationsMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
+
+    fireEvent.click(screen.getByRole('button', { name: '重置' }));
+    await waitFor(() => expect(fetchConversationsMock).toHaveBeenCalledTimes(3), { timeout: 2000 });
+    expect(fetchConversationsMock).toHaveBeenLastCalledWith(1, 10, {});
+    expect(await screen.findByText('暂无 AI 会话。')).toBeInTheDocument();
   });
 
   it('分页可操作：翻页请求回带 page=2', async () => {

@@ -4,9 +4,8 @@ import { useMemo, useState } from 'react';
 import type { TableColumnsType } from 'antd';
 import { Alert, Button, Drawer, Input, Pagination, Skeleton, Table, Tooltip } from 'antd';
 
-import { FilterBar } from '@/shared/ui/filter-bar';
 import { formatDateTimeText } from '@/shared/ui/format-date-time';
-import { TableContainer } from '@/shared/ui/table-container';
+import { KbSearchField, KbToolbarButton } from '@/shared/ui/knowledge-base';
 
 import { useAdminAiReportDetail } from '../application/use-admin-document-detail';
 import { useAdminDocumentList } from '../application/use-admin-document-list';
@@ -26,12 +25,16 @@ import { AdminListStates } from './admin-list-states';
  * AI 报告标签：只读列表 + 只读正文详情；不提供生成、训练、修改、删除控件
  * （计划表 S3 明确不做）。requestNo 以会话归属申请为权威（M-04 裁定），
  * requestMismatch=true 时显示审计警示。
+ *
+ * PR3 R7 S5：迁入单张知识库卡（卡内工具区 + 主搜索 + 筛选展开区 + 紧凑表格 +
+ * 卡底分页）；报告类型等精确条件收进「筛选」展开区，能力不减。
  */
 export function AdminAiReportsTab() {
   const [requestNoKeyword, setRequestNoKeyword] = useState('');
   const [engineerKeyword, setEngineerKeyword] = useState('');
   const [reportType, setReportType] = useState('');
   const [createdAtRange, setCreatedAtRange] = useState<AdminCreatedAtRangeState>(null);
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [detailReportId, setDetailReportId] = useState<number | null>(null);
 
   const debouncedRequestNo = useDebouncedValue(requestNoKeyword.trim());
@@ -54,6 +57,13 @@ export function AdminAiReportsTab() {
   const reloadKey = JSON.stringify(effectiveFilter);
   const hasActiveFilter = Object.keys(effectiveFilter).length > 0;
 
+  const resetFilters = () => {
+    setRequestNoKeyword('');
+    setEngineerKeyword('');
+    setReportType('');
+    setCreatedAtRange(null);
+  };
+
   const fetcher = useMemo(
     () => (page: number, pageSize: number) => fetchAdminAiReports(page, pageSize, effectiveFilter),
     [effectiveFilter],
@@ -68,16 +78,22 @@ export function AdminAiReportsTab() {
   );
   const detail = useAdminAiReportDetail(detailReportId);
 
+  // 紧凑列宽：scroll.x 由 1000 收紧到 786，两个验收视口下无需表格内部横滚（视觉报告 3.5）
   const columns = useMemo<TableColumnsType<AdminAiReportListItem>>(
     () => [
       {
         dataIndex: 'reportTitle',
         key: 'reportTitle',
         ellipsis: true,
+        render: (value: string) => (
+          <Tooltip title={value}>
+            <span>{value}</span>
+          </Tooltip>
+        ),
         title: '报告标题',
-        width: 240,
+        width: 220,
       },
-      { dataIndex: 'reportType', key: 'reportType', title: '报告类型', width: 130 },
+      { dataIndex: 'reportType', key: 'reportType', title: '报告类型', width: 108 },
       {
         dataIndex: 'requestNo',
         key: 'requestNo',
@@ -90,15 +106,15 @@ export function AdminAiReportsTab() {
             value
           ),
         title: '关联申请',
-        width: 170,
+        width: 150,
       },
-      { dataIndex: 'engineerNickname', key: 'engineerNickname', title: '工程师', width: 120 },
+      { dataIndex: 'engineerNickname', key: 'engineerNickname', title: '工程师', width: 92 },
       {
         dataIndex: 'createdAt',
         key: 'createdAt',
         render: (value: string) => formatDateTimeText(value),
         title: '创建时间',
-        width: 170,
+        width: 140,
       },
       {
         key: 'actions',
@@ -108,75 +124,87 @@ export function AdminAiReportsTab() {
           </Button>
         ),
         title: '操作',
-        width: 80,
+        width: 76,
       },
     ],
     [],
   );
 
   return (
-    <div className="flex min-w-0 flex-col">
-      {/* 根层不设 gap：FilterBar 自带 margin（12px 0 14px）即唯一边距真源，
-          避免其 14px 下边距再叠加 16px flex gap（负责人 0922 复查 B1）。 */}
-      <FilterBar>
-        <Input
-          allowClear
-          maxLength={64}
+    <div className="kb-card">
+      {/* 卡内工具区（PR3 R7 S5）：主搜索 + 筛选入口；工程师/报告类型/时间收进展开区 */}
+      <div className="kb-toolbar">
+        <KbSearchField
+          clearLabel="清除关联申请编号搜索"
+          onChange={setRequestNoKeyword}
           placeholder="按关联申请编号搜索"
-          style={{ width: 200 }}
           value={requestNoKeyword}
-          onChange={(event) => setRequestNoKeyword(event.target.value)}
         />
-        <Input
-          allowClear
-          maxLength={100}
-          placeholder="按工程师昵称/公司搜索"
-          style={{ width: 200 }}
-          value={engineerKeyword}
-          onChange={(event) => setEngineerKeyword(event.target.value)}
-        />
-        <Input
-          allowClear
-          maxLength={100}
-          placeholder="按报告类型筛选"
-          style={{ width: 160 }}
-          value={reportType}
-          onChange={(event) => setReportType(event.target.value)}
-        />
-        <AdminCreatedAtFilter onChange={setCreatedAtRange} value={createdAtRange} />
-      </FilterBar>
-
-      <TableContainer>
-        <AdminListStates
-          emptyLabel="暂无 AI 报告。"
-          filteredEmptyLabel="没有符合筛选条件的 AI 报告。"
-          hasActiveFilter={hasActiveFilter}
-          onRetry={reload}
-          state={state}
+        <KbToolbarButton
+          active={hasActiveFilter}
+          aria-expanded={filterPanelOpen}
+          onClick={() => setFilterPanelOpen((previous) => !previous)}
         >
-          {state.status === 'ready' && state.total > 0 ? (
-            <div className="flex min-w-0 flex-col gap-4">
+          筛选
+        </KbToolbarButton>
+      </div>
+
+      {filterPanelOpen ? (
+        <div className="kb-filter-panel">
+          <Input
+            allowClear
+            maxLength={100}
+            placeholder="按工程师昵称/公司搜索"
+            style={{ width: 200 }}
+            value={engineerKeyword}
+            onChange={(event) => setEngineerKeyword(event.target.value)}
+          />
+          <Input
+            allowClear
+            maxLength={100}
+            placeholder="按报告类型筛选"
+            style={{ width: 160 }}
+            value={reportType}
+            onChange={(event) => setReportType(event.target.value)}
+          />
+          <AdminCreatedAtFilter onChange={setCreatedAtRange} value={createdAtRange} />
+          <KbToolbarButton onClick={resetFilters}>重置</KbToolbarButton>
+        </div>
+      ) : null}
+
+      <AdminListStates
+        emptyLabel="暂无 AI 报告。"
+        filteredEmptyLabel="没有符合筛选条件的 AI 报告。"
+        hasActiveFilter={hasActiveFilter}
+        onRetry={reload}
+        state={state}
+        variant="knowledge-base"
+      >
+        {state.status === 'ready' && state.total > 0 ? (
+          <>
+            <div className="kb-table-scope">
               <Table<AdminAiReportListItem>
                 columns={columns}
                 dataSource={state.items}
                 pagination={false}
                 rowKey="id"
-                scroll={{ x: 1000 }}
+                scroll={{ x: 786 }}
               />
-              <div className="flex justify-end">
-                <Pagination
-                  current={state.page}
-                  onChange={goToPage}
-                  pageSize={state.pageSize}
-                  showSizeChanger={false}
-                  showTotal={(total) => `共 ${total} 条`}
-                  total={state.total}
-                />
-              </div>
             </div>
-          ) : null}
-        </AdminListStates>
-      </TableContainer>
+            <div className="kb-card-footer">
+              <span>共 {state.total} 条</span>
+              <Pagination
+                current={state.page}
+                onChange={goToPage}
+                pageSize={state.pageSize}
+                showSizeChanger={false}
+                size="small"
+                total={state.total}
+              />
+            </div>
+          </>
+        ) : null}
+      </AdminListStates>
 
       <Drawer
         destroyOnHidden

@@ -164,7 +164,22 @@ describe('AdminDocumentDatabasePage（PR3 S3）', () => {
     render(<AdminDocumentDatabasePage />);
 
     expect(screen.getByRole('tabpanel')).toBeInTheDocument();
-    expect(await screen.findByText('参考资料列表')).toBeInTheDocument();
+    // 知识库变体：工具区主搜索框即默认标签已装配的证据（卡片标题已按 R7 去除）
+    expect(await screen.findByPlaceholderText('按文档标题搜索')).toBeInTheDocument();
+  });
+
+  it('右上新增资料主操作仅默认参考资料标签可见（PR3 R7 S4）', async () => {
+    render(<AdminDocumentDatabasePage />);
+
+    const addButton = await screen.findByRole('button', { name: /新增资料/ });
+    fireEvent.click(addButton);
+    expect(navigateMock).toHaveBeenCalledWith('/reference-documents/new');
+
+    // 只读标签不出现新增/上传操作
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('tab', { name: 'AI 报告' }));
+    });
+    expect(screen.queryByRole('button', { name: /新增资料/ })).not.toBeInTheDocument();
   });
 
   it('切换到维修申请标签加载独立列表，切回不串数据', async () => {
@@ -244,11 +259,11 @@ describe('AdminDocumentDatabasePage（PR3 S3）', () => {
     // 统计失败提示可见（带「列表功能不受影响」的口径说明）
     expect(await screen.findByText(/统计加载失败：/)).toBeInTheDocument();
     // 统计失败不影响列表：默认参考资料标签仍完成加载
-    expect(await screen.findByText('参考资料列表')).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText('按文档标题搜索')).toBeInTheDocument();
   });
 
   // PR3 review M-01：统计失败态必须提供可操作的重试入口（S3 退出条件：加载/空/错误/重试完整）
-  it('统计加载失败后可点击重试恢复四张统计卡', async () => {
+  it('统计加载失败后可点击重试恢复四项统计数值', async () => {
     fetchStatsMock.mockRejectedValueOnce(new Error('stats down'));
     render(<AdminDocumentDatabasePage />);
 

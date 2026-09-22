@@ -15,10 +15,9 @@ import {
   Tag,
 } from 'antd';
 
-import { FilterBar } from '@/shared/ui/filter-bar';
 import { formatDateTimeText } from '@/shared/ui/format-date-time';
+import { KbSearchField, KbToolbarButton } from '@/shared/ui/knowledge-base';
 import { StatusPill } from '@/shared/ui/status-pill';
-import { TableContainer } from '@/shared/ui/table-container';
 
 import { useAdminAiConversationMessages } from '../application/use-admin-document-detail';
 import { useAdminDocumentList } from '../application/use-admin-document-list';
@@ -54,7 +53,10 @@ const MESSAGE_ROLE_TAG_COLORS: Record<AdminAiMessageListItem['role'], string> = 
   TOOL: 'orange',
 };
 
-/** AI 会话标签：全局会话列表 + 消息详情 Drawer（服务端按 messageSeq ASC + id ASC 稳定排序） */
+/** AI 会话标签：全局会话列表 + 消息详情 Drawer（服务端按 messageSeq ASC + id ASC 稳定排序）
+ *
+ * PR3 R7 S5：迁入单张知识库卡（卡内工具区 + 主搜索 + 筛选展开区 + 紧凑表格 +
+ * 卡底分页）；会话状态等精确条件收进「筛选」展开区，能力不减。 */
 export function AdminAiConversationsTab() {
   const [requestNoKeyword, setRequestNoKeyword] = useState('');
   const [engineerKeyword, setEngineerKeyword] = useState('');
@@ -62,6 +64,7 @@ export function AdminAiConversationsTab() {
     undefined,
   );
   const [createdAtRange, setCreatedAtRange] = useState<AdminCreatedAtRangeState>(null);
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [messagesConversationId, setMessagesConversationId] = useState<number | null>(null);
   const [messagesPage, setMessagesPage] = useState(1);
 
@@ -84,6 +87,13 @@ export function AdminAiConversationsTab() {
   const reloadKey = JSON.stringify(effectiveFilter);
   const hasActiveFilter = Object.keys(effectiveFilter).length > 0;
 
+  const resetFilters = () => {
+    setRequestNoKeyword('');
+    setEngineerKeyword('');
+    setStatus(undefined);
+    setCreatedAtRange(null);
+  };
+
   const fetcher = useMemo(
     () => (page: number, pageSize: number) =>
       fetchAdminAiConversations(page, pageSize, effectiveFilter),
@@ -97,10 +107,11 @@ export function AdminAiConversationsTab() {
   );
   const messages = useAdminAiConversationMessages(messagesConversationId, messagesPage);
 
+  // 紧凑列宽：scroll.x 由 1180 收紧到 856，两个验收视口下无需表格内部横滚（视觉报告 3.5）
   const columns = useMemo<TableColumnsType<AdminAiConversationListItem>>(
     () => [
-      { dataIndex: 'requestNo', key: 'requestNo', title: '关联申请', width: 160 },
-      { dataIndex: 'engineerNickname', key: 'engineerNickname', title: '工程师', width: 120 },
+      { dataIndex: 'requestNo', key: 'requestNo', title: '关联申请', width: 136 },
+      { dataIndex: 'engineerNickname', key: 'engineerNickname', title: '工程师', width: 92 },
       {
         dataIndex: 'status',
         key: 'status',
@@ -110,23 +121,23 @@ export function AdminAiConversationsTab() {
           </StatusPill>
         ),
         title: '会话状态',
-        width: 100,
+        width: 92,
       },
-      { dataIndex: 'messageCount', key: 'messageCount', title: '消息数', width: 90 },
-      { dataIndex: 'reportCount', key: 'reportCount', title: '报告数', width: 90 },
+      { dataIndex: 'messageCount', key: 'messageCount', title: '消息数', width: 80 },
+      { dataIndex: 'reportCount', key: 'reportCount', title: '报告数', width: 80 },
       {
         dataIndex: 'createdAt',
         key: 'createdAt',
         render: (value: string) => formatDateTimeText(value),
         title: '创建时间',
-        width: 170,
+        width: 140,
       },
       {
         dataIndex: 'completedAt',
         key: 'completedAt',
         render: (value: string | null) => (value ? formatDateTimeText(value) : '—'),
         title: '完成时间',
-        width: 170,
+        width: 140,
       },
       {
         key: 'actions',
@@ -143,78 +154,90 @@ export function AdminAiConversationsTab() {
           </Button>
         ),
         title: '操作',
-        width: 100,
+        width: 96,
       },
     ],
     [],
   );
 
   return (
-    <div className="flex min-w-0 flex-col">
-      {/* 根层不设 gap：FilterBar 自带 margin（12px 0 14px）即唯一边距真源，
-          避免其 14px 下边距再叠加 16px flex gap（负责人 0922 复查 B1）。 */}
-      <FilterBar>
-        <Input
-          allowClear
-          maxLength={64}
+    <div className="kb-card">
+      {/* 卡内工具区（PR3 R7 S5）：主搜索 + 筛选入口；会话状态/工程师/时间收进展开区 */}
+      <div className="kb-toolbar">
+        <KbSearchField
+          clearLabel="清除关联申请编号搜索"
+          onChange={setRequestNoKeyword}
           placeholder="按关联申请编号搜索"
-          style={{ width: 200 }}
           value={requestNoKeyword}
-          onChange={(event) => setRequestNoKeyword(event.target.value)}
         />
-        <Input
-          allowClear
-          maxLength={100}
-          placeholder="按工程师昵称/公司搜索"
-          style={{ width: 200 }}
-          value={engineerKeyword}
-          onChange={(event) => setEngineerKeyword(event.target.value)}
-        />
-        <Select
-          allowClear
-          placeholder="会话状态"
-          style={{ width: 130 }}
-          value={status}
-          onChange={(value) => setStatus(value)}
-          options={Object.entries(CONVERSATION_STATUS_LABELS).map(([value, label]) => ({
-            label,
-            value,
-          }))}
-        />
-        <AdminCreatedAtFilter onChange={setCreatedAtRange} value={createdAtRange} />
-      </FilterBar>
-
-      <TableContainer>
-        <AdminListStates
-          emptyLabel="暂无 AI 会话。"
-          filteredEmptyLabel="没有符合筛选条件的 AI 会话。"
-          hasActiveFilter={hasActiveFilter}
-          onRetry={reload}
-          state={state}
+        <KbToolbarButton
+          active={hasActiveFilter}
+          aria-expanded={filterPanelOpen}
+          onClick={() => setFilterPanelOpen((previous) => !previous)}
         >
-          {state.status === 'ready' && state.total > 0 ? (
-            <div className="flex min-w-0 flex-col gap-4">
+          筛选
+        </KbToolbarButton>
+      </div>
+
+      {filterPanelOpen ? (
+        <div className="kb-filter-panel">
+          <Input
+            allowClear
+            maxLength={100}
+            placeholder="按工程师昵称/公司搜索"
+            style={{ width: 200 }}
+            value={engineerKeyword}
+            onChange={(event) => setEngineerKeyword(event.target.value)}
+          />
+          <Select
+            allowClear
+            placeholder="会话状态"
+            style={{ width: 130 }}
+            value={status}
+            onChange={(value) => setStatus(value)}
+            options={Object.entries(CONVERSATION_STATUS_LABELS).map(([value, label]) => ({
+              label,
+              value,
+            }))}
+          />
+          <AdminCreatedAtFilter onChange={setCreatedAtRange} value={createdAtRange} />
+          <KbToolbarButton onClick={resetFilters}>重置</KbToolbarButton>
+        </div>
+      ) : null}
+
+      <AdminListStates
+        emptyLabel="暂无 AI 会话。"
+        filteredEmptyLabel="没有符合筛选条件的 AI 会话。"
+        hasActiveFilter={hasActiveFilter}
+        onRetry={reload}
+        state={state}
+        variant="knowledge-base"
+      >
+        {state.status === 'ready' && state.total > 0 ? (
+          <>
+            <div className="kb-table-scope">
               <Table<AdminAiConversationListItem>
                 columns={columns}
                 dataSource={state.items}
                 pagination={false}
                 rowKey="id"
-                scroll={{ x: 1180 }}
+                scroll={{ x: 856 }}
               />
-              <div className="flex justify-end">
-                <Pagination
-                  current={state.page}
-                  onChange={goToPage}
-                  pageSize={state.pageSize}
-                  showSizeChanger={false}
-                  showTotal={(total) => `共 ${total} 条`}
-                  total={state.total}
-                />
-              </div>
             </div>
-          ) : null}
-        </AdminListStates>
-      </TableContainer>
+            <div className="kb-card-footer">
+              <span>共 {state.total} 条</span>
+              <Pagination
+                current={state.page}
+                onChange={goToPage}
+                pageSize={state.pageSize}
+                showSizeChanger={false}
+                size="small"
+                total={state.total}
+              />
+            </div>
+          </>
+        ) : null}
+      </AdminListStates>
 
       <Drawer
         destroyOnHidden
