@@ -15,13 +15,16 @@ import {
   Tag,
 } from 'antd';
 
+import { FilterBar } from '@/shared/ui/filter-bar';
 import { formatDateTimeText } from '@/shared/ui/format-date-time';
 import { StatusPill } from '@/shared/ui/status-pill';
+import { TableContainer } from '@/shared/ui/table-container';
 
 import { useAdminAiConversationMessages } from '../application/use-admin-document-detail';
 import { useAdminDocumentList } from '../application/use-admin-document-list';
 import { useDebouncedValue } from '../application/use-debounced-value';
 import type {
+  AdminAiConversationFilter,
   AdminAiConversationListItem,
   AdminAiMessageListItem,
 } from '../infrastructure/admin-document-database.types';
@@ -29,6 +32,7 @@ import { fetchAdminAiConversations } from '../infrastructure/admin-document-data
 
 import { AdminCreatedAtFilter } from './admin-created-at-filter';
 import { type AdminCreatedAtRangeState, toAdminCreatedAtRange } from './admin-created-at-range';
+import { toEffectiveAdminFilter } from './admin-effective-filter';
 import { AdminListStates } from './admin-list-states';
 
 const CONVERSATION_STATUS_LABELS: Record<AdminAiConversationListItem['status'], string> = {
@@ -65,23 +69,25 @@ export function AdminAiConversationsTab() {
   const debouncedEngineer = useDebouncedValue(engineerKeyword.trim());
   const timeFilter = toAdminCreatedAtRange(createdAtRange);
 
-  const reloadKey = JSON.stringify({
-    requestNo: debouncedRequestNo,
-    engineerKeyword: debouncedEngineer,
-    status,
-    ...timeFilter,
-  });
-  const hasActiveFilter = reloadKey !== JSON.stringify({});
-
-  const fetcher = useMemo(
-    () => (page: number, pageSize: number) =>
-      fetchAdminAiConversations(page, pageSize, {
-        ...(debouncedRequestNo ? { requestNo: debouncedRequestNo } : {}),
-        ...(debouncedEngineer ? { engineerKeyword: debouncedEngineer } : {}),
-        ...(status ? { status } : {}),
+  // R4 有效筛选单一真源：请求参数、reloadKey、hasActiveFilter 从同一份对象派生
+  const effectiveFilter = useMemo(
+    () =>
+      toEffectiveAdminFilter<AdminAiConversationFilter>({
+        requestNo: debouncedRequestNo,
+        engineerKeyword: debouncedEngineer,
+        status,
         ...timeFilter,
       }),
     [debouncedRequestNo, debouncedEngineer, status, timeFilter],
+  );
+  // 筛选变化触发回第 1 页；请求序号竞态防护在列表 hook 内
+  const reloadKey = JSON.stringify(effectiveFilter);
+  const hasActiveFilter = Object.keys(effectiveFilter).length > 0;
+
+  const fetcher = useMemo(
+    () => (page: number, pageSize: number) =>
+      fetchAdminAiConversations(page, pageSize, effectiveFilter),
+    [effectiveFilter],
   );
 
   const { state, goToPage, reload } = useAdminDocumentList<AdminAiConversationListItem>(
@@ -144,10 +150,11 @@ export function AdminAiConversationsTab() {
   );
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
+    <div className="flex min-w-0 flex-col gap-4">
+      <FilterBar>
         <Input
           allowClear
+          maxLength={64}
           placeholder="按关联申请编号搜索"
           style={{ width: 200 }}
           value={requestNoKeyword}
@@ -155,6 +162,7 @@ export function AdminAiConversationsTab() {
         />
         <Input
           allowClear
+          maxLength={100}
           placeholder="按工程师昵称/公司搜索"
           style={{ width: 200 }}
           value={engineerKeyword}
@@ -172,37 +180,39 @@ export function AdminAiConversationsTab() {
           }))}
         />
         <AdminCreatedAtFilter onChange={setCreatedAtRange} value={createdAtRange} />
-      </div>
+      </FilterBar>
 
-      <AdminListStates
-        emptyLabel="暂无 AI 会话。"
-        filteredEmptyLabel="没有符合筛选条件的 AI 会话。"
-        hasActiveFilter={hasActiveFilter}
-        onRetry={reload}
-        state={state}
-      >
-        {state.status === 'ready' && state.total > 0 ? (
-          <div className="flex flex-col gap-4">
-            <Table<AdminAiConversationListItem>
-              columns={columns}
-              dataSource={state.items}
-              pagination={false}
-              rowKey="id"
-              scroll={{ x: 1180 }}
-            />
-            <div className="flex justify-end">
-              <Pagination
-                current={state.page}
-                onChange={goToPage}
-                pageSize={state.pageSize}
-                showSizeChanger={false}
-                showTotal={(total) => `共 ${total} 条`}
-                total={state.total}
+      <TableContainer>
+        <AdminListStates
+          emptyLabel="暂无 AI 会话。"
+          filteredEmptyLabel="没有符合筛选条件的 AI 会话。"
+          hasActiveFilter={hasActiveFilter}
+          onRetry={reload}
+          state={state}
+        >
+          {state.status === 'ready' && state.total > 0 ? (
+            <div className="flex min-w-0 flex-col gap-4">
+              <Table<AdminAiConversationListItem>
+                columns={columns}
+                dataSource={state.items}
+                pagination={false}
+                rowKey="id"
+                scroll={{ x: 1180 }}
               />
+              <div className="flex justify-end">
+                <Pagination
+                  current={state.page}
+                  onChange={goToPage}
+                  pageSize={state.pageSize}
+                  showSizeChanger={false}
+                  showTotal={(total) => `共 ${total} 条`}
+                  total={state.total}
+                />
+              </div>
             </div>
-          </div>
-        ) : null}
-      </AdminListStates>
+          ) : null}
+        </AdminListStates>
+      </TableContainer>
 
       <Drawer
         destroyOnHidden

@@ -14,13 +14,18 @@ import {
   Table,
 } from 'antd';
 
+import { FilterBar } from '@/shared/ui/filter-bar';
 import { formatDateTimeText } from '@/shared/ui/format-date-time';
 import { StatusPill } from '@/shared/ui/status-pill';
+import { TableContainer } from '@/shared/ui/table-container';
 
 import { useAdminRepairRequestSummary } from '../application/use-admin-document-detail';
 import { useAdminDocumentList } from '../application/use-admin-document-list';
 import { useDebouncedValue } from '../application/use-debounced-value';
-import type { AdminRepairRequestListItem } from '../infrastructure/admin-document-database.types';
+import type {
+  AdminRepairRequestFilter,
+  AdminRepairRequestListItem,
+} from '../infrastructure/admin-document-database.types';
 import {
   fetchAdminEquipmentModelOptions,
   fetchAdminRepairRequests,
@@ -28,6 +33,7 @@ import {
 
 import { AdminCreatedAtFilter } from './admin-created-at-filter';
 import { type AdminCreatedAtRangeState, toAdminCreatedAtRange } from './admin-created-at-range';
+import { toEffectiveAdminFilter } from './admin-effective-filter';
 import { AdminListStates } from './admin-list-states';
 
 const RESOLUTION_STATUS_LABELS: Record<'PENDING' | 'RESOLVED', string> = {
@@ -78,25 +84,15 @@ export function AdminRepairRequestsTab() {
   const debouncedErrorCode = useDebouncedValue(errorCode.trim());
   const timeFilter = toAdminCreatedAtRange(createdAtRange);
 
-  // reloadKey：筛选变化触发回第 1 页；请求序号竞态防护在列表 hook 内
-  const reloadKey = JSON.stringify({
-    requestNo: debouncedRequestNo,
-    customerKeyword: debouncedCustomer,
-    errorCode: debouncedErrorCode,
-    isAccepted,
-    equipmentModelId,
-    ...timeFilter,
-  });
-  const hasActiveFilter = reloadKey !== JSON.stringify({});
-
-  const fetcher = useMemo(
-    () => (page: number, pageSize: number) =>
-      fetchAdminRepairRequests(page, pageSize, {
-        ...(debouncedRequestNo ? { requestNo: debouncedRequestNo } : {}),
-        ...(debouncedCustomer ? { customerKeyword: debouncedCustomer } : {}),
-        ...(debouncedErrorCode ? { errorCode: debouncedErrorCode } : {}),
-        ...(isAccepted !== undefined ? { isAccepted } : {}),
-        ...(equipmentModelId !== undefined ? { equipmentModelId } : {}),
+  // R4 有效筛选单一真源：请求参数、reloadKey、hasActiveFilter 从同一份对象派生
+  const effectiveFilter = useMemo(
+    () =>
+      toEffectiveAdminFilter<AdminRepairRequestFilter>({
+        requestNo: debouncedRequestNo,
+        customerKeyword: debouncedCustomer,
+        errorCode: debouncedErrorCode,
+        isAccepted,
+        equipmentModelId,
         ...timeFilter,
       }),
     [
@@ -107,6 +103,15 @@ export function AdminRepairRequestsTab() {
       equipmentModelId,
       timeFilter,
     ],
+  );
+  // 筛选变化触发回第 1 页；请求序号竞态防护在列表 hook 内
+  const reloadKey = JSON.stringify(effectiveFilter);
+  const hasActiveFilter = Object.keys(effectiveFilter).length > 0;
+
+  const fetcher = useMemo(
+    () => (page: number, pageSize: number) =>
+      fetchAdminRepairRequests(page, pageSize, effectiveFilter),
+    [effectiveFilter],
   );
 
   const { state, goToPage, reload } = useAdminDocumentList<AdminRepairRequestListItem>(
@@ -180,10 +185,11 @@ export function AdminRepairRequestsTab() {
   );
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
+    <div className="flex min-w-0 flex-col gap-4">
+      <FilterBar>
         <Input
           allowClear
+          maxLength={64}
           placeholder="按申请编号搜索"
           style={{ width: 180 }}
           value={requestNoKeyword}
@@ -191,6 +197,7 @@ export function AdminRepairRequestsTab() {
         />
         <Input
           allowClear
+          maxLength={100}
           placeholder="按客户昵称/公司搜索"
           style={{ width: 200 }}
           value={customerKeyword}
@@ -198,6 +205,7 @@ export function AdminRepairRequestsTab() {
         />
         <Input
           allowClear
+          maxLength={100}
           placeholder="输入完整故障码"
           style={{ width: 150 }}
           value={errorCode}
@@ -226,7 +234,7 @@ export function AdminRepairRequestsTab() {
           }))}
         />
         <AdminCreatedAtFilter onChange={setCreatedAtRange} value={createdAtRange} />
-      </div>
+      </FilterBar>
 
       {modelsFailed ? (
         <Alert
@@ -236,35 +244,37 @@ export function AdminRepairRequestsTab() {
         />
       ) : null}
 
-      <AdminListStates
-        emptyLabel="暂无维修申请。"
-        filteredEmptyLabel="没有符合筛选条件的维修申请。"
-        hasActiveFilter={hasActiveFilter}
-        onRetry={reload}
-        state={state}
-      >
-        {state.status === 'ready' && state.total > 0 ? (
-          <div className="flex flex-col gap-4">
-            <Table<AdminRepairRequestListItem>
-              columns={columns}
-              dataSource={state.items}
-              pagination={false}
-              rowKey="id"
-              scroll={{ x: 1350 }}
-            />
-            <div className="flex justify-end">
-              <Pagination
-                current={state.page}
-                onChange={goToPage}
-                pageSize={state.pageSize}
-                showSizeChanger={false}
-                showTotal={(total) => `共 ${total} 条`}
-                total={state.total}
+      <TableContainer>
+        <AdminListStates
+          emptyLabel="暂无维修申请。"
+          filteredEmptyLabel="没有符合筛选条件的维修申请。"
+          hasActiveFilter={hasActiveFilter}
+          onRetry={reload}
+          state={state}
+        >
+          {state.status === 'ready' && state.total > 0 ? (
+            <div className="flex min-w-0 flex-col gap-4">
+              <Table<AdminRepairRequestListItem>
+                columns={columns}
+                dataSource={state.items}
+                pagination={false}
+                rowKey="id"
+                scroll={{ x: 1350 }}
               />
+              <div className="flex justify-end">
+                <Pagination
+                  current={state.page}
+                  onChange={goToPage}
+                  pageSize={state.pageSize}
+                  showSizeChanger={false}
+                  showTotal={(total) => `共 ${total} 条`}
+                  total={state.total}
+                />
+              </div>
             </div>
-          </div>
-        ) : null}
-      </AdminListStates>
+          ) : null}
+        </AdminListStates>
+      </TableContainer>
 
       <Drawer
         destroyOnHidden
