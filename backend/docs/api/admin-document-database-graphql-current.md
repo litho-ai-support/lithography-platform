@@ -56,7 +56,7 @@ Global error contract: 遵循 `docs/api/graphql-error-contract-current.md`；本
 ## 分页与排序契约
 
 - **仅 OFFSET 分页**：非 OFFSET 模式 → `ADMIN_DOCUMENT_DATABASE_INVALID_PARAMS`（`BAD_USER_INPUT`）。
-- **页大小上限 100**：`PaginationArgs.pageSize` 边界 `@Max(100)`（超限如 501 在 GraphQL 层显式拒绝）；usecase 侧再以 `enforceMaxPageSize(..., 100)` 收敛，`pageSize>100` 压回 100。
+- **页大小上限 100**：`PaginationArgs.pageSize` 边界 `@Max(100)`（超限如 501 由 DTO 校验显式拒绝；R2 起 production 返回 `BAD_USER_INPUT` + `ADMIN_DOCUMENT_DATABASE_INVALID_PARAMS`）；usecase 侧再以 `enforceMaxPageSize(..., 100)` 收敛，`pageSize>100` 压回 100。
 - **排序白名单（服务端固定，不可由客户端覆盖）**：
   - 维修申请 / AI 会话 / AI 报告列表：`createdAt DESC, id DESC`。
   - AI 消息：`messageSeq ASC, id ASC`（轮次 `turnNo` 1–100，读取顺序稳定不随插入/并发变化）。
@@ -87,9 +87,11 @@ Global error contract: 遵循 `docs/api/graphql-error-contract-current.md`；本
 
 | 场景 | code | GraphQL extension code | HTTP |
 | --- | --- | --- | --- |
-| 非法分页模式 / 关键字超限 / 账号命中超 1000 / 非法 ID / 非法时间范围 | `ADMIN_DOCUMENT_DATABASE_INVALID_PARAMS` | `BAD_USER_INPUT` | 400 |
+| DTO 长度/范围校验（`requestNo`≤64、关键字≤100、`errorCode`/`reportType`≤100、设备 ID≥1、`page`/`pageSize` 范围）/ 非法分页模式 / 关键字超限 / 账号命中超 1000 / 非法 ID / 非法时间范围 | `ADMIN_DOCUMENT_DATABASE_INVALID_PARAMS` | `BAD_USER_INPUT` | 400 |
 | 目标（申请摘要 / 报告详情）不存在或已软删（统一，防探测不泄露删除状态） | `ADMIN_DOCUMENT_DATABASE_NOT_FOUND` | `NOT_FOUND` | 404 |
 | 非 SUPER_ADMIN 直调 | 既有权限契约 | `FORBIDDEN` | 403 |
 | 未认证 | 既有认证契约 | `UNAUTHENTICATED` | 401 |
 
 > 注：表中 HTTP 列为「语义上的 REST 等价状态」，**不可作为 GraphQL 断言依据**：GraphQL over HTTP 通常对业务/认证/授权失败仍返回 **HTTP 200** 并在 body 携带 `errors`。调用方判定成功/失败必须以 `errors[0].extensions.code`（如 `BAD_USER_INPUT` / `NOT_FOUND` / `FORBIDDEN` / `UNAUTHENTICATED`）为准，不能仅凭 HTTP 状态码。
+
+> **R2（负责人 review #2；生产错误分类）**：本模块全部接收 `PaginationArgs` 的列表 Query（含 R2 前缺失 DTO 校验的 `adminAiMessages`）统一使用模块局部 `ValidateAdminDocumentDatabaseInput`；DTO 校验失败抛 `DomainError(ADMIN_DOCUMENT_DATABASE_INVALID_PARAMS)`，**在 production 同样返回 `BAD_USER_INPUT` + 可读文案**（不以通用 `ValidateInput` 的 `BadRequestException` 形式经过生产全局过滤器——那会被降级为 `INTERNAL_SERVER_ERROR` 并隐藏文案）。usecase 层规整（关键字超限、时间范围倒置、详情 ID 非正整数）走同一错误码；非输入类错误（`NOT_FOUND`）与认证/授权分类不变，真实内部异常仍为 `INTERNAL_SERVER_ERROR` 且不泄漏细节。生产链路回归见 `test/10-admin-document-database/admin-document-database-production.e2e-spec.ts`。

@@ -5,7 +5,6 @@ import { JwtPayload } from '@app-types/jwt.types';
 import { IdentityTypeEnum } from '@app-types/models/account.types';
 import { UseGuards } from '@nestjs/common';
 import { Args, Int, Query, Resolver } from '@nestjs/graphql';
-import { ValidateInput } from '@adapters/api/graphql/common/validate-input.decorator';
 import { currentUser } from '@src/adapters/api/graphql/decorators/current-user.decorator';
 import { Roles } from '@src/adapters/api/graphql/decorators/roles.decorator';
 import { JwtAuthGuard } from '@src/adapters/api/graphql/guards/jwt-auth.guard';
@@ -36,6 +35,7 @@ import {
   AdminAiReportFilterInput,
   AdminRepairRequestFilterInput,
 } from './dto/admin-document-database-filter.input';
+import { ValidateAdminDocumentDatabaseInput } from './validate-admin-document-database-input.decorator';
 
 /**
  * 管理员文档数据库（PR3 只读聚合）GraphQL 解析器
@@ -43,6 +43,10 @@ import {
  * 职责边界（docs/api/adapters.rules.md）：
  * - 只做协议映射：结构校验 → 调用 usecase → 输出 DTO；业务异常不在此捕获，
  *   交由全局过滤器映射为 GraphQL 错误契约；
+ * - 输入校验走模块局部 `ValidateAdminDocumentDatabaseInput`（R2）：DTO 校验失败抛
+ *   `DomainError(ADMIN_DOCUMENT_DATABASE_ERROR.INVALID_PARAMS)`，生产环境仍稳定
+ *   返回 `BAD_USER_INPUT` + 可读消息（通用 `ValidateInput` 的 BadRequestException
+ *   会被生产过滤器降级为 INTERNAL_SERVER_ERROR，不得用于本模块入口）；
  * - 权限口径：守卫层 @Roles(SUPER_ADMIN) 粗准入；精确授权（activeRole === SUPER_ADMIN，
  *   失败关闭）由每个 usecase 首行断言；停用/降级账号旧 Token 由 P0-7 每请求复核；
  * - 只读：不提供任何 Mutation；排序由契约固定（创建时间倒序 + 主键倒序；
@@ -71,7 +75,7 @@ export class AdminDocumentDatabaseResolver {
     name: 'adminRepairRequests',
     description: '管理员分页查询全局维修申请列表（仅 SUPER_ADMIN）',
   })
-  @ValidateInput()
+  @ValidateAdminDocumentDatabaseInput()
   async adminRepairRequests(
     @Args('pagination') pagination: PaginationArgs,
     @currentUser() user: JwtPayload,
@@ -128,7 +132,7 @@ export class AdminDocumentDatabaseResolver {
     name: 'adminAiConversations',
     description: '管理员分页查询全局 AI 会话列表（仅 SUPER_ADMIN）',
   })
-  @ValidateInput()
+  @ValidateAdminDocumentDatabaseInput()
   async adminAiConversations(
     @Args('pagination') pagination: PaginationArgs,
     @currentUser() user: JwtPayload,
@@ -157,6 +161,7 @@ export class AdminDocumentDatabaseResolver {
     name: 'adminAiMessages',
     description: '管理员按会话分页读取 AI 消息列表（仅 SUPER_ADMIN）',
   })
+  @ValidateAdminDocumentDatabaseInput()
   async adminAiMessages(
     @Args({ name: 'conversationId', type: () => Int, description: 'AI 会话 ID' })
     conversationId: number,
@@ -179,7 +184,7 @@ export class AdminDocumentDatabaseResolver {
     name: 'adminAiReports',
     description: '管理员分页查询全局 AI 报告列表（仅 SUPER_ADMIN）',
   })
-  @ValidateInput()
+  @ValidateAdminDocumentDatabaseInput()
   async adminAiReports(
     @Args('pagination') pagination: PaginationArgs,
     @currentUser() user: JwtPayload,
