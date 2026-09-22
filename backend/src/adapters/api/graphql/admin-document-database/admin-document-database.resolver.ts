@@ -86,13 +86,15 @@ export class AdminDocumentDatabaseResolver {
       session: mapJwtToUsecaseSession(user),
       pagination: mapGqlToCoreParams(pagination),
       filter: {
-        requestNo: filter?.requestNo,
-        customerKeyword: filter?.customerKeyword,
-        equipmentModelId: filter?.equipmentModelId,
-        errorCode: filter?.errorCode,
-        isAccepted: filter?.isAccepted,
-        createdAtFrom: filter?.createdAtFrom,
-        createdAtTo: filter?.createdAtTo,
+        // R6：GraphQL nullable 显式 null 在映射边界统一 `?? undefined` 规整，
+        // 与省略等价；禁止 truthy 过滤（`false` 必须保留）。
+        requestNo: filter?.requestNo ?? undefined,
+        customerKeyword: filter?.customerKeyword ?? undefined,
+        equipmentModelId: filter?.equipmentModelId ?? undefined,
+        errorCode: filter?.errorCode ?? undefined,
+        isAccepted: filter?.isAccepted ?? undefined,
+        createdAtFrom: filter?.createdAtFrom ?? undefined,
+        createdAtTo: filter?.createdAtTo ?? undefined,
       },
     });
     return {
@@ -143,11 +145,12 @@ export class AdminDocumentDatabaseResolver {
       session: mapJwtToUsecaseSession(user),
       pagination: mapGqlToCoreParams(pagination),
       filter: {
-        requestNo: filter?.requestNo,
-        engineerKeyword: filter?.engineerKeyword,
-        status: filter?.status,
-        createdAtFrom: filter?.createdAtFrom,
-        createdAtTo: filter?.createdAtTo,
+        // R6：nullable 映射边界规整（同 adminRepairRequests）
+        requestNo: filter?.requestNo ?? undefined,
+        engineerKeyword: filter?.engineerKeyword ?? undefined,
+        status: filter?.status ?? undefined,
+        createdAtFrom: filter?.createdAtFrom ?? undefined,
+        createdAtTo: filter?.createdAtTo ?? undefined,
       },
     });
   }
@@ -195,11 +198,12 @@ export class AdminDocumentDatabaseResolver {
       session: mapJwtToUsecaseSession(user),
       pagination: mapGqlToCoreParams(pagination),
       filter: {
-        requestNo: filter?.requestNo,
-        engineerKeyword: filter?.engineerKeyword,
-        reportType: filter?.reportType,
-        createdAtFrom: filter?.createdAtFrom,
-        createdAtTo: filter?.createdAtTo,
+        // R6：nullable 映射边界规整（同 adminRepairRequests）
+        requestNo: filter?.requestNo ?? undefined,
+        engineerKeyword: filter?.engineerKeyword ?? undefined,
+        reportType: filter?.reportType ?? undefined,
+        createdAtFrom: filter?.createdAtFrom ?? undefined,
+        createdAtTo: filter?.createdAtTo ?? undefined,
       },
     });
   }

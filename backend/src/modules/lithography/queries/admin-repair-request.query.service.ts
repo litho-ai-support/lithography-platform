@@ -99,13 +99,16 @@ export class AdminRepairRequestQueryService {
     if (filter?.customerAccountIds) {
       where.customerAccountId = In([...filter.customerAccountIds]);
     }
-    if (filter?.equipmentModelId !== undefined) {
+    if (typeof filter?.equipmentModelId === 'number') {
+      // R6 末端防御：仅真实 number 写入 where（显式 null 已在适配层规整为 undefined；
+      // 若绕过适配层直达本层，null/undefined 一律视为未筛选，不生成 IS NULL 条件）
       where.equipmentModelId = filter.equipmentModelId;
     }
     if (filter?.errorCode) {
       where.errorCode = filter.errorCode;
     }
-    if (filter?.isAccepted !== undefined) {
+    if (typeof filter?.isAccepted === 'boolean') {
+      // R6 末端防御：仅真实 boolean 写入 where（`false` 必须保留，禁止 truthy 过滤）
       where.isAccepted = filter.isAccepted;
     }
     this.applyCreatedAtRange(where, filter);

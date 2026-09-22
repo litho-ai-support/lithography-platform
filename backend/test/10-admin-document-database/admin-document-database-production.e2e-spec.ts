@@ -24,6 +24,11 @@
 // 1. filterFactoryCalls：override 工厂被调用（单例装配）；
 // 2. filterNodeEnvReads：每个被拒请求恰好触发一次被 override 过滤器的 NODE_ENV
 //    判定读取（catch() 首行每异常读取一次），证明请求确实走进了生产过滤器实例。
+//
+// R5/R6 回归补充（0922）：
+// - R5：专属账号（testpr3r5*）+ 精确清理边界（cleanupProductionFixtureAccounts，
+//   禁止无 WHERE 整表删除）+ 夹具外哨兵链（见同目录 production fixture helper）；
+// - R6：nullable 规整矩阵（省略 / {} / null / false / true / 合法 ID / 0 / 内部异常）。
 
 import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -36,7 +41,19 @@ import { ListAdminRepairRequestsUsecase } from '@src/usecases/admin-document-dat
 import { GqlAllExceptionsFilter } from '../../src/infrastructure/graphql/filters/graphql-exception.filter';
 import { assertDataSourceOnAllowedE2eDatabase } from '../utils/e2e-db-guard';
 import { login, postGql } from '../utils/e2e-graphql-utils';
-import { cleanupTestAccounts, seedTestAccounts, testAccountsConfig } from '../utils/test-accounts';
+import { runAdminDocFixtureTeardown } from './admin-document-database-fixture';
+import {
+  cleanupProductionFixtureAccounts,
+  cleanupProductionFixtureAccountsByIds,
+  cleanupProductionSentinelChain,
+  ensureProductionSentinelChain,
+  findProductionFixtureAccountIds,
+  PRODUCTION_FIXTURE_ACCOUNTS,
+  PRODUCTION_FIXTURE_BUSINESS,
+  readProductionSentinelSnapshot,
+  seedProductionFixtureAccounts,
+  seedProductionFixtureBusiness,
+} from './admin-document-database-production-fixture';
 
 type GqlError = {
   message: string;
@@ -46,7 +63,10 @@ type GqlError = {
 type GqlBody<T> = { data?: T | null; errors?: GqlError[] };
 
 type AdminRepairRequestsData = {
-  adminRepairRequests: { items: Array<{ id: number; requestNo: string }>; total: number };
+  adminRepairRequests: {
+    items: Array<{ id: number; requestNo: string; isAccepted: boolean }>;
+    total: number;
+  };
 };
 
 type AdminConversationsData = { adminAiConversations: { items: unknown[]; total: number } };
@@ -57,7 +77,7 @@ type AdminReportDetailData = { adminAiReport: { id: number; reportTitle: string 
 const ADMIN_REPAIR_REQUESTS_QUERY = `
   query AdminRepairRequests($pagination: PaginationArgs!, $filter: AdminRepairRequestFilterInput) {
     adminRepairRequests(pagination: $pagination, filter: $filter) {
-      items { id requestNo }
+      items { id requestNo isAccepted }
       total
     }
   }
@@ -230,6 +250,8 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
   let adminToken: string;
   let engineerToken: string;
   let customerToken: string;
+  /** R5：仅当 beforeAll 在「写夹具之前」完成白名单验证才置位，afterAll 据此决定能否清理。 */
+  let fixtureTargetValidated = false;
 
   beforeAll(async () => {
     // 应用保持 E2E 配置初始化；仅真实 GqlAllExceptionsFilter 接收 production 判定，
@@ -261,34 +283,67 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
 
     dataSource = moduleFixture.get<DataSource>(DataSource);
 
-    // 🔒 第一条 DELETE 之前复用不可跳过的目标库白名单守卫（0918 P0）
+    // 🔒 第一条 DELETE 之前复用不可跳过的目标库白名单守卫（0918 P0 / R5）
     await assertDataSourceOnAllowedE2eDatabase(dataSource);
-    await cleanupTestAccounts(dataSource);
-    await seedTestAccounts({
+    // R5：守卫通过后才允许清理/写夹具（守卫拒绝 / 装配中途失败时 afterAll 只关闭 app）
+    fixtureTargetValidated = true;
+
+    // R5 精确生命周期：只回收本 spec 专属账号（固定 loginName）与固定 ID 锚点行；
+    // 无残留时全部 no-op（连跑两遍幂等）；禁止无 WHERE 整表删除。
+    await cleanupProductionFixtureAccounts(dataSource);
+
+    const { created, failures } = await seedProductionFixtureAccounts({
       dataSource,
       createAccountUsecase: app.get(CreateAccountUsecase),
-      includeKeys: ['admin', 'staff', 'guestPrimary'],
     });
+    if (failures.length > 0) {
+      // 部分造数失败：仅按已记录的成功 ID 回收 + fail fast（不留半残夹具）
+      await cleanupProductionFixtureAccountsByIds(
+        dataSource,
+        created.map((seed) => seed.accountId),
+      );
+      throw new Error(
+        `production 专属账号创建失败：${failures
+          .map((failure) => `${failure.key}(${failure.loginName})`)
+          .join(', ')}`,
+      );
+    }
+
+    const accountIdByKey = new Map(created.map((seed) => [seed.key, seed.accountId]));
+    const customerAccountId = accountIdByKey.get('customer');
+    const engineerAccountId = accountIdByKey.get('engineer');
+    if (customerAccountId === undefined || engineerAccountId === undefined) {
+      throw new Error('production 专属账号创建记录不完整（缺少 customer / engineer）');
+    }
+    // R6 锚点业务数据（固定且专属的型号 5298 + 申请 5300/5301，引用专属账号）
+    await seedProductionFixtureBusiness({ dataSource, customerAccountId, engineerAccountId });
 
     adminToken = await login({
       app,
-      loginName: testAccountsConfig.admin.loginName,
-      loginPassword: testAccountsConfig.admin.loginPassword,
+      loginName: PRODUCTION_FIXTURE_ACCOUNTS.admin.loginName,
+      loginPassword: PRODUCTION_FIXTURE_ACCOUNTS.admin.loginPassword,
     });
     engineerToken = await login({
       app,
-      loginName: testAccountsConfig.staff.loginName,
-      loginPassword: testAccountsConfig.staff.loginPassword,
+      loginName: PRODUCTION_FIXTURE_ACCOUNTS.engineer.loginName,
+      loginPassword: PRODUCTION_FIXTURE_ACCOUNTS.engineer.loginPassword,
     });
     customerToken = await login({
       app,
-      loginName: testAccountsConfig.guestPrimary.loginName,
-      loginPassword: testAccountsConfig.guestPrimary.loginPassword,
+      loginName: PRODUCTION_FIXTURE_ACCOUNTS.customer.loginName,
+      loginPassword: PRODUCTION_FIXTURE_ACCOUNTS.customer.loginPassword,
     });
   });
 
   afterAll(async () => {
-    if (app) await app.close();
+    // R5：守卫拒绝 / 装配失败 / DataSource 未就绪 → 只关闭 app，不做任何删除；
+    // 精确清理失败仍关闭 app（try/finally），且不吞掉原错误。
+    await runAdminDocFixtureTeardown({
+      app,
+      dataSource,
+      targetValidated: fixtureTargetValidated,
+      cleanup: cleanupProductionFixtureAccounts,
+    });
   });
 
   const gql = async <T>(params: {
@@ -471,5 +526,141 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
     } finally {
       spy.mockRestore();
     }
+  });
+
+  describe('R6 nullable 规整矩阵（production GraphQL，真实链路）', () => {
+    const matrixPagination = { mode: 'OFFSET', page: 1, pageSize: 50, withTotal: true };
+
+    // 锚点业务数据（型号 5298 + 申请 5300/5301）由文件级 beforeAll 统一创建，
+    // 生命周期随 R5 精确清理收口（本 describe 不再单独干预）。
+
+    const listRepairRequests = async (filter?: Record<string, unknown>) => {
+      const body = await gql<AdminRepairRequestsData>({
+        query: ADMIN_REPAIR_REQUESTS_QUERY,
+        variables: { pagination: matrixPagination, filter },
+        token: adminToken,
+      });
+      expect(body.errors).toBeUndefined();
+      if (!body.data) {
+        throw new Error('R6 矩阵查询缺少 data');
+      }
+      return body.data.adminRepairRequests;
+    };
+
+    it('省略 filter 与 filter:{} 等价（默认结果一致）', async () => {
+      const omitted = await listRepairRequests();
+      const emptyFilter = await listRepairRequests({});
+      expect(emptyFilter.total).toBe(omitted.total);
+    });
+
+    it('isAccepted:null 与省略等价（显式 null 不得进入 ORM 条件）', async () => {
+      const omitted = await listRepairRequests();
+      const withNull = await listRepairRequests({ isAccepted: null });
+      expect(withNull.total).toBe(omitted.total);
+    });
+
+    it('equipmentModelId:null 与省略等价（显式 null 不得进入 ORM 条件）', async () => {
+      const omitted = await listRepairRequests();
+      const withNull = await listRepairRequests({ equipmentModelId: null });
+      expect(withNull.total).toBe(omitted.total);
+    });
+
+    it('isAccepted:false 只筛未接单：false 不丢失且命中未接单锚点', async () => {
+      const page = await listRepairRequests({ isAccepted: false });
+      expect(page.items.length).toBeGreaterThan(0);
+      expect(page.items.every((item) => item.isAccepted === false)).toBe(true);
+      expect(page.items.map((item) => item.requestNo)).toContain(
+        PRODUCTION_FIXTURE_BUSINESS.openRequestNo,
+      );
+    });
+
+    it('isAccepted:true 只筛已接单且命中已接单锚点', async () => {
+      const page = await listRepairRequests({ isAccepted: true });
+      expect(page.items.length).toBeGreaterThan(0);
+      expect(page.items.every((item) => item.isAccepted === true)).toBe(true);
+      expect(page.items.map((item) => item.requestNo)).toContain(
+        PRODUCTION_FIXTURE_BUSINESS.acceptedRequestNo,
+      );
+    });
+
+    it('isAccepted false/true 互补：两集合之和等于默认全集', async () => {
+      const [omitted, openOnly, acceptedOnly] = await Promise.all([
+        listRepairRequests(),
+        listRepairRequests({ isAccepted: false }),
+        listRepairRequests({ isAccepted: true }),
+      ]);
+      expect(openOnly.total + acceptedOnly.total).toBe(omitted.total);
+    });
+
+    it('合法设备 ID 等值过滤命中锚点申请', async () => {
+      const page = await listRepairRequests({
+        equipmentModelId: PRODUCTION_FIXTURE_BUSINESS.equipmentModelId,
+      });
+      expect(page.total).toBe(2);
+      const requestNos = page.items.map((item) => item.requestNo);
+      expect(requestNos).toContain(PRODUCTION_FIXTURE_BUSINESS.openRequestNo);
+      expect(requestNos).toContain(PRODUCTION_FIXTURE_BUSINESS.acceptedRequestNo);
+    });
+  });
+
+  describe('R5 清理边界：专属范围精确回收（真实隔离库）', () => {
+    it('精确回收专属账号与锚点行；夹具外哨兵链运行前后完全一致', async () => {
+      // 清残 + 幂等建立哨兵链（独立 loginName 与固定 ID，不属于专属清理边界）
+      await cleanupProductionSentinelChain(dataSource);
+      await ensureProductionSentinelChain({
+        dataSource,
+        createAccountUsecase: app.get(CreateAccountUsecase),
+      });
+
+      const before = await readProductionSentinelSnapshot(dataSource);
+      expect(before.account).not.toBeNull();
+      expect(before.userInfo).not.toBeNull();
+      expect(before.model).not.toBeNull();
+      expect(before.request).not.toBeNull();
+
+      try {
+        await cleanupProductionFixtureAccounts(dataSource);
+
+        // 专属账号已被精确回收（清理确实发生，而非整表删除后的错删/报错）
+        expect(await findProductionFixtureAccountIds(dataSource)).toEqual([]);
+        // 哨兵链（账号 / userInfo / 型号 / 关联申请）原样存在：ID、字段、行数完全一致
+        expect(await readProductionSentinelSnapshot(dataSource)).toEqual(before);
+      } finally {
+        await cleanupProductionSentinelChain(dataSource);
+      }
+    });
+
+    it('连续两次精确回收幂等：第二次为 no-op，不报错且哨兵不受影响', async () => {
+      await cleanupProductionSentinelChain(dataSource);
+      await ensureProductionSentinelChain({
+        dataSource,
+        createAccountUsecase: app.get(CreateAccountUsecase),
+      });
+
+      // 重种专属账号 + 锚点行（模拟「上次残留 → 连续两次回收」的真实路径）
+      const reseeded = await seedProductionFixtureAccounts({
+        dataSource,
+        createAccountUsecase: app.get(CreateAccountUsecase),
+      });
+      expect(reseeded.failures).toEqual([]);
+      const reseededIdByKey = new Map(reseeded.created.map((seed) => [seed.key, seed.accountId]));
+      const customerAccountId = reseededIdByKey.get('customer');
+      const engineerAccountId = reseededIdByKey.get('engineer');
+      if (customerAccountId === undefined || engineerAccountId === undefined) {
+        throw new Error('重种专属账号记录不完整（缺少 customer / engineer）');
+      }
+      await seedProductionFixtureBusiness({ dataSource, customerAccountId, engineerAccountId });
+
+      const before = await readProductionSentinelSnapshot(dataSource);
+
+      try {
+        await cleanupProductionFixtureAccounts(dataSource);
+        expect(await findProductionFixtureAccountIds(dataSource)).toEqual([]);
+        await cleanupProductionFixtureAccounts(dataSource);
+        expect(await readProductionSentinelSnapshot(dataSource)).toEqual(before);
+      } finally {
+        await cleanupProductionSentinelChain(dataSource);
+      }
+    });
   });
 });

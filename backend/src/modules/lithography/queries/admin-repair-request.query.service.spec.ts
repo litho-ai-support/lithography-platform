@@ -142,6 +142,28 @@ describe('AdminRepairRequestQueryService', () => {
     expect(call.where.equipmentModelId).toBe(930001);
   });
 
+  it('R6 末端防御：equipmentModelId / isAccepted 显式 null（若绕过适配层）不写入 where', async () => {
+    const requestRepo = makeRequestRepo();
+    const service = new AdminRepairRequestQueryService(
+      requestRepo as never,
+      makeResponseRepo() as never,
+      makeModelRepo() as never,
+    );
+
+    await service.listAll({
+      filter: {
+        // 绕过类型系统模拟「null 未经映射边界规整直达本层」的第二道防线场景
+        equipmentModelId: null as unknown as number,
+        isAccepted: null as unknown as boolean,
+      },
+      pagination,
+    });
+
+    const call = requestRepo.find.mock.calls[0][0];
+    expect(call.where.equipmentModelId).toBeUndefined();
+    expect(call.where.isAccepted).toBeUndefined();
+  });
+
   it('customerAccountIds 收敛为 In 集合；时间范围收敛为 Between', async () => {
     const requestRepo = makeRequestRepo();
     const service = new AdminRepairRequestQueryService(
