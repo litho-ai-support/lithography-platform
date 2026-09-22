@@ -150,7 +150,9 @@ export function AdminAiConversationsTab() {
   );
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="flex min-w-0 flex-col">
+      {/* 根层不设 gap：FilterBar 自带 margin（12px 0 14px）即唯一边距真源，
+          避免其 14px 下边距再叠加 16px flex gap（负责人 0922 复查 B1）。 */}
       <FilterBar>
         <Input
           allowClear

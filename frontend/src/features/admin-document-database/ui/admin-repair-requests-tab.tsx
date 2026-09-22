@@ -185,7 +185,9 @@ export function AdminRepairRequestsTab() {
   );
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="flex min-w-0 flex-col">
+      {/* 根层不设 gap：FilterBar 自带 margin（12px 0 14px）即唯一边距真源，
+          避免其 14px 下边距再叠加 16px flex gap（负责人 0922 复查 B1）。 */}
       <FilterBar>
         <Input
           allowClear
@@ -237,11 +239,15 @@ export function AdminRepairRequestsTab() {
       </FilterBar>
 
       {modelsFailed ? (
-        <Alert
-          showIcon
-          title="设备型号选项加载失败，型号筛选暂不可用，可继续使用其他筛选。"
-          type="warning"
-        />
+        /* 型号告警非公共容器：包裹层补 14px 下边距，保持 FilterBar → 告警 →
+           表格容器的行距节奏一致（0922 复查 B1） */
+        <div className="mb-[14px]">
+          <Alert
+            showIcon
+            title="设备型号选项加载失败，型号筛选暂不可用，可继续使用其他筛选。"
+            type="warning"
+          />
+        </div>
       ) : null}
 
       <TableContainer>
