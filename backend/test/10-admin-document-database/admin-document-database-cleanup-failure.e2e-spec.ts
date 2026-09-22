@@ -12,12 +12,19 @@
 
 import type { DataSource } from 'typeorm';
 
+import { CreateAccountUsecase } from '@src/usecases/account/create-account.usecase';
 import { assertDataSourceOnAllowedE2eDatabase } from '../utils/e2e-db-guard';
 import {
   cleanupAdminDocumentFixture,
   runAdminDocFixtureTeardown,
   shouldRunAdminDocFixtureCleanup,
 } from './admin-document-database-fixture';
+import {
+  cleanupProductionFixtureAccounts,
+  cleanupProductionFixtureAccountsByIds,
+  PRODUCTION_FIXTURE_BUSINESS,
+  seedProductionFixtureAccounts,
+} from './admin-document-database-production-fixture';
 
 type MockState = {
   /** 每条 DELETE 的实体名与删除条件（用于断言「一次都没删」与删除顺序）。 */
@@ -79,6 +86,12 @@ const createMockApp = (): {
     },
   };
   return { app, appState };
+};
+
+/** 从 FindOperator（In）提取集合值：用于断言精确删除范围（不依赖 SQL 生成） */
+const extractInValues = (criteria: unknown, key: string): number[] | undefined => {
+  const operator = (criteria as Record<string, { value?: number[] } | undefined>)[key];
+  return Array.isArray(operator?.value) ? operator.value : undefined;
 };
 
 describe('admin-document-database 夹具清理失败路径（R1 回归）', () => {
@@ -225,5 +238,130 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
     expect(shouldRunAdminDocFixtureCleanup({ dataSource: undefined, targetValidated: true })).toBe(
       false,
     );
+  });
+
+  describe('R5 production 专属夹具失败路径（专属账号 + 精确清理）', () => {
+    it('守卫拒绝：cleanupProductionFixtureAccounts 在非白名单库第一条 DELETE 之前即被拒绝', async () => {
+      const { dataSource, state } = createMockDataSource({ database: 'lithography_drill' });
+
+      await expect(cleanupProductionFixtureAccounts(dataSource)).rejects.toThrow(/白名单/);
+
+      expect(state.guardQueryCalls).toBe(1);
+      expect(state.deleteCalls).toHaveLength(0);
+    });
+
+    it('DataSource 赋值前失败：production 收尾无 DELETE、无二次错误、app.close 仍执行', async () => {
+      const mockApp = createMockApp();
+
+      await expect(
+        runAdminDocFixtureTeardown({
+          app: mockApp.app,
+          dataSource: undefined,
+          targetValidated: true,
+          cleanup: cleanupProductionFixtureAccounts,
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(mockApp.appState.closeCalls).toBe(1);
+    });
+
+    it('允许的隔离库：守卫先行，按「申请（固定 ID + 账号依赖）→ 型号 → user_info → account」精确删除', async () => {
+      const { dataSource, state } = createMockDataSource({
+        database: 'lithography_e2e',
+        accountIds: [901],
+      });
+
+      await cleanupProductionFixtureAccounts(dataSource);
+
+      expect(state.guardQueryCalls).toBe(1);
+      expect(state.deleteCalls.map((call) => call.entityName)).toEqual([
+        'RepairRequestEntity',
+        'RepairRequestEntity',
+        'RepairRequestEntity',
+        'EquipmentModelEntity',
+        'UserInfoEntity',
+        'AccountEntity',
+      ]);
+      // 固定 ID 业务行 + 按账号依赖的申请 + 账号域两跳，全部精确限定
+      expect(extractInValues(state.deleteCalls[0].criteria, 'id')).toEqual([
+        PRODUCTION_FIXTURE_BUSINESS.openRequestId,
+        PRODUCTION_FIXTURE_BUSINESS.acceptedRequestId,
+      ]);
+      expect(extractInValues(state.deleteCalls[1].criteria, 'customerAccountId')).toEqual([901]);
+      expect(extractInValues(state.deleteCalls[2].criteria, 'acceptedByEngineerAccountId')).toEqual(
+        [901],
+      );
+      expect(extractInValues(state.deleteCalls[4].criteria, 'accountId')).toEqual([901]);
+      expect(extractInValues(state.deleteCalls[5].criteria, 'id')).toEqual([901]);
+    });
+
+    it('无残留账号：只按固定 ID 清业务行（幂等 no-op），不产生任何账号范围删除', async () => {
+      const { dataSource, state } = createMockDataSource({ database: 'lithography_e2e' });
+
+      await cleanupProductionFixtureAccounts(dataSource);
+
+      expect(state.deleteCalls.map((call) => call.entityName)).toEqual([
+        'RepairRequestEntity',
+        'EquipmentModelEntity',
+      ]);
+    });
+
+    it('空 ID 集合为 no-op：不执行守卫查询、不产生任何 DELETE', async () => {
+      const { dataSource, state } = createMockDataSource({ database: 'lithography_e2e' });
+
+      await cleanupProductionFixtureAccountsByIds(dataSource, []);
+
+      expect(state.guardQueryCalls).toBe(0);
+      expect(state.deleteCalls).toHaveLength(0);
+    });
+
+    it('清理中途失败：错误不被吞掉，失败后不再继续删除', async () => {
+      const { dataSource, state } = createMockDataSource({
+        database: 'lithography_e2e',
+        accountIds: [901],
+        failOnDeleteCall: 2,
+      });
+
+      await expect(cleanupProductionFixtureAccountsByIds(dataSource, [901, 902])).rejects.toThrow(
+        '模拟清理中途失败',
+      );
+
+      expect(state.deleteCalls).toHaveLength(2); // 第 2 条失败后不再继续
+    });
+
+    it('部分账号创建失败：如实返回 created / failures，仅按已记录的成功 ID 回收', async () => {
+      const { dataSource, state } = createMockDataSource({ database: 'lithography_e2e' });
+
+      const execute = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 601 })
+        .mockRejectedValueOnce(new Error('模拟 engineer 创建失败'))
+        .mockResolvedValueOnce({ id: 603 });
+      const createAccountUsecase = { execute } as unknown as CreateAccountUsecase;
+
+      const { created, failures } = await seedProductionFixtureAccounts({
+        dataSource,
+        createAccountUsecase,
+      });
+
+      expect(created.map((seed) => [seed.key, seed.accountId])).toEqual([
+        ['admin', 601],
+        ['customer', 603],
+      ]);
+      expect(failures.map((failure) => failure.key)).toEqual(['engineer']);
+
+      // 调用方按已记录 ID 回收：仅 601/603 进入删除条件，创建失败的 engineer 不出现
+      await cleanupProductionFixtureAccountsByIds(
+        dataSource,
+        created.map((seed) => seed.accountId),
+      );
+
+      expect(state.deleteCalls.map((call) => call.entityName)).toEqual([
+        'UserInfoEntity',
+        'AccountEntity',
+      ]);
+      expect(extractInValues(state.deleteCalls[0].criteria, 'accountId')).toEqual([601, 603]);
+      expect(extractInValues(state.deleteCalls[1].criteria, 'id')).toEqual([601, 603]);
+    });
   });
 });

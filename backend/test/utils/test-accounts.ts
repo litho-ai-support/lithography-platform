@@ -128,16 +128,21 @@ export const seedTestAccounts = async (opts: {
   await Promise.all(
     list.map(async (key) => {
       const cfg = testAccountsConfig[key];
-      await createAccountCore(dataSource, createAccountUsecase || null, cfg);
+      await createTestAccount(dataSource, createAccountUsecase || null, cfg);
     }),
   );
 };
 
 /**
- * 创建账号的核心逻辑（可被复用）
+ * 创建单个账号的核心逻辑（可被复用）
+ *
+ * - 供 `seedTestAccounts` 与各 spec 专属夹具（如 PR3 R5 production fixture）共用；
+ * - 只创建账号与 user_info，不创建业务身份 profile；
+ * - 不做任何清理/删除动作（调用方负责精确回收自己创建的账号）。
+ *
  * @returns 创建的账号ID
  */
-const createAccountCore = async (
+export const createTestAccount = async (
   dataSource: DataSource,
   createAccountUsecase: CreateAccountUsecase | null,
   cfg: TestAccountConfig,
