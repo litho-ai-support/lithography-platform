@@ -25,9 +25,11 @@
 // 2. filterNodeEnvReads：每个被拒请求恰好触发一次被 override 过滤器的 NODE_ENV
 //    判定读取（catch() 首行每异常读取一次），证明请求确实走进了生产过滤器实例。
 //
-// R5/R6 回归补充（0922）：
-// - R5：专属账号（testpr3r5*）+ 精确清理边界（cleanupProductionFixtureAccounts，
-//   禁止无 WHERE 整表删除）+ 夹具外哨兵链（见同目录 production fixture helper）；
+// R5/R6 回归补充（0922；敌对式终审 F1 后校准）：
+// - R5：专属账号（testpr3r5*）+ **按数据库返回并记录的 ID** 精确回收
+//   （cleanupProductionFixtureByIds）+ 崩溃残留按专属标记与完整归属校验恢复
+//   （cleanupProductionFixtureResidue）+ 夹具外哨兵链；禁止无 WHERE 整表删除，
+//   禁止以固定主键代表所有权；
 // - R6：nullable 规整矩阵（省略 / {} / null / false / true / 合法 ID / 0 / 内部异常）。
 
 import { INestApplication } from '@nestjs/common';
@@ -43,13 +45,16 @@ import { assertDataSourceOnAllowedE2eDatabase } from '../utils/e2e-db-guard';
 import { login, postGql } from '../utils/e2e-graphql-utils';
 import { runAdminDocFixtureTeardown } from './admin-document-database-fixture';
 import {
-  cleanupProductionFixtureAccounts,
-  cleanupProductionFixtureAccountsByIds,
+  cleanupProductionFixtureByIds,
+  cleanupProductionFixtureResidue,
   cleanupProductionSentinelChain,
+  createProductionFixtureOwnership,
   ensureProductionSentinelChain,
   findProductionFixtureAccountIds,
   PRODUCTION_FIXTURE_ACCOUNTS,
-  PRODUCTION_FIXTURE_BUSINESS,
+  PRODUCTION_FIXTURE_MARKERS,
+  type ProductionFixtureBusinessIds,
+  type ProductionFixtureOwnership,
   readProductionSentinelSnapshot,
   seedProductionFixtureAccounts,
   seedProductionFixtureBusiness,
@@ -250,6 +255,13 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
   let adminToken: string;
   let engineerToken: string;
   let customerToken: string;
+  /**
+   * R5：本轮实际创建并记录的所有权上下文。
+   * ID 只在运行期存在（数据库生成）；收尾只按这里的 ID 回收，不使用任何固定主键。
+   */
+  const ownership: ProductionFixtureOwnership = createProductionFixtureOwnership();
+  /** R6 锚点业务数据（型号 / 申请的 ID 由数据库生成） */
+  let businessIds: ProductionFixtureBusinessIds;
   /** R5：仅当 beforeAll 在「写夹具之前」完成白名单验证才置位，afterAll 据此决定能否清理。 */
   let fixtureTargetValidated = false;
 
@@ -288,20 +300,18 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
     // R5：守卫通过后才允许清理/写夹具（守卫拒绝 / 装配中途失败时 afterAll 只关闭 app）
     fixtureTargetValidated = true;
 
-    // R5 精确生命周期：只回收本 spec 专属账号（固定 loginName）与固定 ID 锚点行；
-    // 无残留时全部 no-op（连跑两遍幂等）；禁止无 WHERE 整表删除。
-    await cleanupProductionFixtureAccounts(dataSource);
+    // R5 精确生命周期：先按专属标记 + 完整归属校验回收上一次运行的崩溃残留，
+    // 再按本轮记录的 ID 收尾；无残留时全部 no-op（连跑两遍幂等）；禁止无 WHERE 整表删除。
+    await cleanupProductionFixtureResidue(dataSource);
 
     const { created, failures } = await seedProductionFixtureAccounts({
       dataSource,
+      ownership,
       createAccountUsecase: app.get(CreateAccountUsecase),
     });
     if (failures.length > 0) {
       // 部分造数失败：仅按已记录的成功 ID 回收 + fail fast（不留半残夹具）
-      await cleanupProductionFixtureAccountsByIds(
-        dataSource,
-        created.map((seed) => seed.accountId),
-      );
+      await cleanupProductionFixtureByIds(dataSource, ownership);
       throw new Error(
         `production 专属账号创建失败：${failures
           .map((failure) => `${failure.key}(${failure.loginName})`)
@@ -315,8 +325,13 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
     if (customerAccountId === undefined || engineerAccountId === undefined) {
       throw new Error('production 专属账号创建记录不完整（缺少 customer / engineer）');
     }
-    // R6 锚点业务数据（固定且专属的型号 5298 + 申请 5300/5301，引用专属账号）
-    await seedProductionFixtureBusiness({ dataSource, customerAccountId, engineerAccountId });
+    // R6 锚点业务数据（专属标记的型号 + 申请；主键由数据库生成，成功即记进 ownership）
+    businessIds = await seedProductionFixtureBusiness({
+      dataSource,
+      ownership,
+      customerAccountId,
+      engineerAccountId,
+    });
 
     adminToken = await login({
       app,
@@ -342,7 +357,7 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
       app,
       dataSource,
       targetValidated: fixtureTargetValidated,
-      cleanup: cleanupProductionFixtureAccounts,
+      cleanup: (ds) => cleanupProductionFixtureByIds(ds, ownership),
     });
   });
 
@@ -531,8 +546,8 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
   describe('R6 nullable 规整矩阵（production GraphQL，真实链路）', () => {
     const matrixPagination = { mode: 'OFFSET', page: 1, pageSize: 50, withTotal: true };
 
-    // 锚点业务数据（型号 5298 + 申请 5300/5301）由文件级 beforeAll 统一创建，
-    // 生命周期随 R5 精确清理收口（本 describe 不再单独干预）。
+    // 锚点业务数据（专属标记的型号 + 两条申请，主键由数据库生成）由文件级 beforeAll
+    // 统一创建，生命周期随 R5 精确清理收口（本 describe 不再单独干预）。
 
     const listRepairRequests = async (filter?: Record<string, unknown>) => {
       const body = await gql<AdminRepairRequestsData>({
@@ -570,7 +585,7 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
       expect(page.items.length).toBeGreaterThan(0);
       expect(page.items.every((item) => item.isAccepted === false)).toBe(true);
       expect(page.items.map((item) => item.requestNo)).toContain(
-        PRODUCTION_FIXTURE_BUSINESS.openRequestNo,
+        PRODUCTION_FIXTURE_MARKERS.openRequestNo,
       );
     });
 
@@ -579,7 +594,7 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
       expect(page.items.length).toBeGreaterThan(0);
       expect(page.items.every((item) => item.isAccepted === true)).toBe(true);
       expect(page.items.map((item) => item.requestNo)).toContain(
-        PRODUCTION_FIXTURE_BUSINESS.acceptedRequestNo,
+        PRODUCTION_FIXTURE_MARKERS.acceptedRequestNo,
       );
     });
 
@@ -594,52 +609,60 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
 
     it('合法设备 ID 等值过滤命中锚点申请', async () => {
       const page = await listRepairRequests({
-        equipmentModelId: PRODUCTION_FIXTURE_BUSINESS.equipmentModelId,
+        equipmentModelId: businessIds.equipmentModelId,
       });
       expect(page.total).toBe(2);
       const requestNos = page.items.map((item) => item.requestNo);
-      expect(requestNos).toContain(PRODUCTION_FIXTURE_BUSINESS.openRequestNo);
-      expect(requestNos).toContain(PRODUCTION_FIXTURE_BUSINESS.acceptedRequestNo);
+      expect(requestNos).toContain(PRODUCTION_FIXTURE_MARKERS.openRequestNo);
+      expect(requestNos).toContain(PRODUCTION_FIXTURE_MARKERS.acceptedRequestNo);
     });
   });
 
   describe('R5 清理边界：专属范围精确回收（真实隔离库）', () => {
-    it('精确回收专属账号与锚点行；夹具外哨兵链运行前后完全一致', async () => {
-      // 清残 + 幂等建立哨兵链（独立 loginName 与固定 ID，不属于专属清理边界）
-      await cleanupProductionSentinelChain(dataSource);
-      await ensureProductionSentinelChain({
+    it('按本轮记录 ID 精确回收专属账号与锚点行；夹具外哨兵链运行前后完全一致', async () => {
+      // 夹具外哨兵链（独立 loginName 与独立标记）：不属于专属清理边界
+      const sentinelOwnership = createProductionFixtureOwnership();
+      const sentinelIds = await ensureProductionSentinelChain({
         dataSource,
+        ownership: sentinelOwnership,
         createAccountUsecase: app.get(CreateAccountUsecase),
       });
 
-      const before = await readProductionSentinelSnapshot(dataSource);
+      const before = await readProductionSentinelSnapshot(dataSource, sentinelIds);
       expect(before.account).not.toBeNull();
       expect(before.userInfo).not.toBeNull();
       expect(before.model).not.toBeNull();
       expect(before.request).not.toBeNull();
 
       try {
-        await cleanupProductionFixtureAccounts(dataSource);
+        // 只按本轮实际创建并记录的 ID 回收（不接受任何裸固定 ID）
+        await cleanupProductionFixtureByIds(dataSource, ownership);
 
         // 专属账号已被精确回收（清理确实发生，而非整表删除后的错删/报错）
         expect(await findProductionFixtureAccountIds(dataSource)).toEqual([]);
         // 哨兵链（账号 / userInfo / 型号 / 关联申请）原样存在：ID、字段、行数完全一致
-        expect(await readProductionSentinelSnapshot(dataSource)).toEqual(before);
+        expect(await readProductionSentinelSnapshot(dataSource, sentinelIds)).toEqual(before);
       } finally {
-        await cleanupProductionSentinelChain(dataSource);
+        await cleanupProductionSentinelChain(dataSource, sentinelIds);
       }
     });
 
     it('连续两次精确回收幂等：第二次为 no-op，不报错且哨兵不受影响', async () => {
-      await cleanupProductionSentinelChain(dataSource);
-      await ensureProductionSentinelChain({
+      // 前置：先确保文件级夹具已收口（等价于「上次残留 → 连续两次回收」的真实路径）
+      await cleanupProductionFixtureByIds(dataSource, ownership);
+
+      const sentinelOwnership = createProductionFixtureOwnership();
+      const sentinelIds = await ensureProductionSentinelChain({
         dataSource,
+        ownership: sentinelOwnership,
         createAccountUsecase: app.get(CreateAccountUsecase),
       });
 
-      // 重种专属账号 + 锚点行（模拟「上次残留 → 连续两次回收」的真实路径）
+      // 重种专属账号 + 锚点行（本轮新的所有权上下文）
+      const reseedOwnership = createProductionFixtureOwnership();
       const reseeded = await seedProductionFixtureAccounts({
         dataSource,
+        ownership: reseedOwnership,
         createAccountUsecase: app.get(CreateAccountUsecase),
       });
       expect(reseeded.failures).toEqual([]);
@@ -649,17 +672,23 @@ describe('admin-document-database 生产环境输入错误分类 (e2e, NODE_ENV=
       if (customerAccountId === undefined || engineerAccountId === undefined) {
         throw new Error('重种专属账号记录不完整（缺少 customer / engineer）');
       }
-      await seedProductionFixtureBusiness({ dataSource, customerAccountId, engineerAccountId });
+      await seedProductionFixtureBusiness({
+        dataSource,
+        ownership: reseedOwnership,
+        customerAccountId,
+        engineerAccountId,
+      });
 
-      const before = await readProductionSentinelSnapshot(dataSource);
+      const before = await readProductionSentinelSnapshot(dataSource, sentinelIds);
 
       try {
-        await cleanupProductionFixtureAccounts(dataSource);
+        await cleanupProductionFixtureByIds(dataSource, reseedOwnership);
         expect(await findProductionFixtureAccountIds(dataSource)).toEqual([]);
-        await cleanupProductionFixtureAccounts(dataSource);
-        expect(await readProductionSentinelSnapshot(dataSource)).toEqual(before);
+        // 第二次调用：ID 集合仍在，但行已不存在 → 必须 no-op，且不影响夹具外哨兵
+        await cleanupProductionFixtureByIds(dataSource, reseedOwnership);
+        expect(await readProductionSentinelSnapshot(dataSource, sentinelIds)).toEqual(before);
       } finally {
-        await cleanupProductionSentinelChain(dataSource);
+        await cleanupProductionSentinelChain(dataSource, sentinelIds);
       }
     });
   });
