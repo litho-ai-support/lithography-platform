@@ -5,14 +5,13 @@ import type { App } from 'supertest/types';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ApiModule } from '@src/bootstraps/api/api.module';
 import { EquipmentModelEntity } from '@src/modules/lithography/entities/equipment-model.entity';
-import { EngineerResponseEntity } from '@src/modules/lithography/entities/engineer-response.entity';
 import { RepairRequestEntity } from '@src/modules/lithography/entities/repair-request.entity';
 import { AiConversationEntity } from '@src/modules/lithography/entities/ai-conversation.entity';
 import { AiMessageEntity } from '@src/modules/lithography/entities/ai-message.entity';
 import { AiReportEntity } from '@src/modules/lithography/entities/ai-report.entity';
 import { AccountEntity } from '@src/modules/account/base/entities/account.entity';
-import { UserInfoEntity } from '@src/modules/account/base/entities/user-info.entity';
 
+import { AccountStatus } from '@app-types/models/account.types';
 import { AiConversationStatus, AiMessageRole } from '@app-types/models/ai-conversation.types';
 import { CreateAccountUsecase } from '@src/usecases/account/create-account.usecase';
 import { DataSource, In } from 'typeorm';
@@ -20,6 +19,10 @@ import { initGraphQLSchema } from '../../src/adapters/api/graphql/schema/schema.
 import { getAccountIdByLoginName, login, postGql } from '../utils/e2e-graphql-utils';
 import { assertDataSourceOnAllowedE2eDatabase } from '../utils/e2e-db-guard';
 import { seedTestAccounts, testAccountsConfig } from '../utils/test-accounts';
+import {
+  cleanupAdminDocumentFixture,
+  runAdminDocFixtureTeardown,
+} from './admin-document-database-fixture';
 
 /**
  * PR3 S4：管理员文档数据库只读聚合 E2E（真实 MySQL + 真实 GraphQL 链路）。
@@ -39,48 +42,12 @@ describe('AdminDocumentDatabase (e2e)', () => {
   let customerToken: string;
   let engineerAccountId: number;
   let customerAccountId: number;
+  /** R1：仅当 beforeAll 在「写夹具之前」完成白名单验证才置位，afterAll 据此决定能否清理。 */
+  let fixtureTargetValidated = false;
 
   const REQUEST_NO_A = 'E2E-ADM-211';
   const CONVERSATION_A = 301;
   const TOTAL_MESSAGES = 200; // 100 轮 × 每轮 USER + ASSISTANT
-
-  // 本用例独占的固定主键/标识：清理只针对这些，不整表删除业务数据（0918 决策 #3）。
-  const FIXTURE_EQUIPMENT_MODEL_IDS = [51];
-  const FIXTURE_REQUEST_IDS = [211, 212, 213];
-  const FIXTURE_CONVERSATION_IDS = [301, 302];
-  const FIXTURE_REPORT_IDS = [401, 402];
-  const FIXTURE_ACCOUNT_LOGIN_NAMES = [
-    testAccountsConfig.admin.loginName, // testadmin
-    testAccountsConfig.staff.loginName, // teststaff
-    testAccountsConfig.guestPrimary.loginName, // testguestprimary
-  ];
-
-  /**
-   * 精确回收本用例创建的夹具：沿外键 RESTRICT 反向，按固定主键/标识删除，
-   * 只动本用例数据，不整表清空业务表，也不为清账号而删除其他账号。
-   */
-  const cleanupAdminFixture = async (ds: DataSource): Promise<void> => {
-    // 报告 → 消息 → 回复 → 会话 → 申请 → 型号（均为本用例固定 ID）
-    await ds.getRepository(AiReportEntity).delete(FIXTURE_REPORT_IDS);
-    await ds
-      .getRepository(AiMessageEntity)
-      .delete({ conversationId: In(FIXTURE_CONVERSATION_IDS) });
-    await ds.getRepository(EngineerResponseEntity).delete({ requestId: In(FIXTURE_REQUEST_IDS) });
-    await ds.getRepository(AiConversationEntity).delete(FIXTURE_CONVERSATION_IDS);
-    await ds.getRepository(RepairRequestEntity).delete(FIXTURE_REQUEST_IDS);
-    await ds.getRepository(EquipmentModelEntity).delete(FIXTURE_EQUIPMENT_MODEL_IDS);
-    // 账号域：先按本用例 loginName 定位 accountId，再 user_info → account
-    const accountRepo = ds.getRepository(AccountEntity);
-    const accounts = await accountRepo.find({
-      where: { loginName: In(FIXTURE_ACCOUNT_LOGIN_NAMES) },
-      select: { id: true },
-    });
-    const accountIds = accounts.map((account) => account.id);
-    if (accountIds.length > 0) {
-      await ds.getRepository(UserInfoEntity).delete({ accountId: In(accountIds) });
-      await accountRepo.delete({ id: In(accountIds) });
-    }
-  };
 
   beforeAll(async () => {
     initGraphQLSchema();
@@ -99,8 +66,12 @@ describe('AdminDocumentDatabase (e2e)', () => {
     //    本 spec 也绝不会在未验证（非隔离 E2E 库）的数据库上执行 DELETE。
     await assertDataSourceOnAllowedE2eDatabase(dataSource);
 
+    // R1：守卫通过后才允许清理（写夹具之前置位）；守卫拒绝 / 半途失败时
+    // afterAll 只关闭 app，不会在未授权目标上 DELETE。
+    fixtureTargetValidated = true;
+
     // 造数前精确回收同名夹具（保证连跑两遍幂等），不整表删除业务数据
-    await cleanupAdminFixture(dataSource);
+    await cleanupAdminDocumentFixture(dataSource);
 
     await seedTestAccounts({
       dataSource,
@@ -265,14 +236,14 @@ describe('AdminDocumentDatabase (e2e)', () => {
   });
 
   afterAll(async () => {
-    // beforeAll 若在 Nest 装配/连接阶段失败，dataSource 与 app 可能尚未完成赋值。
-    // 此时不得让清理路径掩盖首个启动错误；已初始化时仍按固定主键精确回收夹具。
-    if (dataSource?.isInitialized) {
-      await cleanupAdminFixture(dataSource);
-    }
-    if (app) {
-      await app.close();
-    }
+    // R1：守卫拒绝、模块装配失败、连接未完成 → 只关闭已创建的 app，不做任何删除；
+    // 清理失败不吞错且仍会关闭 app（try/finally 在 helper 内实现）。
+    await runAdminDocFixtureTeardown({
+      app,
+      dataSource,
+      targetValidated: fixtureTargetValidated,
+      cleanup: cleanupAdminDocumentFixture,
+    });
   });
 
   const executeGql = (query: string, token?: string, variables?: unknown) =>
@@ -509,6 +480,123 @@ describe('AdminDocumentDatabase (e2e)', () => {
         aiConversationTotal: 2,
         aiReportTotal: 2,
       });
+    });
+  });
+
+  describe('R1 清理边界：夹具外哨兵链不被误删（真实隔离库）', () => {
+    const SENTINEL_LOGIN = 'e2e-adm-sentinel';
+    const SENTINEL_MODEL_ID = 9972;
+    const SENTINEL_REQUEST_ID = 9973;
+    const SENTINEL_REQUEST_NO = 'E2E-ADM-SENTINEL';
+    const FIXTURE_REQUEST_IDS = [211, 212, 213];
+
+    it('完整夹具清理后：只按固定标识精确删除；独立哨兵链（账号+型号+申请）原样存在', async () => {
+      const accountRepo = dataSource.getRepository(AccountEntity);
+      const modelRepo = dataSource.getRepository(EquipmentModelEntity);
+      const requestRepo = dataSource.getRepository(RepairRequestEntity);
+
+      // 哨兵链不引用任何夹具父行（夹具账号/型号会被清理），从而在外键 RESTRICT 下仍然合法
+      const sentinelAccount = await accountRepo.save(
+        accountRepo.create({
+          loginName: SENTINEL_LOGIN,
+          loginEmail: null,
+          loginPassword: 'e2e-not-a-login-hash',
+          status: AccountStatus.ACTIVE,
+          recentLoginHistory: null,
+          identityHint: null,
+        }),
+      );
+      await modelRepo.save(
+        modelRepo.create({
+          id: SENTINEL_MODEL_ID,
+          modelCode: 'E2E-ADM-SENTINEL',
+          modelName: '哨兵型号（夹具外）',
+          enabled: true,
+          sortOrder: 999,
+        }),
+      );
+      await requestRepo.save(
+        requestRepo.create({
+          id: SENTINEL_REQUEST_ID,
+          requestNo: SENTINEL_REQUEST_NO,
+          customerAccountId: sentinelAccount.id,
+          equipmentModelId: SENTINEL_MODEL_ID,
+          errorCode: 'E-9999',
+          faultDescription: 'R1 哨兵：夹具外独立链，清理不得误删',
+          contentMd: '# sentinel',
+          createdAt: new Date('2026-08-01T00:00:00.000Z'),
+          isAccepted: false,
+          acceptedByEngineerAccountId: null,
+          acceptedAt: null,
+          deprecated: false,
+          deletedAt: null,
+        }),
+      );
+
+      try {
+        await cleanupAdminDocumentFixture(dataSource);
+
+        // 夹具固定标识（申请 / 型号 / 三个 seed 账号）已被精确回收
+        expect(await requestRepo.count({ where: { id: In(FIXTURE_REQUEST_IDS) } })).toBe(0);
+        expect(await modelRepo.count({ where: { id: 51 } })).toBe(0);
+        expect(
+          await accountRepo.count({
+            where: {
+              loginName: In([
+                testAccountsConfig.admin.loginName,
+                testAccountsConfig.staff.loginName,
+                testAccountsConfig.guestPrimary.loginName,
+              ]),
+            },
+          }),
+        ).toBe(0);
+
+        // 夹具外哨兵链必须原样存在（≠ 整表 / 范围删除）
+        const sentinelRequest = await requestRepo.findOne({
+          where: { id: SENTINEL_REQUEST_ID },
+        });
+        expect(sentinelRequest?.requestNo).toBe(SENTINEL_REQUEST_NO);
+        expect(await modelRepo.count({ where: { id: SENTINEL_MODEL_ID } })).toBe(1);
+        expect(await accountRepo.count({ where: { loginName: SENTINEL_LOGIN } })).toBe(1);
+      } finally {
+        await requestRepo.delete(SENTINEL_REQUEST_ID);
+        await modelRepo.delete(SENTINEL_MODEL_ID);
+        await accountRepo.delete({ loginName: SENTINEL_LOGIN });
+      }
+    });
+
+    it('夹具写入中途失败（仅部分夹具落库）时：清理不报错、只移除已写夹具，哨兵不受影响', async () => {
+      const modelRepo = dataSource.getRepository(EquipmentModelEntity);
+
+      // 模拟 beforeAll 在写夹具中途失败：只落下型号 51，其余夹具行均不存在
+      await modelRepo.save(
+        modelRepo.create({
+          id: 51,
+          modelCode: 'E2E-ADM',
+          modelName: '管理员聚合型号',
+          enabled: true,
+          sortOrder: 1,
+        }),
+      );
+      await modelRepo.save(
+        modelRepo.create({
+          id: 9974,
+          modelCode: 'E2E-ADM-SENTINEL-2',
+          modelName: '哨兵型号二（夹具外）',
+          enabled: true,
+          sortOrder: 998,
+        }),
+      );
+
+      try {
+        // 对不存在的固定标识（申请/会话/报告/账号）执行删除必须是无害 no-op
+        await cleanupAdminDocumentFixture(dataSource);
+
+        expect(await modelRepo.count({ where: { id: 51 } })).toBe(0);
+        expect(await modelRepo.count({ where: { id: 9974 } })).toBe(1);
+      } finally {
+        await modelRepo.delete(9974);
+      }
     });
   });
 });

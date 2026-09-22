@@ -30,6 +30,7 @@ const GROUPS = {
       'test/07-pagination-sort-search/sort.e2e-spec.ts',
       'test/09-reference-document/reference-document.e2e-spec.ts',
       'test/10-admin-document-database/admin-document-database.e2e-spec.ts',
+      'test/10-admin-document-database/admin-document-database-cleanup-failure.e2e-spec.ts',
       'test/utils/e2e-db-guard.e2e-spec.ts',
     ],
     needs: {
