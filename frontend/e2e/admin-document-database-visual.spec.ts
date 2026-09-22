@@ -1,25 +1,29 @@
-// 管理员文档数据库三 Tab 视觉基准验收与证据采集（PR3 负责人 Review R3 要求，
-// 0922 复查 B1/B2 增强）。
+// 管理员文档数据库知识库视觉基准验收与证据采集（PR3 R7，0922 第二轮 Review 修复）。
 //
-// 验收内容（负责人原文 + 0922 复查补强）：
-// - 在最新 SHA、字体加载完成、浏览器 100% 缩放、M 档分别采集维修申请 / AI 会话 /
-//   AI 报告三标签在 1440×900 与 1366×768 下共 6 张截图；必须为 viewport 截图，
-//   物理尺寸严格等于指定视口（复查 B2：不得用 fullPage 高度替代指定分辨率）；
-// - 读取并归档三标签 FilterBar / TableContainer computed styles、FilterBar margin 与
-//   两容器的 bounding-rect 实际距离（复查 B1：间距真源为公共组件自带 margin——
-//   FilterBar 下缘到其后第一块、TableContainer 上缘到其前一块都必须严格 14px，
-//   不得再叠加根层 flex gap），以及 documentElement.scrollWidth - clientWidth <= 0；
-// - 维修申请「型号告警态」单独覆盖 FilterBar → 告警 → TableContainer 的行距节奏；
-// - 另跑 S→M→L→M 确认 L 无遮挡、回 M 后基准数值恢复。
+// 验收内容（修复计划 §7 与视觉报告 §5）：
+// - 三视口（1920×1080、1440×900、1366×768）× 四标签共 12 张整页截图；1920 套
+//   不隐藏全局 AI 浮动入口，其余两套按复查建议隐藏；必须为 viewport 截图，
+//   物理尺寸严格等于指定视口（不得用 fullPage 高度替代指定分辨率）；
+// - computed-style/geometry 目标来自 docs/tmp/gkj.html 原型实测（下方 KB_BASELINE，
+//   口径见视觉报告 §3），不把当前组件值反写为 expect；
+// - 重点机械断言：纯色工作区 #f3f4f6、宽屏铺满（内容右缘 = 视口 - 26）、页头
+//   10/20/12px 层级、卡片 10px 圆角/轻阴影、工具区 61px 内 12px/36px 搜索框、
+//   表头 10px、正文 11px、单元格 10px 9px；每视口附页头、汇总、工具区、表头和
+//   一行正文的 1:1 局部图（原型与实现各一套，元素截图不二次缩放）；
+// - 维修申请「型号告警态」：告警与表格同卡（工具区 → 告警 → 表格相邻无外部间距）；
+// - S→M→L→M：L 下搜索/筛选/分页/操作/退出可达、无整页横滚；回 M 恢复基准；
+// - 共享外观回归：登录、用户管理、客户申请、独立参考资料页保持默认外观，
+//   知识库变体只作用于 /admin/document-database。
 //
-// 截图与 computed-style JSON 写入 testInfo outputPath（frontend/test-results/...），
-// 由采集人复制归档到 docs/tmp/PR 证据目录（本地可追溯，不随 PR 提交）。
+// 截图与 JSON 写入 testInfo outputPath（frontend/test-results/...），由采集人复制归档到
+// docs/tmp/PR 证据目录（本地可追溯，不随 PR 提交）。
 // 前提（不满足时自动 skip，与 admin-document-database-real.spec.ts 同口径）：
 // 本地后端 127.0.0.1:3000 可用、backend/env/.env.development 存在、前端真实通道可用。
 
-import { expect, type Page, test } from '@playwright/test';
+import { expect, type Locator, type Page, test } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   hasFrontendGraphQLEndpoint,
@@ -29,33 +33,137 @@ import {
 } from './helpers/real-backend';
 
 const PAGE_PATH = '/admin/document-database';
+const GKJ_HTML_PATH = fileURLToPath(new URL('../../docs/tmp/gkj.html', import.meta.url));
 const MODEL_WARNING_TEXT = '设备型号选项加载失败';
 
-/** 公共容器行距节奏：FilterBar 自带 margin（12px 0 14px）即唯一边距真源。 */
-const CONTAINER_GAP_BASELINE = 14;
+/**
+ * gkj 原型知识库页实测基准（Playwright Chromium，dpr=1，根字号 16px，1440×900）。
+ * 全部来自 docs/tmp/gkj.html `#knowledge-base-page` 的 getComputedStyle/getBoundingClientRect
+ * （视觉报告 §3），不是当前实现的反写值。
+ */
+const KB_BASELINE = {
+  card: {
+    backgroundColor: 'rgb(255, 255, 255)',
+    borderColor: 'rgb(229, 231, 235)', // #e5e7eb
+    borderRadius: '10px',
+    boxShadow: 'rgba(15, 23, 42, 0.05) 0px 1px 3px 0px',
+    padding: '0px',
+  },
+  footer: {
+    color: 'rgb(148, 163, 184)', // #94a3b8
+    fontSize: '10px',
+    padding: '12px 16px',
+  },
+  header: {
+    description: {
+      color: 'rgb(100, 116, 139)', // #64748b
+      fontSize: '12px',
+      lineHeight: '16px',
+      marginTop: '4px',
+    },
+    eyebrow: {
+      color: 'rgb(37, 99, 235)', // #2563eb
+      fontSize: '10px',
+      fontWeight: '700',
+      letterSpacing: '1.8px', // 0.18em
+      lineHeight: '15px',
+      marginBottom: '4px',
+      textTransform: 'uppercase',
+    },
+    marginBottom: '20px',
+    title: {
+      color: 'rgb(30, 41, 59)', // #1e293b
+      fontSize: '20px',
+      fontWeight: '700',
+      lineHeight: '28px',
+    },
+  },
+  search: {
+    backgroundColor: 'rgb(248, 250, 252)', // #f8fafc
+    borderColor: 'rgb(226, 232, 240)', // #e2e8f0
+    borderRadius: '6px',
+    height: '36px',
+    padding: '0px 12px',
+  },
+  searchInput: {
+    color: 'rgb(51, 65, 85)', // #334155
+    fontSize: '12px',
+    lineHeight: '16px',
+  },
+  summary: {
+    cellPadding: '16px',
+    height: 67.5, // border-box（1440/1366/1920 实测一致）
+    label: {
+      color: 'rgb(148, 163, 184)',
+      fontSize: '9px',
+      letterSpacing: '0.45px', // 0.05em
+      textTransform: 'uppercase',
+    },
+    value: {
+      color: 'rgb(51, 65, 85)',
+      fontSize: '12px',
+      fontWeight: '600',
+      lineHeight: '16px',
+      marginTop: '4px',
+    },
+  },
+  table: {
+    td: {
+      borderBottomColor: 'rgb(241, 245, 249)', // #f1f5f9
+      color: 'rgb(51, 65, 85)',
+      fontSize: '11px',
+      lineHeight: '16.5px',
+      padding: '10px 9px',
+    },
+    th: {
+      backgroundColor: 'rgb(248, 250, 252)',
+      borderBottomColor: 'rgb(229, 231, 235)',
+      color: 'rgb(100, 116, 139)',
+      fontSize: '10px',
+      fontWeight: '600',
+      lineHeight: '15px',
+      padding: '10px 9px',
+    },
+  },
+  toolbar: {
+    borderBottomColor: 'rgb(241, 245, 249)',
+    borderBottomWidth: '1px',
+    gap: '8px',
+    height: '61px',
+    padding: '12px',
+  },
+  toolbarButton: {
+    backgroundColor: 'rgb(255, 255, 255)',
+    borderColor: 'rgb(226, 232, 240)',
+    borderRadius: '6px',
+    color: 'rgb(71, 85, 105)', // #475569
+    fontSize: '12px',
+    height: '36px',
+    padding: '0px 12px',
+  },
+  workspace: {
+    backgroundColor: 'rgb(243, 244, 246)', // #f3f4f6 纯色
+    padding: '22px 26px 32px',
+  },
+} as const;
 
-// gkj 共享视觉基准（src/index.css token）：三个 Tab 必须复用公共容器而非页面自写样式。
-const FILTER_BAR_BASELINE = {
-  backgroundColor: 'rgb(248, 250, 252)', // --filter-bar-bg #f8fafc
-  borderColor: 'rgb(219, 227, 238)', // --filter-bar-border #dbe3ee
-  borderRadius: '10px',
-  display: 'flex',
-  marginBottom: '14px', // .filter-bar margin: 12px 0 14px
-  marginTop: '12px',
-  padding: '8px 11px',
-};
-const TABLE_CONTAINER_BASELINE = {
-  backgroundColor: 'rgba(255, 255, 255, 0.92)', // --panel-bg
-  borderColor: 'rgb(226, 232, 240)', // --panel-border #e2e8f0
-  borderRadius: '14px', // --panel-radius
-  boxShadow: 'rgba(15, 23, 42, 0.06) 0px 10px 30px 0px', // --panel-shadow
-  padding: '16px',
-};
+/** 原型侧栏宽 210 + 工作区左 padding 26 = 内容左缘 236；右缘 = 视口 - 26。 */
+const KB_CONTENT_LEFT = 236;
+const KB_CONTENT_RIGHT_GAP = 26;
 
 const TABS = [
+  { fileStem: 'reference-documents', name: '参考资料' },
   { fileStem: 'repair-requests', name: '维修申请' },
   { fileStem: 'ai-conversations', name: 'AI 会话' },
   { fileStem: 'ai-reports', name: 'AI 报告' },
+] as const;
+
+// 1920 先行：浮动入口隐藏样式一旦注入无法撤销（addStyleTag 全局生效），
+// 1920 套必须保留 AI 浮动入口（计划「至少一套不隐藏」）。
+const VIEWPORTS = [
+  { height: 1080, width: 1920 },
+  { height: 900, width: 1440 },
+  { height: 768, width: 1366 },
 ] as const;
 
 async function loginAs(
@@ -71,7 +179,7 @@ async function loginAs(
   await expect(page).toHaveURL(landingPath);
 }
 
-function activePane(page: Page) {
+function activePane(page: Page): Locator {
   return page.locator('.ant-tabs-tabpane-active');
 }
 
@@ -82,10 +190,14 @@ async function focusTab(page: Page, name: string): Promise<void> {
   await page.getByRole('tab', { name }).click();
   await expect(page.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
   const pane = activePane(page);
-  await expect(pane.locator('.table-container')).toBeVisible();
+  await expect(pane.locator('.kb-card').first()).toBeVisible();
   await expect(
-    pane.locator('.ant-table-tbody tr.ant-table-row, .empty-state, .ant-alert-error').first(),
-  ).toBeVisible();
+    pane
+      .locator(
+        '.ant-table-tbody tr.ant-table-row, .kb-card-state .ant-empty, .kb-card-state .ant-alert-error',
+      )
+      .first(),
+  ).toBeVisible({ timeout: 15_000 });
   await page.waitForFunction(() => {
     const inkBar = document.querySelector('.ant-tabs-ink-bar');
     const activeTab = document.querySelector('.ant-tabs-tab-active');
@@ -110,76 +222,10 @@ function readPngDimensions(filePath: string): { height: number; width: number } 
   return { height: buffer.readUInt32BE(20), width: buffer.readUInt32BE(16) };
 }
 
-/** AI 浮动入口（entry-trigger-shell）为全局组件、非 PR3 验收对象：
-    按 0922 复查报告建议从取证画面隐藏，减少视觉噪声。 */
+/** AI 浮动入口（entry-trigger-shell）为全局组件：1440/1366 套按复查建议隐藏减少
+    视觉噪声；1920 套不调用本函数（计划要求至少一套保留）。 */
 async function hideNonPr3FloatingEntry(page: Page): Promise<void> {
   await page.addStyleTag({ content: '.entry-trigger-shell { display: none !important; }' });
-}
-
-/** 读取当前激活标签的公共容器 computed style、行距几何与页面横滚余量。 */
-async function measureActivePane(page: Page) {
-  return page.evaluate(() => {
-    const pane = document.querySelector<HTMLElement>('.ant-tabs-tabpane-active');
-    if (pane === null) throw new Error('缺少激活标签面板');
-    const filterBar = pane.querySelector<HTMLElement>('.filter-bar');
-    const container = pane.querySelector<HTMLElement>('.table-container');
-    if (filterBar === null || container === null) throw new Error('激活标签缺少公共容器');
-    const root = filterBar.parentElement;
-    if (root === null) throw new Error('FilterBar 缺少父容器');
-    const fb = getComputedStyle(filterBar);
-    const tc = getComputedStyle(container);
-    // 型号告警（仅维修申请 Tab）以文案识别，不依赖 antd 内部类名
-    const warning = Array.from(root.querySelectorAll<HTMLElement>('.ant-alert')).find((el) =>
-      (el.textContent ?? '').includes('设备型号选项加载失败'),
-    );
-    const fbRect = filterBar.getBoundingClientRect();
-    const tcRect = container.getBoundingClientRect();
-    const nextTop = (warning ?? container).getBoundingClientRect().top;
-    const prevBottom = (warning ?? filterBar).getBoundingClientRect().bottom;
-    return {
-      devicePixelRatio: window.devicePixelRatio,
-      dock: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      filterBar: {
-        backgroundColor: fb.backgroundColor,
-        borderColor: fb.borderColor,
-        borderRadius: fb.borderRadius,
-        display: fb.display,
-        marginBottom: fb.marginBottom,
-        marginTop: fb.marginTop,
-        padding: fb.padding,
-      },
-      geometry: {
-        gapAfterFilterBar: Math.round(nextTop - fbRect.bottom),
-        gapBeforeTableContainer: Math.round(tcRect.top - prevBottom),
-        modelWarningVisible: warning !== undefined,
-        paneTopToFilterBarTop: Math.round(fbRect.top - pane.getBoundingClientRect().top),
-        tableContainerRight: Math.round(tcRect.right),
-        viewportWidth: document.documentElement.clientWidth,
-      },
-      rootFontSize: getComputedStyle(document.documentElement).fontSize,
-      tableContainer: {
-        backgroundColor: tc.backgroundColor,
-        borderColor: tc.borderColor,
-        borderRadius: tc.borderRadius,
-        boxShadow: tc.boxShadow,
-        padding: tc.padding,
-      },
-    };
-  });
-}
-
-function expectBaseline(
-  snapshot: Awaited<ReturnType<typeof measureActivePane>>,
-  expectedRootFontSize: string,
-): void {
-  expect(snapshot.rootFontSize).toBe(expectedRootFontSize);
-  expect(snapshot.filterBar).toEqual(FILTER_BAR_BASELINE);
-  expect(snapshot.tableContainer).toEqual(TABLE_CONTAINER_BASELINE);
-  expect(snapshot.dock).toBeLessThanOrEqual(0);
-  // 0922 复查 B1：不得叠加根层 flex gap——FilterBar 下缘到其后第一块、
-  // TableContainer 上缘到其前一块，都必须严格等于公共组件自带的 14px margin
-  expect(snapshot.geometry.gapAfterFilterBar).toBe(CONTAINER_GAP_BASELINE);
-  expect(snapshot.geometry.gapBeforeTableContainer).toBe(CONTAINER_GAP_BASELINE);
 }
 
 async function expectFontScale(page: Page, label: 'S' | 'M' | 'L'): Promise<void> {
@@ -193,7 +239,435 @@ async function clickFontScale(page: Page, label: 'S' | 'M' | 'L'): Promise<void>
   await expectFontScale(page, label);
 }
 
-test.describe('real backend admin document database - visual baseline', () => {
+/** 读取页面级知识库基准：工作区、页头、汇总条与页面横滚余量。 */
+async function measureKbPage(page: Page) {
+  return page.evaluate(() => {
+    const requireElement = <T extends Element>(selector: string, root: ParentNode): T => {
+      const el = root.querySelector<T>(selector);
+      if (el === null) throw new Error(`缺少 ${selector}`);
+      return el;
+    };
+    const g = (el: Element) => getComputedStyle(el);
+    const rect = (el: Element) => {
+      const b = el.getBoundingClientRect();
+      return {
+        bottom: +b.bottom.toFixed(2),
+        height: +b.height.toFixed(2),
+        left: +b.left.toFixed(2),
+        right: +b.right.toFixed(2),
+        top: +b.top.toFixed(2),
+        width: +b.width.toFixed(2),
+      };
+    };
+    const root = document.documentElement;
+    const workspace = requireElement<HTMLElement>('.app-workspace', document);
+    const main = requireElement<HTMLElement>('.app-main', document);
+    const header = requireElement<HTMLElement>('.page-header--kb', document);
+    const eyebrow = requireElement<HTMLElement>('.page-header--kb .page-eyebrow', document);
+    const title = requireElement<HTMLElement>('.page-header--kb .page-title', document);
+    const description = requireElement<HTMLElement>('.page-header--kb .page-description', document);
+    const summary = requireElement<HTMLElement>('.kb-card.kb-summary', document);
+    const summaryCell = requireElement<HTMLElement>('.kb-summary-cell', summary);
+    const summaryLabel = requireElement<HTMLElement>('.kb-summary-label', summary);
+    const summaryValue = requireElement<HTMLElement>('.kb-summary-value', summary);
+    return {
+      devicePixelRatio: window.devicePixelRatio,
+      dock: root.scrollWidth - root.clientWidth,
+      header: {
+        description: {
+          color: g(description).color,
+          fontSize: g(description).fontSize,
+          lineHeight: g(description).lineHeight,
+          marginTop: g(description).marginTop,
+        },
+        eyebrow: {
+          color: g(eyebrow).color,
+          fontSize: g(eyebrow).fontSize,
+          fontWeight: g(eyebrow).fontWeight,
+          letterSpacing: g(eyebrow).letterSpacing,
+          lineHeight: g(eyebrow).lineHeight,
+          marginBottom: g(eyebrow).marginBottom,
+          textTransform: g(eyebrow).textTransform,
+        },
+        marginBottom: g(header).marginBottom,
+        rect: rect(header),
+        title: {
+          color: g(title).color,
+          fontSize: g(title).fontSize,
+          fontWeight: g(title).fontWeight,
+          lineHeight: g(title).lineHeight,
+        },
+      },
+      main: { maxWidth: g(main).maxWidth },
+      rootFontSize: g(root).fontSize,
+      summary: {
+        cellPadding: g(summaryCell).padding,
+        label: {
+          color: g(summaryLabel).color,
+          fontSize: g(summaryLabel).fontSize,
+          letterSpacing: g(summaryLabel).letterSpacing,
+          textTransform: g(summaryLabel).textTransform,
+        },
+        rect: rect(summary),
+        value: {
+          color: g(summaryValue).color,
+          fontSize: g(summaryValue).fontSize,
+          fontWeight: g(summaryValue).fontWeight,
+          lineHeight: g(summaryValue).lineHeight,
+          marginTop: g(summaryValue).marginTop,
+        },
+      },
+      viewport: { height: root.clientHeight, width: root.clientWidth },
+      workspace: {
+        backgroundColor: g(workspace).backgroundColor,
+        backgroundImage: g(workspace).backgroundImage,
+        padding: g(workspace).padding,
+      },
+    };
+  });
+}
+
+/** 读取当前激活标签的知识库卡：工具区、主搜索、表格密度、卡底与表格内横滚。 */
+async function measureKbPane(page: Page) {
+  return page.evaluate(() => {
+    const pane = document.querySelector('.ant-tabs-tabpane-active');
+    if (pane === null) throw new Error('缺少激活标签面板');
+    const requireElement = <T extends Element>(selector: string): T => {
+      const el = pane.querySelector<T>(selector);
+      if (el === null) throw new Error(`激活标签缺少 ${selector}`);
+      return el;
+    };
+    const g = (el: Element) => getComputedStyle(el);
+    const rect = (el: Element) => {
+      const b = el.getBoundingClientRect();
+      return {
+        bottom: +b.bottom.toFixed(2),
+        height: +b.height.toFixed(2),
+        left: +b.left.toFixed(2),
+        right: +b.right.toFixed(2),
+        top: +b.top.toFixed(2),
+        width: +b.width.toFixed(2),
+      };
+    };
+    const card = requireElement<HTMLElement>('.kb-card');
+    const toolbar = requireElement<HTMLElement>('.kb-toolbar');
+    const search = requireElement<HTMLElement>('.kb-search');
+    const searchInput = requireElement<HTMLElement>('.kb-search input');
+    const searchIcon = requireElement<Element>('.kb-search svg');
+    const toolbarButton = requireElement<HTMLElement>('.kb-toolbar-button');
+    const th = requireElement<HTMLElement>('.kb-table-scope .ant-table-thead th');
+    const firstRow = requireElement<HTMLElement>(
+      '.kb-table-scope .ant-table-tbody tr.ant-table-row',
+    );
+    const td = firstRow.querySelector<HTMLElement>('td');
+    if (td === null) throw new Error('表格首行缺少单元格');
+    const footer = requireElement<HTMLElement>('.kb-card-footer');
+    // AntD 在设置 scroll.x 后以 .ant-table-content（或 .ant-table-body）为唯一横滚容器
+    const scrollOwner =
+      pane.querySelector<HTMLElement>('.kb-table-scope .ant-table-content') ??
+      pane.querySelector<HTMLElement>('.kb-table-scope .ant-table-body');
+    return {
+      card: {
+        backgroundColor: g(card).backgroundColor,
+        borderColor: g(card).borderColor,
+        borderRadius: g(card).borderRadius,
+        boxShadow: g(card).boxShadow,
+        padding: g(card).padding,
+        rect: rect(card),
+      },
+      firstRowHeight: +firstRow.getBoundingClientRect().height.toFixed(2),
+      footer: {
+        color: g(footer).color,
+        fontSize: g(footer).fontSize,
+        padding: g(footer).padding,
+      },
+      search: {
+        backgroundColor: g(search).backgroundColor,
+        borderColor: g(search).borderColor,
+        borderRadius: g(search).borderRadius,
+        height: g(search).height,
+        padding: g(search).padding,
+      },
+      searchIcon: {
+        color: g(searchIcon).color,
+        height: g(searchIcon).height,
+        width: g(searchIcon).width,
+      },
+      searchInput: {
+        color: g(searchInput).color,
+        fontSize: g(searchInput).fontSize,
+        lineHeight: g(searchInput).lineHeight,
+      },
+      tableScroll:
+        scrollOwner === null
+          ? null
+          : {
+              clientWidth: scrollOwner.clientWidth,
+              overflowX: g(scrollOwner).overflowX,
+              scrollWidth: scrollOwner.scrollWidth,
+            },
+      td: {
+        borderBottomColor: g(td).borderBottomColor,
+        color: g(td).color,
+        fontSize: g(td).fontSize,
+        lineHeight: g(td).lineHeight,
+        padding: g(td).padding,
+      },
+      th: {
+        backgroundColor: g(th).backgroundColor,
+        borderBottomColor: g(th).borderBottomColor,
+        color: g(th).color,
+        fontSize: g(th).fontSize,
+        fontWeight: g(th).fontWeight,
+        lineHeight: g(th).lineHeight,
+        padding: g(th).padding,
+        rectHeight: +th.getBoundingClientRect().height.toFixed(2),
+      },
+      toolbar: {
+        borderBottomColor: g(toolbar).borderBottomColor,
+        borderBottomWidth: g(toolbar).borderBottomWidth,
+        gap: g(toolbar).gap,
+        height: g(toolbar).height,
+        padding: g(toolbar).padding,
+        rect: rect(toolbar),
+      },
+      toolbarButton: {
+        backgroundColor: g(toolbarButton).backgroundColor,
+        borderColor: g(toolbarButton).borderColor,
+        borderRadius: g(toolbarButton).borderRadius,
+        color: g(toolbarButton).color,
+        fontSize: g(toolbarButton).fontSize,
+        height: g(toolbarButton).height,
+        padding: g(toolbarButton).padding,
+      },
+    };
+  });
+}
+
+type KbPageSnapshot = Awaited<ReturnType<typeof measureKbPage>>;
+type KbPaneSnapshot = Awaited<ReturnType<typeof measureKbPane>>;
+
+function expectKbPageBaseline(snapshot: KbPageSnapshot, viewportWidth: number): void {
+  expect(snapshot.rootFontSize).toBe('16px');
+  // 纯色工作区（宽屏铺满由内容右缘校验）
+  expect(snapshot.workspace.backgroundColor).toBe(KB_BASELINE.workspace.backgroundColor);
+  expect(snapshot.workspace.backgroundImage).toBe('none');
+  expect(snapshot.workspace.padding).toBe(KB_BASELINE.workspace.padding);
+  expect(snapshot.main.maxWidth).toBe('none');
+  // 无整页横滚；必要横滚只允许发生在表格内部（见 tableScroll 证据）
+  expect(snapshot.dock).toBeLessThanOrEqual(0);
+  // 宽屏铺满：内容左缘 236、右缘 = 视口 - 26（1280px 上限已解除）
+  expect(snapshot.header.rect.left).toBe(KB_CONTENT_LEFT);
+  expect(snapshot.header.rect.right).toBe(viewportWidth - KB_CONTENT_RIGHT_GAP);
+  // 页头 10/20/12px 层级
+  expect(snapshot.header.eyebrow).toEqual(KB_BASELINE.header.eyebrow);
+  expect(snapshot.header.title).toEqual(KB_BASELINE.header.title);
+  expect(snapshot.header.description).toEqual(KB_BASELINE.header.description);
+  expect(snapshot.header.marginBottom).toBe(KB_BASELINE.header.marginBottom);
+  // 汇总条 67.5px（border-box）+ 卡外观与分区排版
+  expect(snapshot.summary.rect.height).toBe(KB_BASELINE.summary.height);
+  expect(snapshot.summary.cellPadding).toBe(KB_BASELINE.summary.cellPadding);
+  expect(snapshot.summary.label).toEqual(KB_BASELINE.summary.label);
+  expect(snapshot.summary.value).toEqual(KB_BASELINE.summary.value);
+}
+
+function expectKbPaneBaseline(snapshot: KbPaneSnapshot): void {
+  // 卡片：10px 圆角纯白卡 + 轻阴影
+  expect(snapshot.card).toMatchObject({
+    backgroundColor: KB_BASELINE.card.backgroundColor,
+    borderColor: KB_BASELINE.card.borderColor,
+    borderRadius: KB_BASELINE.card.borderRadius,
+    boxShadow: KB_BASELINE.card.boxShadow,
+    padding: KB_BASELINE.card.padding,
+  });
+  // 工具区：61px 高 / 12px padding / #f1f5f9 底线
+  expect(snapshot.toolbar).toMatchObject({
+    borderBottomColor: KB_BASELINE.toolbar.borderBottomColor,
+    borderBottomWidth: KB_BASELINE.toolbar.borderBottomWidth,
+    gap: KB_BASELINE.toolbar.gap,
+    height: KB_BASELINE.toolbar.height,
+    padding: KB_BASELINE.toolbar.padding,
+  });
+  // 主搜索框：36px 高 / 6px 圆角 / #f8fafc / #e2e8f0；输入 12/16 #334155；图标 16×16
+  expect(snapshot.search).toMatchObject(KB_BASELINE.search);
+  expect(snapshot.searchInput).toMatchObject(KB_BASELINE.searchInput);
+  expect(snapshot.searchIcon).toMatchObject({ height: '16px', width: '16px' });
+  expect(snapshot.toolbarButton).toMatchObject(KB_BASELINE.toolbarButton);
+  // 表头 10px / #64748b / #f8fafc / padding 10px 9px；表头高度贴近原型 35.5px
+  expect(snapshot.th).toMatchObject(KB_BASELINE.table.th);
+  expect(snapshot.th.rectHeight).toBeGreaterThanOrEqual(35);
+  expect(snapshot.th.rectHeight).toBeLessThanOrEqual(37);
+  // 正文 11px / #334155 / padding 10px 9px / 行线 #f1f5f9；行高贴近原型 38.5px
+  // （上限 50 容忍 StatusPill/操作按钮等 inline-block 控件的业务偏差，仍低于 AntD 默认 55px；
+  //   维修申请的变长文本列已全部 ellipsis + nowrap，不会再因换行把行高撑到两行）
+  expect(snapshot.td).toMatchObject(KB_BASELINE.table.td);
+  expect(snapshot.firstRowHeight).toBeGreaterThanOrEqual(35);
+  expect(snapshot.firstRowHeight).toBeLessThanOrEqual(50);
+  // 卡底：12px 16px / 10px / #94a3b8
+  expect(snapshot.footer).toEqual(KB_BASELINE.footer);
+}
+
+/** 页面级截图前先读取文档就绪状态（等本地字体加载完成）。 */
+async function waitForFontsReady(page: Page): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+}
+
+/** 采集 1:1 局部图：元素截图物理尺寸必须等于元素 CSS 尺寸（dpr=1、不二次缩放）。 */
+async function shootLocal(
+  page: Page,
+  locator: Locator,
+  filePath: string,
+  evidence: Record<string, unknown>,
+  name: string,
+): Promise<void> {
+  await locator.screenshot({ path: filePath });
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error(`局部图 ${name} 无 boundingBox`);
+  const png = readPngDimensions(filePath);
+  expect(Math.abs(png.width - Math.round(box.width))).toBeLessThanOrEqual(1);
+  expect(Math.abs(png.height - Math.round(box.height))).toBeLessThanOrEqual(1);
+  evidence[name] = { png, boxHeight: +box.height.toFixed(2), boxWidth: +box.width.toFixed(2) };
+}
+
+/** 表头 + 一行正文跨元素：用 clip 合成连续区域（同 1:1 校验）。 */
+async function shootTheadFirstRow(
+  page: Page,
+  pane: Locator,
+  filePath: string,
+  evidence: Record<string, unknown>,
+  name: string,
+): Promise<void> {
+  const theadBox = await pane.locator('.kb-table-scope .ant-table-thead').boundingBox();
+  const rowBox = await pane
+    .locator('.kb-table-scope .ant-table-tbody tr.ant-table-row')
+    .first()
+    .boundingBox();
+  if (theadBox === null || rowBox === null) throw new Error('缺少表头或首行');
+  const clip = {
+    height: rowBox.y + rowBox.height - theadBox.y,
+    width: Math.max(theadBox.width, rowBox.width),
+    x: theadBox.x,
+    y: theadBox.y,
+  };
+  await page.screenshot({ path: filePath, clip });
+  const png = readPngDimensions(filePath);
+  expect(Math.abs(png.width - Math.round(clip.width))).toBeLessThanOrEqual(2);
+  expect(Math.abs(png.height - Math.round(clip.height))).toBeLessThanOrEqual(2);
+  evidence[name] = { clipHeight: +clip.height.toFixed(2), clipWidth: +clip.width.toFixed(2), png };
+}
+
+/** 每个视口：实现侧页头/汇总/工具区/表头+首行 4 张 1:1 局部图（参考资料标签激活时）。 */
+async function captureImplementationLocals(
+  page: Page,
+  viewport: { height: number; width: number },
+  outputDir: string,
+): Promise<Record<string, unknown>> {
+  const tag = `${viewport.width}x${viewport.height}`;
+  await focusTab(page, '参考资料');
+  const pane = activePane(page);
+  const evidence: Record<string, unknown> = {};
+  await shootLocal(
+    page,
+    page.locator('.page-header--kb'),
+    path.join(outputDir, `r7-kb-local-${tag}-header.png`),
+    evidence,
+    'header',
+  );
+  await shootLocal(
+    page,
+    page.locator('.kb-card.kb-summary'),
+    path.join(outputDir, `r7-kb-local-${tag}-summary.png`),
+    evidence,
+    'summary',
+  );
+  await shootLocal(
+    page,
+    pane.locator('.kb-toolbar'),
+    path.join(outputDir, `r7-kb-local-${tag}-toolbar.png`),
+    evidence,
+    'toolbar',
+  );
+  await shootTheadFirstRow(
+    page,
+    pane,
+    path.join(outputDir, `r7-kb-local-${tag}-thead-first-row.png`),
+    evidence,
+    'theadFirstRow',
+  );
+  return evidence;
+}
+
+/** 每个视口：原型（gkj.html）侧同四项 1:1 局部图，供直接对照（不二次缩放对齐）。 */
+async function capturePrototypeLocals(
+  page: Page,
+  viewport: { height: number; width: number },
+  outputDir: string,
+): Promise<Record<string, unknown>> {
+  const tag = `${viewport.width}x${viewport.height}`;
+  const proto = await page.context().newPage();
+  const evidence: Record<string, unknown> = {};
+  try {
+    await proto.setViewportSize(viewport);
+    await proto.goto(pathToFileURL(GKJ_HTML_PATH).href);
+    // 等 Tailwind CDN 生效（text-xl → 20px；默认 h2 为 24px）
+    await proto.waitForFunction(
+      () => {
+        const h2 = document.querySelector('#knowledge-base-page h2');
+        return h2 !== null && getComputedStyle(h2).fontSize === '20px';
+      },
+      undefined,
+      { timeout: 30_000 },
+    );
+    await proto.click('[data-view="knowledge"]');
+    await waitForFontsReady(proto);
+    const kb = proto.locator('#knowledge-base-page');
+    await shootLocal(
+      proto,
+      kb.locator(':scope > div.flex.items-start'),
+      path.join(outputDir, `r7-gkj-local-${tag}-header.png`),
+      evidence,
+      'header',
+    );
+    await shootLocal(
+      proto,
+      kb.locator('.kb-card').nth(0),
+      path.join(outputDir, `r7-gkj-local-${tag}-summary.png`),
+      evidence,
+      'summary',
+    );
+    await shootLocal(
+      proto,
+      kb.locator('.kb-card').nth(1).locator(':scope > div').first(),
+      path.join(outputDir, `r7-gkj-local-${tag}-toolbar.png`),
+      evidence,
+      'toolbar',
+    );
+    const theadBox = await kb.locator('.kb-table thead').boundingBox();
+    const rowBox = await kb.locator('.kb-table tbody tr').first().boundingBox();
+    if (theadBox === null || rowBox === null) throw new Error('原型缺少表头或首行');
+    const clip = {
+      height: rowBox.y + rowBox.height - theadBox.y,
+      width: Math.max(theadBox.width, rowBox.width),
+      x: theadBox.x,
+      y: theadBox.y,
+    };
+    const filePath = path.join(outputDir, `r7-gkj-local-${tag}-thead-first-row.png`);
+    await proto.screenshot({ path: filePath, clip });
+    const png = readPngDimensions(filePath);
+    expect(Math.abs(png.width - Math.round(clip.width))).toBeLessThanOrEqual(2);
+    expect(Math.abs(png.height - Math.round(clip.height))).toBeLessThanOrEqual(2);
+    evidence.theadFirstRow = {
+      clipHeight: +clip.height.toFixed(2),
+      clipWidth: +clip.width.toFixed(2),
+      png,
+    };
+  } finally {
+    await proto.close();
+  }
+  return evidence;
+}
+
+test.describe('real backend admin document database - knowledge base visual baseline (R7)', () => {
   test.beforeEach(async () => {
     const env = readBackendEnvOrNull();
     test.skip(
@@ -210,63 +684,86 @@ test.describe('real backend admin document database - visual baseline', () => {
     );
   });
 
-  test('M 档三标签 1440×900 / 1366×768：容器基准、间距节奏与 6 张视口截图', async ({
+  test('M 档四标签三视口：12 张整页截图、kb 机械基准、1:1 局部图与 JSON 证据', async ({
     page,
   }, testInfo) => {
-    test.setTimeout(120_000);
+    test.setTimeout(300_000);
     const env = readBackendEnv();
-
-    await loginAs(page, env, 'mock_super_admin', /\/admin$/);
-    await page.goto(PAGE_PATH);
-    await expect(page.getByRole('heading', { name: '文档数据库' })).toBeVisible();
-    await page.evaluate(() => document.fonts.ready);
-    await hideNonPr3FloatingEntry(page);
-    await expectFontScale(page, 'M');
     const evidenceDir = testInfo.outputPath();
     mkdirSync(evidenceDir, { recursive: true });
 
+    await page.setViewportSize({ height: 1080, width: 1920 });
+    await loginAs(page, env, 'mock_super_admin', /\/admin$/);
+    await page.goto(PAGE_PATH);
+    await expect(page.getByRole('heading', { name: '文档数据库' })).toBeVisible();
+    await waitForFontsReady(page);
+    await expectFontScale(page, 'M');
+
     const evidence: Record<string, unknown> = {};
+    const tables: Record<string, unknown> = {};
 
-    for (const viewport of [
-      { height: 900, width: 1440 },
-      { height: 768, width: 1366 },
-    ]) {
-      await page.setViewportSize(viewport);
+    for (const viewport of VIEWPORTS) {
       const tag = `${viewport.width}x${viewport.height}`;
+      await page.setViewportSize(viewport);
 
+      // 1920 套保留 AI 浮动入口（至少一套不隐藏）；1440/1366 套隐藏减少噪声
+      const floatingEntryPreserved = viewport.width === 1920;
+      if (floatingEntryPreserved) {
+        await expect(page.locator('.entry-trigger-shell')).toBeVisible();
+      } else {
+        await hideNonPr3FloatingEntry(page);
+        await expect(page.locator('.entry-trigger-shell')).toBeHidden();
+      }
+
+      const tabEvidence: Record<string, unknown> = {};
       for (const tab of TABS) {
         await focusTab(page, tab.name);
-        const snapshot = await measureActivePane(page);
+        const pageSnapshot = await measureKbPage(page);
+        const paneSnapshot = await measureKbPane(page);
         // 浏览器 100% 缩放（设备像素比 1）与 M 档基准（root 16px）
-        expect(snapshot.devicePixelRatio).toBe(1);
-        expectBaseline(snapshot, '16px');
-        expect(snapshot.geometry.modelWarningVisible).toBe(false);
+        expect(pageSnapshot.devicePixelRatio).toBe(1);
+        expectKbPageBaseline(pageSnapshot, viewport.width);
+        expectKbPaneBaseline(paneSnapshot);
 
         // 复查 B2：viewport 截图（不加 fullPage），物理尺寸必须严格等于指定视口
-        const key = `r3-${tab.fileStem}-M-${tag}`;
-        const pngPath = testInfo.outputPath(`${key}.png`);
+        const key = `r7-${tab.fileStem}-M-${tag}`;
+        const pngPath = path.join(evidenceDir, `${key}.png`);
         await page.screenshot({ path: pngPath });
-        expect(readPngDimensions(pngPath)).toEqual({
-          height: viewport.height,
-          width: viewport.width,
-        });
-        evidence[key] = snapshot;
+        const png = readPngDimensions(pngPath);
+        expect(png).toEqual({ height: viewport.height, width: viewport.width });
+        tabEvidence[tab.fileStem] = { page: pageSnapshot, pane: paneSnapshot, png, tab: tab.name };
+      }
+
+      // 每视口 1:1 局部图（原型与实现各一套，供直接对照）
+      const localEvidence = await captureImplementationLocals(page, viewport, evidenceDir);
+      const prototypeEvidence = await capturePrototypeLocals(page, viewport, evidenceDir);
+
+      evidence[tag] = {
+        floatingEntryPreserved,
+        local: localEvidence,
+        prototype: prototypeEvidence,
+        tabs: tabEvidence,
+      };
+      for (const tab of TABS) {
+        const paneSnapshot = (tabEvidence[tab.fileStem] as { pane: KbPaneSnapshot }).pane;
+        tables[`${tab.fileStem}-${tag}`] = paneSnapshot.tableScroll;
       }
     }
 
-    const evidenceJson = path.join(evidenceDir, 'r3-computed-styles-M.json');
+    evidence.tableScroll = tables;
+    const evidenceJson = path.join(evidenceDir, 'r7-kb-evidence.json');
     writeFileSync(evidenceJson, JSON.stringify(evidence, null, 2));
     console.log(`[visual-evidence] ${evidenceJson}`);
   });
 
-  test('维修申请型号告警态：FilterBar → 告警 → TableContainer 行距节奏（1440×900）', async ({
+  test('维修申请型号告警态：工具区 → 告警 → 表格同卡相邻（1440×900）', async ({
     page,
   }, testInfo) => {
-    test.setTimeout(60_000);
+    test.setTimeout(90_000);
     const env = readBackendEnv();
 
     // 仅注入设备型号查询失败（网络层 abort），触发维修申请 Tab 的型号告警，
-    // 用于确认告警出现时三者的行距节奏仍以公共 margin 为真源（0922 复查 B1）
+    // 用于确认告警出现时四个状态块仍以卡内相邻布局为真源（无外部间距叠加）
     await page.route('**/graphql', async (route) => {
       const postData = route.request().postData() ?? '';
       if (postData.includes('AdminDocumentDatabaseEquipmentModels')) {
@@ -279,67 +776,205 @@ test.describe('real backend admin document database - visual baseline', () => {
     await page.setViewportSize({ height: 900, width: 1440 });
     await loginAs(page, env, 'mock_super_admin', /\/admin$/);
     await page.goto(PAGE_PATH);
-    await page.evaluate(() => document.fonts.ready);
+    await waitForFontsReady(page);
     await hideNonPr3FloatingEntry(page);
     await expectFontScale(page, 'M');
     await focusTab(page, '维修申请');
     await expect(activePane(page).getByText(MODEL_WARNING_TEXT)).toBeVisible();
 
-    const snapshot = await measureActivePane(page);
-    expectBaseline(snapshot, '16px');
-    expect(snapshot.geometry.modelWarningVisible).toBe(true);
+    const pageSnapshot = await measureKbPage(page);
+    expectKbPageBaseline(pageSnapshot, 1440);
 
-    const pngPath = testInfo.outputPath('r3-repair-requests-M-model-warning-1440x900.png');
+    // 告警在知识库卡内、与工具区/表格相邻；垂直间距只能来自 .kb-card-state 自身 padding
+    // （单一真源），不得再叠加外层 margin / flex gap（上一轮 14+16=30px 重复留白的回归点）
+    const geometry = await page.evaluate(() => {
+      const pane = document.querySelector('.ant-tabs-tabpane-active');
+      if (pane === null) throw new Error('缺少激活标签面板');
+      const card = pane.querySelector('.kb-card');
+      const toolbar = pane.querySelector('.kb-toolbar');
+      const warning = Array.from(pane.querySelectorAll('.ant-alert')).find((el) =>
+        (el.textContent ?? '').includes('设备型号选项加载失败'),
+      );
+      const table = pane.querySelector('.kb-table-scope');
+      if (card === null || toolbar === null || warning === undefined || table === null) {
+        throw new Error('告警态缺少卡/工具区/告警/表格');
+      }
+      const toolbarRect = toolbar.getBoundingClientRect();
+      const warningRect = warning.getBoundingClientRect();
+      const tableRect = table.getBoundingClientRect();
+      const block = warning.parentElement;
+      if (block === null) throw new Error('告警缺少包裹块');
+      const blockStyle = getComputedStyle(block);
+      return {
+        alertMargin: getComputedStyle(warning).margin,
+        blockPaddingBottom: +Number.parseFloat(blockStyle.paddingBottom).toFixed(2),
+        blockPaddingTop: +Number.parseFloat(blockStyle.paddingTop).toFixed(2),
+        gapAfterToolbar: +(warningRect.top - toolbarRect.bottom).toFixed(2),
+        gapBeforeTable: +(tableRect.top - warningRect.bottom).toFixed(2),
+        warningInsideCard: card.contains(warning),
+      };
+    });
+    expect(geometry.warningInsideCard).toBe(true);
+    // 唯一间距来源：区块 padding（上下对称），无额外 margin 叠加
+    expect(geometry.alertMargin).toBe('0px');
+    expect(geometry.gapAfterToolbar).toBe(geometry.blockPaddingTop);
+    expect(geometry.gapBeforeTable).toBe(geometry.blockPaddingBottom);
+
+    const pngPath = testInfo.outputPath('r7-repair-requests-M-model-warning-1440x900.png');
     await page.screenshot({ path: pngPath });
     expect(readPngDimensions(pngPath)).toEqual({ height: 900, width: 1440 });
 
-    const evidenceJson = path.join(testInfo.outputPath(), 'r3-computed-styles-model-warning.json');
+    const evidenceJson = path.join(testInfo.outputPath(), 'r7-kb-evidence-model-warning.json');
     writeFileSync(
       evidenceJson,
-      JSON.stringify({ 'r3-repair-requests-M-model-warning-1440x900': snapshot }, null, 2),
+      JSON.stringify(
+        { 'r7-repair-requests-M-model-warning-1440x900': { geometry, page: pageSnapshot } },
+        null,
+        2,
+      ),
     );
     console.log(`[visual-evidence] ${evidenceJson}`);
   });
 
-  test('S→M→L→M 往返：L 无遮挡、回 M 基准数值恢复', async ({ page }) => {
-    test.setTimeout(60_000);
+  test('S→M→L→M 往返：L 下搜索/筛选/分页/操作/退出可达、无整页横滚；回 M 恢复基准', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
     const env = readBackendEnv();
 
     await page.setViewportSize({ height: 900, width: 1440 });
     await loginAs(page, env, 'mock_super_admin', /\/admin$/);
     await page.goto(PAGE_PATH);
-    await page.evaluate(() => document.fonts.ready);
+    await waitForFontsReady(page);
     await expectFontScale(page, 'M');
     await focusTab(page, '维修申请');
 
-    const baseline = await measureActivePane(page);
-    expectBaseline(baseline, '16px');
+    const baseline = { page: await measureKbPage(page), pane: await measureKbPane(page) };
+    expectKbPageBaseline(baseline.page, 1440);
+    expectKbPaneBaseline(baseline.pane);
 
     await clickFontScale(page, 'S');
-    expectBaseline(await measureActivePane(page), '14px');
+    expect((await measureKbPage(page)).rootFontSize).toBe('14px');
 
     await clickFontScale(page, 'L');
-    expectBaseline(await measureActivePane(page), '18px');
-    // L 档「无遮挡」：筛选栏不内部横向溢出、位于表格面板之上不重叠、容器右缘不越视口
-    const largeLayout = await page.evaluate(() => {
-      const pane = document.querySelector<HTMLElement>('.ant-tabs-tabpane-active');
-      if (pane === null) throw new Error('缺少激活标签面板');
-      const filterBar = pane.querySelector<HTMLElement>('.filter-bar');
-      const container = pane.querySelector<HTMLElement>('.table-container');
-      if (filterBar === null || container === null) throw new Error('激活标签缺少公共容器');
-      return {
-        containerRight: container.getBoundingClientRect().right,
-        filterBarBottom: filterBar.getBoundingClientRect().bottom,
-        filterBarInnerOverflow: filterBar.scrollWidth - filterBar.clientWidth,
-        tableTop: container.getBoundingClientRect().top,
-        viewportWidth: document.documentElement.clientWidth,
-      };
-    });
-    expect(largeLayout.filterBarInnerOverflow).toBeLessThanOrEqual(0);
-    expect(largeLayout.filterBarBottom).toBeLessThanOrEqual(largeLayout.tableTop);
-    expect(largeLayout.containerRight).toBeLessThanOrEqual(largeLayout.viewportWidth);
+    expect((await measureKbPage(page)).rootFontSize).toBe('18px');
+
+    // L 档可达性：搜索 / 筛选 / 分页 / 操作 / 退出都可到达，且无整页横滚
+    const pane = activePane(page);
+    const searchInput = pane.locator('.kb-search input');
+    await expect(searchInput).toBeVisible();
+    await expect(searchInput).toBeEnabled();
+    const filterButton = pane.getByRole('button', { name: '筛选' });
+    await expect(filterButton).toBeVisible();
+    await expect(filterButton).toBeEnabled();
+    await filterButton.click();
+    await expect(pane.locator('.kb-filter-panel')).toBeVisible();
+    await filterButton.click();
+    await expect(pane.locator('.kb-filter-panel')).toHaveCount(0);
+    await expect(pane.locator('.kb-card-footer .ant-pagination')).toBeVisible();
+    // AntD 两字按钮会在中间插入全角空格（「摘 要」），用正则容忍；
+    // 固定列类名 AntD 6 为 fix-end（旧的 fix-right 不再出现），据此确认操作列确实固定
+    await expect(
+      pane
+        .locator('.ant-table-cell-fix-end')
+        .getByRole('button', { name: /摘\s*要/ })
+        .first(),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: /退出登录/ })).toBeVisible();
+    expect((await measureKbPage(page)).dock).toBeLessThanOrEqual(0);
 
     await clickFontScale(page, 'M');
-    expect(await measureActivePane(page)).toEqual(baseline);
+    const restored = { page: await measureKbPage(page), pane: await measureKbPane(page) };
+    expect(restored).toEqual(baseline);
+  });
+
+  test('共享外观回归：登录/用户管理/客户申请/独立参考资料页保持默认外观', async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(120_000);
+    const env = readBackendEnv();
+    const evidenceDir = testInfo.outputPath();
+    mkdirSync(evidenceDir, { recursive: true });
+    const evidence: Record<string, unknown> = {};
+
+    /** 默认外观探针：不得出现知识库变体类；工作区保持渐变 + 内容 1280px 上限。 */
+    const readShell = () =>
+      page.evaluate(() => {
+        const workspace = document.querySelector<HTMLElement>('.app-workspace');
+        const main = document.querySelector<HTMLElement>('.app-main');
+        return {
+          kbVariantNodes: document.querySelectorAll(
+            '.kb-page, .kb-card, .page-header--kb, .app-workspace--knowledge-base, .app-main--knowledge-base',
+          ).length,
+          mainMaxWidth: main === null ? null : getComputedStyle(main).maxWidth,
+          workspaceBackgroundColor:
+            workspace === null ? null : getComputedStyle(workspace).backgroundColor,
+          workspaceBackgroundImage:
+            workspace === null ? null : getComputedStyle(workspace).backgroundImage,
+        };
+      });
+
+    const expectDefaultShell = async (label: string): Promise<void> => {
+      const shell = await readShell();
+      expect(shell.kbVariantNodes, `${label} 不应出现知识库变体节点`).toBe(0);
+      if (shell.mainMaxWidth !== null) {
+        expect(shell.mainMaxWidth, `${label} 应保持 1280px 上限`).toBe('1280px');
+      }
+      if (shell.workspaceBackgroundImage !== null) {
+        expect(shell.workspaceBackgroundImage, `${label} 应保持渐变底`).toContain(
+          'linear-gradient',
+        );
+      }
+      evidence[label] = shell;
+    };
+
+    const shoot = async (fileName: string): Promise<void> => {
+      const pngPath = path.join(evidenceDir, fileName);
+      await page.screenshot({ path: pngPath });
+      evidence[fileName] = readPngDimensions(pngPath);
+    };
+
+    await page.setViewportSize({ height: 900, width: 1440 });
+
+    // 1) 登录页（未登录）
+    await page.goto('/login');
+    await expect(page.getByRole('button', { name: /登\s*录/ })).toBeVisible();
+    await expectDefaultShell('login');
+    await shoot('r7-shared-login-1440x900.png');
+
+    // 2) 用户管理（SUPER_ADMIN）
+    await loginAs(page, env, 'mock_super_admin', /\/admin$/);
+    await page.goto('/admin/users');
+    await expect(page.getByRole('heading', { name: '用户管理' })).toBeVisible();
+    await expectDefaultShell('admin-users');
+    await shoot('r7-shared-admin-users-1440x900.png');
+
+    // 3) 独立参考资料页（SUPER_ADMIN）
+    await page.goto('/reference-documents');
+    await expect(page.getByRole('heading', { name: '参考资料库' })).toBeVisible();
+    await expectDefaultShell('reference-documents');
+    await shoot('r7-shared-reference-documents-1440x900.png');
+
+    // 对照：知识库页确实启用了变体（同登录态下页面之间互不影响）
+    await page.goto(PAGE_PATH);
+    await expect(page.getByRole('heading', { name: '文档数据库' })).toBeVisible();
+    const kbShell = await readShell();
+    expect(kbShell.kbVariantNodes).toBeGreaterThan(0);
+    expect(kbShell.workspaceBackgroundColor).toBe(KB_BASELINE.workspace.backgroundColor);
+    expect(kbShell.mainMaxWidth).toBe('none');
+    evidence['admin-document-database'] = kbShell;
+
+    // 4) 客户申请（CUSTOMER）：退出后换号登录
+    await page.getByRole('button', { name: /退出登录/ }).click();
+    await expect(page).toHaveURL(/\/login/);
+    await loginAs(page, env, 'mock_customer_alpha', /\/customer$/);
+    await page.goto('/customer/repair-requests');
+    await expect(page.getByRole('heading', { name: '我的维修申请' })).toBeVisible();
+    await expectDefaultShell('customer-repair-requests');
+    await shoot('r7-shared-customer-repair-requests-1440x900.png');
+
+    const evidenceJson = path.join(evidenceDir, 'r7-shared-look-regression.json');
+    writeFileSync(evidenceJson, JSON.stringify(evidence, null, 2));
+    console.log(`[visual-evidence] ${evidenceJson}`);
   });
 });

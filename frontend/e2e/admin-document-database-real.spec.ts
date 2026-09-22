@@ -200,7 +200,7 @@ test.describe('real backend admin document database', () => {
     test.setTimeout(90_000);
     const env = readBackendEnv();
 
-    // Node 侧先读真实统计：页面四张卡片必须与 API 一致（不硬编码共享库数字）
+    // Node 侧先读真实统计：页面四分区汇总条必须与 API 一致（不硬编码共享库数字）
     const statsResponse = await realGraphqlCall(env, STATS_QUERY, {}, 'mock_super_admin');
     const stats = (
       statsResponse.body as {
@@ -212,16 +212,18 @@ test.describe('real backend admin document database', () => {
     await page.goto(PAGE_PATH);
     await expect(page.getByRole('heading', { name: '文档数据库' })).toBeVisible();
 
-    const expectStatCard = (label: string, value: number) =>
-      expect(page.locator('.stat-card', { hasText: label }).locator('.stat-card-value')).toHaveText(
-        String(value),
-      );
-    expectStatCard('维修申请', stats.repairRequestTotal);
-    expectStatCard('参考资料', stats.referenceDocumentTotal);
-    expectStatCard('AI 会话', stats.aiConversationTotal);
-    expectStatCard('AI 报告', stats.aiReportTotal);
+    // PR3 R7 S4：四张 StatCard 已改为单卡四分区紧凑汇总条（.kb-summary）；
+    // 数值后附口径小字，用 toContainText 容忍（数字仍为真实 API 值）
+    const expectSummaryCell = (label: string, value: number) =>
+      expect(
+        page.locator('.kb-summary-cell', { hasText: label }).locator('.kb-summary-value'),
+      ).toContainText(String(value));
+    expectSummaryCell('维修申请', stats.repairRequestTotal);
+    expectSummaryCell('参考资料', stats.referenceDocumentTotal);
+    expectSummaryCell('AI 会话', stats.aiConversationTotal);
+    expectSummaryCell('AI 报告', stats.aiReportTotal);
 
-    // 维修申请标签：编号前缀收窄到 seed 行，已软删的 920004 不可见，真实 total
+    // 维修申请标签：主搜索（卡内工具区）编号前缀收窄到 seed 行，已软删的 920004 不可见
     await page.getByRole('tab', { name: '维修申请' }).click();
     await activePane(page).getByPlaceholder('按申请编号搜索').fill(SEED_REQUEST_KEYWORD);
     for (const requestNo of SEED_VISIBLE_REQUEST_NOS) {
@@ -231,11 +233,13 @@ test.describe('real backend admin document database', () => {
       0,
     );
 
-    // AI 会话标签：组合筛选（关联申请编号 + 会话状态=进行中）唯一定位 seed 930002
+    // AI 会话标签：组合筛选（关联申请编号 + 会话状态=进行中）唯一定位 seed 930002；
+    // 会话状态等精确条件在「筛选」展开区内（PR3 R7 S5）
     await page.getByRole('tab', { name: 'AI 会话' }).click();
     await activePane(page)
       .getByPlaceholder('按关联申请编号搜索')
       .fill(SEED_ACTIVE_CONVERSATION_REQUEST_NO);
+    await activePane(page).getByRole('button', { name: '筛选' }).click();
     await activePane(page).getByRole('combobox').click();
     await page.locator('.ant-select-item-option', { hasText: '进行中' }).click();
     await expect(activePane(page).getByText('共 1 条')).toBeVisible();
@@ -256,8 +260,9 @@ test.describe('real backend admin document database', () => {
     await detailDrawer(page).getByRole('button', { name: 'Close' }).click();
     await expect(detailDrawer(page)).toHaveCount(0);
 
-    // AI 报告标签：报告类型筛选唯一定位 seed 950001，正文 Drawer 含权威 requestNo
+    // AI 报告标签：报告类型筛选唯一定位 seed 950001（精确条件在「筛选」展开区，PR3 R7 S5）
     await page.getByRole('tab', { name: 'AI 报告' }).click();
+    await activePane(page).getByRole('button', { name: '筛选' }).click();
     await activePane(page).getByPlaceholder('按报告类型筛选').fill('FAULT_DIAGNOSIS');
     await expect(
       activePane(page).getByRole('cell', { name: SEED_FAULT_DIAGNOSIS_REPORT_TITLE }),
@@ -281,7 +286,7 @@ test.describe('real backend admin document database', () => {
     // 刷新：只读聚合页恢复默认态（统计与默认标签重新加载）
     await page.goto(PAGE_PATH);
     await expect(page.getByRole('heading', { name: '文档数据库' })).toBeVisible();
-    expectStatCard('AI 报告', stats.aiReportTotal);
+    expectSummaryCell('AI 报告', stats.aiReportTotal);
     await expect(page.getByRole('tab', { name: '参考资料' })).toHaveAttribute(
       'aria-selected',
       'true',
@@ -296,9 +301,11 @@ test.describe('real backend admin document database', () => {
     await loginAs(page, env, 'mock_super_admin', /\/admin$/);
     await page.goto(PAGE_PATH);
 
-    // 维修申请：故障码等值筛选（后端 errorCode 契约为等值匹配，非 LIKE）+ 接单状态组合
+    // 维修申请：故障码等值筛选（后端 errorCode 契约为等值匹配，非 LIKE）+ 接单状态组合；
+    // 精确条件均位于「筛选」展开区（PR3 R7 S5）
     // seed 0001 = E-CHUCK-101 待接单，0002 = E-LASER-207 已接单
     await page.getByRole('tab', { name: '维修申请' }).click();
+    await activePane(page).getByRole('button', { name: '筛选' }).click();
     await activePane(page).getByPlaceholder('输入完整故障码').fill('E-CHUCK-101');
     await expect(activePane(page).getByRole('cell', { name: 'MOCK-RR-2026-0001' })).toBeVisible();
     await activePane(page).getByRole('combobox').nth(0).click();
@@ -320,8 +327,9 @@ test.describe('real backend admin document database', () => {
     await activePane(page).locator('.ant-select-clear').click();
     await expect(activePane(page).getByRole('cell', { name: 'MOCK-RR-2026-0002' })).toBeVisible();
 
-    // AI 会话：状态筛选已完成 → 进行中标签消失；清空恢复
+    // AI 会话：状态筛选已完成 → 进行中标签消失；清空恢复（状态在「筛选」展开区）
     await page.getByRole('tab', { name: 'AI 会话' }).click();
+    await activePane(page).getByRole('button', { name: '筛选' }).click();
     await activePane(page).getByRole('combobox').click();
     await page.locator('.ant-select-item-option', { hasText: '已完成' }).click();
     await expect(activePane(page).getByText('进行中', { exact: true })).toHaveCount(0);
@@ -381,6 +389,7 @@ test.describe('real backend admin document database', () => {
       await loginAs(page, env, 'mock_super_admin', /\/admin$/);
       await page.goto(PAGE_PATH);
       await page.getByRole('tab', { name: '维修申请' }).click();
+      await activePane(page).getByRole('button', { name: '筛选' }).click();
       await activePane(page).getByPlaceholder('输入完整故障码').fill(RUN_ERROR_CODE);
 
       // 第 1 页：真实 total 12，pageSize 10 → 10 行 + 两页指示
