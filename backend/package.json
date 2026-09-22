@@ -19,6 +19,7 @@
     "start:prod": "cross-env NODE_ENV=production node dist/bootstraps/api/main",
     "lint:usecase-normalize-guard": "node scripts/check-usecase-normalize-guard.js",
     "lint:architecture-fixtures": "node scripts/check-eslint-architecture-fixtures.mjs",
+    "check:entity-scope": "node scripts/check-entity-migration-scope.mjs",
     "lint": "npm run capability:docs:check && npm run lint:usecase-normalize-guard && npm run lint:architecture-fixtures && eslint \"{src,apps,libs,test,scripts}/**/*.ts\" --cache --cache-location .eslintcache --fix",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.tools.json --noEmit",
     "test:unit": "cross-env TZ=Asia/Shanghai jest",

@@ -1,6 +1,16 @@
 import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
 
 /**
+ * AI 会话共享枚举兼容出口。
+ *
+ * 正本（唯一行为真源）在共享类型层 `@app-types/models/ai-conversation.types`：
+ * adapter / DTO / enum registry 直接引用它，避免 adapter 运行时依赖 modules 实现。
+ * 此处仅做转发，使既有 Entity 的 `'../lithography.types'` import 路径保持不变
+ * （PR3 不修改 AI Entity 文件范围），不复制任何字符串值。
+ */
+export { AiConversationStatus, AiMessageRole } from '@app-types/models/ai-conversation.types';
+
+/**
  * 设备型号读侧稳定视图（客户端可见字段）
  */
 export type EquipmentModelView = {

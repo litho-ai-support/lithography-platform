@@ -1,4 +1,4 @@
-import { AiMessageRole } from '@app-types/models/ai-conversation.types';
+import { AiMessageRole } from '../lithography.types';
 import {
   Check,
   Column,
