@@ -81,6 +81,28 @@
   --empty-bg: #f8fafc;
   --empty-border: #cbd5e1;
   --empty-text: #94a3b8;
+  /* gkj 知识库页（#knowledge-base-page，PR3 R7）：页面级 opt-in 变体常量，仅
+     /admin/document-database 消费；与通用 panel/search 基准不同（基准表第 6 节）。
+     禁止其他页面消费本组变量；组件不得散落 raw hex */
+  --kb-workspace-bg: #f3f4f6;
+  --kb-card-bg: #ffffff;
+  --kb-card-border: #e5e7eb;
+  --kb-card-radius: 10px;
+  --kb-card-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+  --kb-divider: #f1f5f9;
+  --kb-primary: #2563eb;
+  --kb-primary-hover: #3b82f6;
+  --kb-primary-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --kb-on-primary: #ffffff;
+  --kb-text-body: #334155;
+  --kb-text-muted: #64748b;
+  --kb-text-faint: #94a3b8;
+  --kb-text-tool: #475569;
+  --kb-table-head-bg: #f8fafc;
+  --kb-table-head-border: #e5e7eb;
+  --kb-table-row-hover: #f8fbff;
+  --kb-search-bg: #f8fafc;
+  --kb-search-border: #e2e8f0;
 }
 
 /* 依赖 AntD CSS 变量的别名只能定义在真正拥有 app-theme 的作用域：
@@ -540,6 +562,293 @@ body {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+/* ===== 知识库页 opt-in 变体（PR3 R7；仅 /admin/document-database 消费）=====
+   原型 #knowledge-base-page / .kb-card / .kb-table；与通用 panel/search 基准是两套视觉语言
+   （基准表 frontend/docs/gkj-visual-baseline.md 第 6 节）。默认公共组件样式保持原值：
+   禁止全局覆盖 .table-container / .ant-table，禁止其他页面消费本区类与 --kb-* 变量。 */
+
+/* 工作区变体：纯色底（--kb-workspace-bg）+ 占满侧栏后剩余宽度（其他页面保持渐变 + 1280px 上限） */
+.app-workspace--knowledge-base {
+  background: var(--kb-workspace-bg);
+  justify-content: flex-start;
+}
+
+.app-main--knowledge-base {
+  max-width: none;
+}
+
+.kb-page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 页头变体：10px eyebrow / 20-28 标题 / 12-16 简介（通用 10-24-14 层级不变） */
+.page-header--kb {
+  margin-bottom: 1.25rem;
+}
+
+.page-header--kb .page-header-content {
+  max-width: none;
+}
+
+.page-header--kb .page-eyebrow {
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  line-height: 1.5;
+}
+
+.page-header--kb .page-title {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+}
+
+.page-header--kb .page-description {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  max-width: none;
+}
+
+.page-header--kb .page-header-extra {
+  padding-top: 0;
+}
+
+/* 知识库卡：10px 圆角纯白卡 + 轻阴影，外壳不额外加 padding（原型 .kb-card） */
+.kb-card {
+  background: var(--kb-card-bg);
+  border: 1px solid var(--kb-card-border);
+  border-radius: var(--kb-card-radius);
+  box-shadow: var(--kb-card-shadow);
+}
+
+/* 四分区紧凑汇总条：业务保留四类真实统计（原型三分区为演示元数据，属登记偏差），
+   总高 67.5px（border-box，与原型 .kb-card.mb-4 实测一致）
+   = 2 边框 + 16 + 13.5 + 4 + 16 + 16（label/value 行高与原型 text-[9px]/text-xs 相同） */
+.kb-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 1rem;
+}
+
+.kb-summary-cell {
+  min-width: 0;
+  padding: 1rem;
+}
+
+.kb-summary-cell + .kb-summary-cell {
+  border-left: 1px solid var(--kb-divider);
+}
+
+.kb-summary-label {
+  color: var(--kb-text-faint);
+  font-size: 0.5625rem;
+  letter-spacing: 0.05em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.kb-summary-value {
+  color: var(--kb-text-body);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1rem;
+  margin-top: 0.25rem;
+}
+
+/* 卡内工具区：与表格同卡，12px padding + 1px 底线（原型 p-3 / border-slate-100） */
+.kb-toolbar {
+  align-items: center;
+  border-bottom: 1px solid var(--kb-divider);
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+}
+
+/* 主搜索框：36px 高 / 6px 圆角 / 浅底 + 描边（原型 bg-slate-50 / border-slate-200）；图标 16×16 描边 */
+.kb-search {
+  align-items: center;
+  background: var(--kb-search-bg);
+  border: 1px solid var(--kb-search-border);
+  border-radius: 6px;
+  display: flex;
+  flex: 1;
+  height: 2.25rem;
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.kb-search svg {
+  color: var(--kb-text-faint);
+  flex-shrink: 0;
+  height: 1rem;
+  margin-right: 8px;
+  width: 1rem;
+}
+
+.kb-search input {
+  background: transparent;
+  border: 0;
+  color: var(--kb-text-body);
+  flex: 1;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  min-width: 0;
+  outline: none;
+  padding: 0;
+}
+
+.kb-search input::placeholder {
+  color: var(--kb-text-faint);
+}
+
+/* 工具按钮：36px 高 / 6px 圆角 / 白底 + 描边 / 12px tool 文字色 */
+.kb-toolbar-button {
+  background: var(--kb-card-bg);
+  border: 1px solid var(--kb-search-border);
+  border-radius: 6px;
+  color: var(--kb-text-tool);
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  height: 2.25rem;
+  padding: 0 12px;
+}
+
+/* 紧凑表格主题：仅作用于挂 .kb-table-scope 的容器内 AntD Table（原型 .kb-table 密度）；
+   4 类选择器稳赢 AntD cssinjs 的 :where() 低特异性注入样式 */
+.kb-table-scope .ant-table {
+  background: transparent;
+  color: var(--kb-text-body);
+  font-size: 0.6875rem;
+}
+
+.kb-table-scope .ant-table .ant-table-thead > tr > th.ant-table-cell {
+  background: var(--kb-table-head-bg);
+  border-bottom: 1px solid var(--kb-table-head-border);
+  color: var(--kb-text-muted);
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 0.625rem 0.5625rem;
+  white-space: nowrap;
+}
+
+.kb-table-scope .ant-table .ant-table-tbody > tr > td.ant-table-cell {
+  border-bottom: 1px solid var(--kb-divider);
+  line-height: 1.5;
+  padding: 0.625rem 0.5625rem;
+}
+
+.kb-table-scope .ant-table .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell,
+.kb-table-scope .ant-table .ant-table-tbody > tr > td.ant-table-cell-row-hover {
+  background: var(--kb-table-row-hover);
+}
+
+/* 卡底部分页/统计行（原型 px-4 py-3 / 10px / text-slate-400） */
+.kb-card-footer {
+  align-items: center;
+  color: var(--kb-text-faint);
+  display: flex;
+  font-size: 0.625rem;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+
+/* 卡内状态区（加载 / 失败 / 空）：占表格区域，保留卡内边距（四态同卡要求） */
+.kb-card-state {
+  padding: 1rem;
+}
+
+/* 筛选展开区：主搜索之外的精确条件（业务扩展，原型无展开态） */
+.kb-filter-panel {
+  align-items: center;
+  border-bottom: 1px solid var(--kb-divider);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+}
+
+/* 工具按钮 active 态：有生效筛选时提示（文字与边框转主蓝） */
+.kb-toolbar-button--active {
+  border-color: var(--kb-primary);
+  color: var(--kb-primary);
+}
+
+/* 主搜索框清除按钮（有输入时出现；原型无清除，属可用性保留） */
+.kb-search-clear {
+  background: transparent;
+  border: 0;
+  color: var(--kb-text-faint);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 0.875rem;
+  line-height: 1;
+  margin-left: 8px;
+  padding: 0;
+}
+
+.kb-search-clear:hover {
+  color: var(--kb-text-tool);
+}
+
+/* 汇总数值后的口径小字（业务口径提示，不破坏 67.5px 行高）：
+   line-height:1 收窄自身行盒，避免 9px 内联元素的 baseline descent 把 12px 行盒撑高到 17px */
+.kb-summary-hint {
+  color: var(--kb-text-faint);
+  font-size: 0.5625rem;
+  font-weight: 400;
+  line-height: 1;
+  margin-left: 0.25rem;
+}
+
+/* 页头右上主操作（仅参考资料 Tab 激活时渲染）：原型 bg-blue-600 / rounded-lg / shadow-sm；
+   包一层 wrapper 覆盖 AntD Button 默认样式（命名规则禁止给 AntD 组件加类名） */
+.kb-primary-action .ant-btn.ant-btn-color-primary.ant-btn-variant-solid {
+  background: var(--kb-primary);
+  border-color: var(--kb-primary);
+  border-radius: 8px;
+  box-shadow: var(--kb-primary-shadow);
+  color: var(--kb-on-primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  height: 2rem;
+  padding: 0 0.75rem;
+}
+
+.kb-primary-action
+  .ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(.ant-btn-disabled):hover {
+  background: var(--kb-primary-hover);
+  border-color: var(--kb-primary-hover);
+  color: var(--kb-on-primary);
+}
+
+/* 四 Tab 导航紧凑化（业务必要偏差：原型无 Tabs；统一知识库字级与主蓝） */
+.kb-tabs .ant-tabs-nav {
+  margin-bottom: 1rem;
+}
+
+.kb-tabs .ant-tabs-nav::before {
+  border-bottom-color: var(--kb-divider);
+}
+
+.kb-tabs .ant-tabs-tab {
+  font-size: 0.75rem;
+  padding: 0.625rem 0;
+}
+
+.kb-tabs .ant-tabs-tab .ant-tabs-tab-btn {
+  color: var(--kb-text-muted);
+}
+
+.kb-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--kb-primary);
+  font-weight: 600;
+}
+
+.kb-tabs .ant-tabs-ink-bar {
+  background: var(--kb-primary);
 }
 
 .error-preview {

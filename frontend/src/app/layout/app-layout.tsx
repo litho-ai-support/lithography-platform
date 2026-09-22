@@ -80,6 +80,11 @@ type AppLayoutProps = {
 // 断点内用户仍可手动切换。任务书验收视口（1366×768、1440×900）不受影响。
 const NARROW_VIEWPORT_QUERY = '(max-width: 1024px)';
 
+// 知识库页精确路由（PR3 R7）：仅本页应用工作区视觉变体——
+// 原型 #knowledge-base-page 纯色底 + 占满侧栏后剩余宽度；
+// 其他页面继续通用渐变 + 1280px 上限（frontend/docs/gkj-visual-baseline.md 第 6 节）。
+const KNOWLEDGE_BASE_PATH = '/admin/document-database';
+
 export function AppLayout({ children }: AppLayoutProps = {}) {
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isSidecarOpen, setIsSidecarOpen] = useState(false);
@@ -95,6 +100,8 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
   const location = useLocation();
   const navigate = useNavigate();
   const activeRole = session?.role ?? null;
+  // 知识库页工作区变体按精确路由开启（PR3 R7），不用前缀匹配避免误伤其他页面
+  const isKnowledgeBasePage = location.pathname === KNOWLEDGE_BASE_PATH;
   const navigationItems = useMemo(() => getNavigationItems(undefined, activeRole), [activeRole]);
   const activeNavigationPath = useMemo(
     () => resolveActiveNavigationPath(location.pathname, navigationItems),
@@ -159,6 +166,11 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, []);
+
+  const workspaceClassName = isKnowledgeBasePage
+    ? 'app-workspace app-workspace--knowledge-base'
+    : 'app-workspace';
+  const mainClassName = isKnowledgeBasePage ? 'app-main app-main--knowledge-base' : 'app-main';
 
   return (
     <div className={`app-shell ${APP_THEME_CSS_VAR_KEY}`}>
@@ -249,9 +261,10 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
         </div>
       </aside>
 
-      {/* 工作区先占余宽（原型 workspace-page：渐变+22px 上距），内容再入 1280px 内层 */}
-      <main className="app-workspace">
-        <div className="app-main">{children ?? <Outlet />}</div>
+      {/* 工作区先占余宽（原型 workspace-page：渐变+22px 上距），内容再入 1280px 内层；
+          知识库页按精确路由切换纯色铺满变体，其余页面保持通用基准（PR3 R7） */}
+      <main className={workspaceClassName}>
+        <div className={mainClassName}>{children ?? <Outlet />}</div>
       </main>
 
       {!isSidecarOpen ? (

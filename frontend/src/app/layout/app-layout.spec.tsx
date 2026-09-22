@@ -134,6 +134,21 @@ describe('AppLayout（S3 壳层）', () => {
     expect(screen.getByRole('link', { name: '首页' })).not.toHaveAttribute('aria-current', 'page');
   });
 
+  it('文档数据库路由应用知识库工作区变体，其他页面保持通用基准（PR3 R7）', () => {
+    useAuthSessionMock.mockReturnValue(sessionFor('SUPER_ADMIN'));
+    const view = renderLayout('/admin/document-database');
+
+    expect(document.querySelector('main.app-workspace--knowledge-base')).not.toBeNull();
+    expect(document.querySelector('.app-main--knowledge-base')).not.toBeNull();
+
+    view.unmount();
+    renderLayout('/admin/users');
+
+    // 变体按精确路由开启：其他页面不得继承纯色铺满（防前缀匹配误伤）
+    expect(document.querySelector('.app-workspace--knowledge-base')).toBeNull();
+    expect(document.querySelector('.app-main--knowledge-base')).toBeNull();
+  });
+
   it('底部展示真实当前用户卡与退出入口', () => {
     useAuthSessionMock.mockReturnValue(sessionFor('ENGINEER'));
     renderLayout('/engineer/repair-requests');
