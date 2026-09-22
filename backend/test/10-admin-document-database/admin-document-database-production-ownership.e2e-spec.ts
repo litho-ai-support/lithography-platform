@@ -33,6 +33,9 @@ import { CreateAccountUsecase } from '@src/usecases/account/create-account.useca
 import { assertDataSourceOnAllowedE2eDatabase } from '../utils/e2e-db-guard';
 import { createTestAccount, type TestAccountConfig } from '../utils/test-accounts';
 import {
+  PRODUCTION_FIXTURE_MARKERS,
+  PRODUCTION_SENTINEL,
+  PRODUCTION_SENTINEL_MODEL_SPEC,
   cleanupProductionFixtureByIds,
   cleanupProductionFixtureResidue,
   cleanupProductionSentinelChain,
@@ -62,12 +65,15 @@ const FOREIGN = {
   acceptedRequestNo: 'E2E-PR3-COLLISION-ACCEPTED',
   sentinelModelCode: 'E2E-PR3-COLLISION-SENTINEL-MODEL',
   sentinelRequestNo: 'E2E-PR3-COLLISION-SENTINEL',
+  /** 外部申请：编号与归属均不属于 fixture，仅用于引用本 spec 账号 */
+  externalRefRequestNo: 'E2E-PR3-FOREIGN-EXT-REF',
 } as const;
 
 const FOREIGN_REQUEST_NOS: readonly string[] = [
   FOREIGN.openRequestNo,
   FOREIGN.acceptedRequestNo,
   FOREIGN.sentinelRequestNo,
+  FOREIGN.externalRefRequestNo,
 ];
 
 const FOREIGN_MODEL_CODES: readonly string[] = [FOREIGN.modelCode, FOREIGN.sentinelModelCode];
@@ -525,5 +531,168 @@ describe('production fixture 所有权：固定主键碰撞不得影响外部数
       .getRepository(UserInfoEntity)
       .findOne({ where: { accountId: foreignAccountId } });
     expect(userInfo).not.toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // P2（0922）：自然标记命中 ≠ 归属。「专属 loginName / modelCode」只用于**定位**，
+  // 下面三个反例证明：字段不同、或引用关系不属于自身时，必须失败关闭且外部数据零变化。
+  // ---------------------------------------------------------------------------
+
+  it('反例 1：同 loginName、字段不同的账号不得被回收或复用', async () => {
+    const accountRepo = dataSource.getRepository(AccountEntity);
+    // 库里预先存在与哨兵账号同名、但邮箱/状态/角色都不属于本 spec 的账号
+    const foreignSameNameAccount = await accountRepo.save(
+      accountRepo.create({
+        loginName: PRODUCTION_SENTINEL.loginName,
+        loginEmail: 'pr3.foreign.same-name@example.com',
+        loginPassword: 'Pr3ForeignSameName@2024',
+        status: AccountStatus.SUSPENDED,
+        identityHint: IdentityTypeEnum.ENGINEER,
+      }),
+    );
+    const before = await accountRepo.findOne({ where: { id: foreignSameNameAccount.id } });
+    expect(before).not.toBeNull();
+
+    try {
+      // 定位结果不包含该账号：自然标记命中但字段核验不通过，不算本 spec 账号
+      expect(await findProductionFixtureAccountIds(dataSource)).toEqual([]);
+
+      // 崩溃残留恢复：失败关闭，不删除任何行
+      await expect(cleanupProductionFixtureResidue(dataSource)).rejects.toThrow(/归属校验/);
+
+      // 哨兵链复用：不得复用（更不得覆盖）同名但字段不同的账号
+      await expect(
+        ensureProductionSentinelChain({
+          dataSource,
+          ownership: createProductionFixtureOwnership(),
+          createAccountUsecase: app.get(CreateAccountUsecase),
+        }),
+      ).rejects.toThrow(/归属校验/);
+
+      // 外部账号字段完全不变
+      expect(await accountRepo.findOne({ where: { id: foreignSameNameAccount.id } })).toEqual(
+        before,
+      );
+      // 失败关闭发生在任何写入之前：哨兵型号与哨兵申请均未被创建
+      expect(
+        await dataSource.getRepository(EquipmentModelEntity).count({
+          where: { modelCode: PRODUCTION_SENTINEL_MODEL_SPEC.modelCode },
+        }),
+      ).toBe(0);
+      expect(
+        await dataSource.getRepository(RepairRequestEntity).count({
+          where: { requestNo: PRODUCTION_FIXTURE_MARKERS.sentinelRequestNo },
+        }),
+      ).toBe(0);
+    } finally {
+      await accountRepo.delete({ id: foreignSameNameAccount.id });
+    }
+  });
+
+  it('反例 2：同 modelCode、字段不同的型号不得被回收或复用', async () => {
+    const modelRepo = dataSource.getRepository(EquipmentModelEntity);
+    // 库里预先存在与哨兵型号同编码、但名称/启用/排序都不属于本 spec 的型号
+    const foreignSameCodeModel = await modelRepo.save(
+      modelRepo.create({
+        modelCode: PRODUCTION_SENTINEL_MODEL_SPEC.modelCode,
+        modelName: '外部（非本 spec）同编码型号',
+        enabled: false,
+        sortOrder: 1,
+      }),
+    );
+    const before = await modelRepo.findOne({ where: { id: foreignSameCodeModel.id } });
+    expect(before).not.toBeNull();
+
+    try {
+      await expect(cleanupProductionFixtureResidue(dataSource)).rejects.toThrow(/归属校验/);
+      await expect(
+        ensureProductionSentinelChain({
+          dataSource,
+          ownership: createProductionFixtureOwnership(),
+          createAccountUsecase: app.get(CreateAccountUsecase),
+        }),
+      ).rejects.toThrow(/归属校验/);
+
+      // 外部型号字段完全不变
+      expect(await modelRepo.findOne({ where: { id: foreignSameCodeModel.id } })).toEqual(before);
+      // 失败关闭发生在任何写入之前：哨兵账号与哨兵申请均未被创建
+      expect(
+        await dataSource.getRepository(AccountEntity).count({
+          where: { loginName: PRODUCTION_SENTINEL.loginName },
+        }),
+      ).toBe(0);
+      expect(
+        await dataSource.getRepository(RepairRequestEntity).count({
+          where: { requestNo: PRODUCTION_FIXTURE_MARKERS.sentinelRequestNo },
+        }),
+      ).toBe(0);
+    } finally {
+      await modelRepo.delete({ id: foreignSameCodeModel.id });
+    }
+  });
+
+  it('反例 3：测试账号被不同 requestNo 的外部申请引用时，删除账号失败关闭', async () => {
+    const sentinelOwnership = createProductionFixtureOwnership();
+    const sentinelIds = await ensureProductionSentinelChain({
+      dataSource,
+      ownership: sentinelOwnership,
+      createAccountUsecase: app.get(CreateAccountUsecase),
+    });
+    // 本轮真正 INSERT 的行进 createdSentinelIds
+    expect(sentinelOwnership.createdSentinelIds.accountIds).toEqual([sentinelIds.accountId]);
+    expect(sentinelOwnership.recoveredOwnedIds.accountIds).toEqual([]);
+
+    // 再次 ensure：既有行字段校验通过 → 复用，落进 recoveredOwnedIds 而非 createdSentinelIds
+    const reuseOwnership = createProductionFixtureOwnership();
+    const reused = await ensureProductionSentinelChain({
+      dataSource,
+      ownership: reuseOwnership,
+      createAccountUsecase: app.get(CreateAccountUsecase),
+    });
+    expect(reused).toEqual(sentinelIds);
+    expect(reuseOwnership.createdSentinelIds.accountIds).toEqual([]);
+    expect(reuseOwnership.createdSentinelIds.repairRequestIds).toEqual([]);
+    expect(reuseOwnership.recoveredOwnedIds.accountIds).toEqual([sentinelIds.accountId]);
+    expect(reuseOwnership.recoveredOwnedIds.repairRequestIds).toEqual([
+      sentinelIds.repairRequestId,
+    ]);
+
+    const requestRepo = dataSource.getRepository(RepairRequestEntity);
+    // 外部申请（不同 requestNo、不同归属）引用了本 spec 账号
+    const externalRequest = await requestRepo.save(
+      requestRepo.create({
+        requestNo: FOREIGN.externalRefRequestNo,
+        customerAccountId: sentinelIds.accountId,
+        equipmentModelId: LEGACY_FIXED_IDS.modelId,
+        errorCode: 'FOREIGN-EXT-REF',
+        faultDescription: '外部申请：引用本 spec 账号，但编号与归属均不属于 fixture',
+        contentMd: '# E2E-PR3-FOREIGN-EXT-REF',
+        createdAt: new Date('2026-08-04T00:00:00.000Z'),
+        isAccepted: false,
+        acceptedByEngineerAccountId: null,
+        acceptedAt: null,
+        deprecated: false,
+        deletedAt: null,
+      }),
+    );
+    const beforeSentinel = await readProductionSentinelSnapshot(dataSource, sentinelIds);
+    const beforeExternal = await requestRepo.findOne({ where: { id: externalRequest.id } });
+
+    try {
+      // 不得按账号 ID 批量兜底删除账号的引用申请：失败关闭
+      await expect(cleanupProductionSentinelChain(dataSource, sentinelIds)).rejects.toThrow(
+        /账号引用申请/,
+      );
+
+      // 失败关闭发生在任何 DELETE 之前：哨兵链与外部申请均原样保留
+      expect(await readProductionSentinelSnapshot(dataSource, sentinelIds)).toEqual(beforeSentinel);
+      expect(await requestRepo.findOne({ where: { id: externalRequest.id } })).toEqual(
+        beforeExternal,
+      );
+    } finally {
+      // 外部申请先移除，哨兵链才可精确回收
+      await requestRepo.delete({ id: externalRequest.id });
+      await cleanupProductionSentinelChain(dataSource, sentinelIds);
+    }
   });
 });

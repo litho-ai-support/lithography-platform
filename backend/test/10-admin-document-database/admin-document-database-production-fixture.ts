@@ -11,6 +11,14 @@
 // - **崩溃残留恢复**：先按本 spec 专属标记（modelCode / requestNo / loginName，含 spec 名称
 //   与稳定前缀）定位，再核验关键字段与关联（客户账号、型号、接单工程师）均属于本 spec；
 //   校验不完整时**拒绝删除**并抛出可观察错误（失败关闭）。
+// - **自然标记命中 ≠ 归属**（0922 P2）：专属 loginName / modelCode 只用于**定位**，定位到之后
+//   必须逐字段核验（账号 loginName / loginEmail / status / 角色；型号 modelCode / modelName /
+//   enabled / sortOrder）——否则库中「同 loginName 但字段不同」「同 modelCode 但配置不同」的
+//   外部数据会被当成自己的残留回收。
+// - **删除边界**：所有删除都必须完全落在「已验证所有权集合」内；删除账号前先枚举**全部**引用
+//   申请（客户 / 接单），发现任一不在已验证集合内即失败关闭，绝不做「按账号 ID 批量兜底删除」。
+// - **创建 vs 恢复**：只有本轮真正 INSERT 成功并拿到 ID 的行才进 created*；复用既有（字段
+//   校验通过）的行进 recoveredOwnedIds，不得冒充本轮创建。
 // - **自保护**：每个会写库/删库的 helper 在第一条写操作前自行调用不可跳过的目标库白名单守卫
 //   （e2e-db-guard）；守卫拒绝时 INSERT/UPDATE/DELETE 均为 0。
 //
@@ -102,24 +110,55 @@ const SENTINEL_ACCOUNT_CONFIG: TestAccountConfig = {
   identityType: IdentityTypeEnum.CUSTOMER,
 };
 
-/** 本轮所有权上下文：只记录「本轮实际创建成功并拿到 ID」的行 */
+/** 锚点型号的完整可验证字段（供归属校验断言复用，避免在 spec 中复制常量） */
+export const PRODUCTION_FIXTURE_MODEL_SPEC = {
+  modelCode: PRODUCTION_FIXTURE_MARKERS.modelCode,
+  modelName: FIXTURE_MODEL_NAME,
+  enabled: true,
+  sortOrder: FIXTURE_MODEL_SORT_ORDER,
+} as const;
+
+/** 哨兵型号的完整可验证字段 */
+export const PRODUCTION_SENTINEL_MODEL_SPEC = {
+  modelCode: PRODUCTION_FIXTURE_MARKERS.sentinelModelCode,
+  modelName: SENTINEL_MODEL_NAME,
+  enabled: true,
+  sortOrder: SENTINEL_MODEL_SORT_ORDER,
+} as const;
+
+/** 一组所有权 ID（本轮创建 or 复用恢复，语义由所在字段决定） */
+export type ProductionFixtureIdSet = {
+  accountIds: number[];
+  equipmentModelIds: number[];
+  repairRequestIds: number[];
+};
+
+/** 本轮所有权上下文：created* 只记录「本轮实际创建成功并拿到 ID」的行 */
 export type ProductionFixtureOwnership = {
   createdAccountIds: number[];
   createdEquipmentModelIds: number[];
   createdRepairRequestIds: number[];
-  createdSentinelIds: {
-    accountIds: number[];
-    equipmentModelIds: number[];
-    repairRequestIds: number[];
-  };
+  createdSentinelIds: ProductionFixtureIdSet;
+  /**
+   * 复用 / 恢复的既有行（自然标记命中且**逐字段校验通过**，但非本轮创建）：
+   * 与 created* 严格分离，不得冒充本轮创建（0922 P2）。
+   */
+  recoveredOwnedIds: ProductionFixtureIdSet;
 };
+
+const createIdSet = (): ProductionFixtureIdSet => ({
+  accountIds: [],
+  equipmentModelIds: [],
+  repairRequestIds: [],
+});
 
 /** 新建空的所有权上下文（每次 spec 运行一份，禁止跨进程复用） */
 export const createProductionFixtureOwnership = (): ProductionFixtureOwnership => ({
   createdAccountIds: [],
   createdEquipmentModelIds: [],
   createdRepairRequestIds: [],
-  createdSentinelIds: { accountIds: [], equipmentModelIds: [], repairRequestIds: [] },
+  createdSentinelIds: createIdSet(),
+  recoveredOwnedIds: createIdSet(),
 });
 
 const uniquePositiveIds = (ids: readonly number[]): number[] => [
@@ -143,13 +182,104 @@ const assertWritableTarget = async (ds: DataSource, helper: string): Promise<str
 const ownershipViolation = (helper: string, database: string, detail: string): Error =>
   new Error(`[${helper}] 阶段=归属校验 目标库=${database} 拒绝删除：${detail}`);
 
-/** 仅 SELECT：按固定专属 loginName 集合定位残留账号 ID（不产生任何写入） */
+/** 账号可验证字段（自然标记只用于定位，归属判定必须逐字段核验） */
+type VerifiableAccount = {
+  id: number;
+  loginName: string | null;
+  loginEmail: string | null;
+  status: AccountStatus;
+  identityHint: string | null;
+};
+
+/** 型号可验证字段 */
+type VerifiableModel = {
+  id: number;
+  modelCode: string;
+  modelName: string;
+  enabled: boolean;
+  sortOrder: number;
+};
+
+const ACCOUNT_OWNERSHIP_SELECT = {
+  id: true,
+  loginName: true,
+  loginEmail: true,
+  status: true,
+  identityHint: true,
+} as const;
+
+const MODEL_OWNERSHIP_SELECT = {
+  id: true,
+  modelCode: true,
+  modelName: true,
+  enabled: true,
+  sortOrder: true,
+} as const;
+
+/** 逐字段核验账号归属；返回不一致原因（null = 通过） */
+const accountOwnershipMismatch = (
+  account: VerifiableAccount,
+  expected: TestAccountConfig,
+): string | null => {
+  if (account.loginName !== expected.loginName) {
+    return `loginName=${account.loginName ?? 'null'} ≠ ${expected.loginName}`;
+  }
+  if (account.loginEmail !== expected.loginEmail) {
+    return `loginEmail=${account.loginEmail ?? 'null'} ≠ ${expected.loginEmail}`;
+  }
+  if (account.status !== expected.status) {
+    return `status=${account.status} ≠ ${expected.status}`;
+  }
+  if (account.identityHint !== expected.identityType) {
+    return `角色 identityHint=${account.identityHint ?? 'null'} ≠ ${expected.identityType}`;
+  }
+  return null;
+};
+
+/** 逐字段核验型号归属；返回不一致原因（null = 通过） */
+const modelOwnershipMismatch = (
+  model: VerifiableModel,
+  expected: { modelCode: string; modelName: string; sortOrder: number },
+): string | null => {
+  if (model.modelCode !== expected.modelCode) {
+    return `modelCode=${model.modelCode} ≠ ${expected.modelCode}`;
+  }
+  if (model.modelName !== expected.modelName) {
+    return `modelName=${model.modelName} ≠ ${expected.modelName}`;
+  }
+  if (model.enabled !== true) {
+    return `enabled=${String(model.enabled)} ≠ true`;
+  }
+  if (model.sortOrder !== expected.sortOrder) {
+    return `sortOrder=${model.sortOrder} ≠ ${expected.sortOrder}`;
+  }
+  return null;
+};
+
+/** 本 spec 专属账号配置（含哨兵账号）：loginName → 期望字段 */
+const OWNED_ACCOUNT_CONFIGS: readonly TestAccountConfig[] = [
+  ...Object.values(PRODUCTION_FIXTURE_ACCOUNTS),
+  SENTINEL_ACCOUNT_CONFIG,
+];
+
+/**
+ * 仅 SELECT：定位「属于本 spec」的账号 ID（不产生任何写入）。
+ * loginName 只用于定位：命中后仍需逐字段核验（同 loginName 但字段不同的外部账号不算本 spec）。
+ */
 export const findProductionFixtureAccountIds = async (ds: DataSource): Promise<number[]> => {
   const accounts = await ds.getRepository(AccountEntity).find({
     where: { loginName: In([...PRODUCTION_FIXTURE_LOGIN_NAMES]) },
-    select: { id: true },
+    select: ACCOUNT_OWNERSHIP_SELECT,
   });
-  return accounts.map((account) => account.id);
+  const expectedByLoginName = new Map(
+    Object.values(PRODUCTION_FIXTURE_ACCOUNTS).map((config) => [config.loginName, config]),
+  );
+  return accounts
+    .filter((account) => {
+      const expected = account.loginName ? expectedByLoginName.get(account.loginName) : undefined;
+      return expected !== undefined && accountOwnershipMismatch(account, expected) === null;
+    })
+    .map((account) => account.id);
 };
 
 /** 按标记 + 归属校验解析出的「属于本 spec」的行 */
@@ -177,11 +307,33 @@ const resolveOwnedRows = async (
   const modelRepo = ds.getRepository(EquipmentModelEntity);
   const requestRepo = ds.getRepository(RepairRequestEntity);
 
-  const specLoginNames = [...PRODUCTION_FIXTURE_LOGIN_NAMES, PRODUCTION_SENTINEL.loginName];
+  const specLoginNames = OWNED_ACCOUNT_CONFIGS.map((config) => config.loginName);
+  const expectedByLoginName = new Map(
+    OWNED_ACCOUNT_CONFIGS.map((config) => [config.loginName, config]),
+  );
   const accounts = await accountRepo.find({
     where: { loginName: In(specLoginNames) },
-    select: { id: true, loginName: true },
+    select: ACCOUNT_OWNERSHIP_SELECT,
   });
+  // 自然标记命中只用于定位：归属判定必须逐字段核验，任一不一致即失败关闭
+  for (const account of accounts) {
+    const expected = account.loginName ? expectedByLoginName.get(account.loginName) : undefined;
+    if (!expected) {
+      throw ownershipViolation(
+        helper,
+        database,
+        `账号(id=${account.id}) loginName=${account.loginName ?? 'null'} 不在本 spec 专属账号集合内，归属不明确`,
+      );
+    }
+    const mismatch = accountOwnershipMismatch(account, expected);
+    if (mismatch) {
+      throw ownershipViolation(
+        helper,
+        database,
+        `账号 ${expected.loginName}(id=${account.id}) 字段与归属不符：${mismatch}，归属不明确`,
+      );
+    }
+  }
   const accountIds = accounts.map((account) => account.id);
   const accountIdSet = new Set(accountIds);
   const sentinelAccountIds = accounts
@@ -190,17 +342,39 @@ const resolveOwnedRows = async (
 
   const fixtureModels = await modelRepo.find({
     where: { modelCode: markers.modelCode },
-    select: { id: true, modelCode: true },
+    select: MODEL_OWNERSHIP_SELECT,
   });
   const sentinelModels = await modelRepo.find({
     where: { modelCode: markers.sentinelModelCode },
-    select: { id: true, modelCode: true },
+    select: MODEL_OWNERSHIP_SELECT,
   });
-  if (fixtureModels.some((model) => model.modelCode !== markers.modelCode)) {
-    throw ownershipViolation(helper, database, '型号标记字段与预期不一致');
+  for (const model of fixtureModels) {
+    const mismatch = modelOwnershipMismatch(model, {
+      modelCode: markers.modelCode,
+      modelName: FIXTURE_MODEL_NAME,
+      sortOrder: FIXTURE_MODEL_SORT_ORDER,
+    });
+    if (mismatch) {
+      throw ownershipViolation(
+        helper,
+        database,
+        `型号(id=${model.id}) 字段与归属不符：${mismatch}，归属不明确`,
+      );
+    }
   }
-  if (sentinelModels.some((model) => model.modelCode !== markers.sentinelModelCode)) {
-    throw ownershipViolation(helper, database, '哨兵型号标记字段与预期不一致');
+  for (const model of sentinelModels) {
+    const mismatch = modelOwnershipMismatch(model, {
+      modelCode: markers.sentinelModelCode,
+      modelName: SENTINEL_MODEL_NAME,
+      sortOrder: SENTINEL_MODEL_SORT_ORDER,
+    });
+    if (mismatch) {
+      throw ownershipViolation(
+        helper,
+        database,
+        `哨兵型号(id=${model.id}) 字段与归属不符：${mismatch}，归属不明确`,
+      );
+    }
   }
   const fixtureModelIds = fixtureModels.map((model) => model.id);
   const sentinelModelIds = sentinelModels.map((model) => model.id);
@@ -283,31 +457,87 @@ const resolveOwnedRows = async (
   };
 };
 
-/** 精确删除给定 ID 集合：先子后父（申请 → 型号 → user_info → account） */
+/** 一次精确删除的「目标集合」与「已验证所有权集合」（判定边界） */
+type OwnedIdSet = {
+  repairRequestIds: readonly number[];
+  equipmentModelIds: readonly number[];
+  accountIds: readonly number[];
+};
+
+/** 目标 ID 必须完全落在已验证所有权集合内，否则失败关闭（不做任何删除） */
+const assertWithinVerifiedOwnership = (
+  helper: string,
+  database: string,
+  label: string,
+  ids: readonly number[],
+  verified: ReadonlySet<number>,
+): void => {
+  for (const id of ids) {
+    if (!verified.has(id)) {
+      throw ownershipViolation(
+        helper,
+        database,
+        `${label} id=${id} 不在已验证所有权集合内，拒绝删除`,
+      );
+    }
+  }
+};
+
+/**
+ * 精确删除：先子后父（申请 → 型号 → user_info → account）。
+ *
+ * 归属边界（0922 P2）：
+ * - `targets` 必须完全落在 `verified`（已验证所有权集合）内；
+ * - 删除账号前先**枚举全部引用这些账号的申请**（客户 / 接单两个方向）并逐条核验归属：
+ *   任一申请不在 `verified` 内 → 失败关闭，绝不按账号 ID 批量兜底删除。
+ */
 const deleteOwnedRows = async (
   ds: DataSource,
-  rows: {
-    repairRequestIds: readonly number[];
-    equipmentModelIds: readonly number[];
-    accountIds: readonly number[];
-  },
+  helper: string,
+  database: string,
+  targets: OwnedIdSet,
+  verified: OwnedIdSet,
 ): Promise<void> => {
-  const requestIds = uniquePositiveIds(rows.repairRequestIds);
-  const modelIds = uniquePositiveIds(rows.equipmentModelIds);
-  const accountIds = uniquePositiveIds(rows.accountIds);
+  const requestIds = uniquePositiveIds(targets.repairRequestIds);
+  const modelIds = uniquePositiveIds(targets.equipmentModelIds);
+  const accountIds = uniquePositiveIds(targets.accountIds);
 
-  if (requestIds.length > 0) {
-    await ds.getRepository(RepairRequestEntity).delete({ id: In(requestIds) });
+  const verifiedRequestIds = new Set(uniquePositiveIds(verified.repairRequestIds));
+  const verifiedModelIds = new Set(uniquePositiveIds(verified.equipmentModelIds));
+  const verifiedAccountIds = new Set(uniquePositiveIds(verified.accountIds));
+
+  assertWithinVerifiedOwnership(helper, database, '维修申请', requestIds, verifiedRequestIds);
+  assertWithinVerifiedOwnership(helper, database, '设备型号', modelIds, verifiedModelIds);
+  assertWithinVerifiedOwnership(helper, database, '账号', accountIds, verifiedAccountIds);
+
+  // 账号删除前：枚举全部引用申请（外键 RESTRICT 的反向依赖），逐条核验归属
+  let referencingRequestIds: number[] = [];
+  if (accountIds.length > 0) {
+    const referencing = await ds.getRepository(RepairRequestEntity).find({
+      where: [
+        { customerAccountId: In(accountIds) },
+        { acceptedByEngineerAccountId: In(accountIds) },
+      ],
+      select: { id: true },
+    });
+    referencingRequestIds = uniquePositiveIds(referencing.map((row) => row.id));
+    assertWithinVerifiedOwnership(
+      helper,
+      database,
+      '账号引用申请',
+      referencingRequestIds,
+      verifiedRequestIds,
+    );
+  }
+
+  const allRequestIds = uniquePositiveIds([...requestIds, ...referencingRequestIds]);
+  if (allRequestIds.length > 0) {
+    await ds.getRepository(RepairRequestEntity).delete({ id: In(allRequestIds) });
   }
   if (modelIds.length > 0) {
     await ds.getRepository(EquipmentModelEntity).delete({ id: In(modelIds) });
   }
   if (accountIds.length > 0) {
-    // 账号删除前的防御性精确回收：本轮/残留申请可能引用这些账号（外键 RESTRICT）
-    await ds.getRepository(RepairRequestEntity).delete({ customerAccountId: In(accountIds) });
-    await ds.getRepository(RepairRequestEntity).delete({
-      acceptedByEngineerAccountId: In(accountIds),
-    });
     await ds.getRepository(UserInfoEntity).delete({ accountId: In(accountIds) });
     await ds.getRepository(AccountEntity).delete({ id: In(accountIds) });
   }
@@ -325,23 +555,30 @@ export const cleanupProductionFixtureResidue = async (
   const database = await assertWritableTarget(ds, helper);
   const owned = await resolveOwnedRows(ds, helper, database);
 
-  await deleteOwnedRows(ds, {
+  // 目标集合 == 已验证所有权集合（定位 + 逐字段校验后的结果即判定边界）
+  const ownedIdSet: OwnedIdSet = {
     repairRequestIds: [...owned.fixtureRequestIds, ...owned.sentinelRequestIds],
     equipmentModelIds: [...owned.fixtureModelIds, ...owned.sentinelModelIds],
     accountIds: owned.accountIds,
-  });
+  };
+  await deleteOwnedRows(ds, helper, database, ownedIdSet, ownedIdSet);
 
   return {
-    repairRequestIds: [...owned.fixtureRequestIds, ...owned.sentinelRequestIds],
-    equipmentModelIds: [...owned.fixtureModelIds, ...owned.sentinelModelIds],
-    accountIds: owned.accountIds,
+    repairRequestIds: [...ownedIdSet.repairRequestIds],
+    equipmentModelIds: [...ownedIdSet.equipmentModelIds],
+    accountIds: [...ownedIdSet.accountIds],
   };
 };
 
 /**
  * 本轮收尾（afterAll / 创建中途失败）：只接受本轮记录的 ID，逆序回收。
  * - 空 ID 集合为 no-op：不执行守卫、不产生任何写入/删除；
- * - 非空集合自保护：第一条 DELETE 之前复用白名单守卫。
+ * - 非空集合自保护：第一条 DELETE 之前复用白名单守卫；
+ * - 删除账号前枚举全部引用申请，归属不明即失败关闭（不按账号 ID 批量兜底）。
+ *
+ * 注意：夹具外哨兵链（createdSentinelIds / recoveredOwnedIds）**不在**本函数的回收范围，
+ * 由调用方持有的哨兵 ID 经 cleanupProductionSentinelChain 或崩溃残留恢复回收——这样
+ * 「专属清理不得触碰哨兵链」的边界对「本轮创建」与「复用既有」两种情形保持一致。
  */
 export const cleanupProductionFixtureByIds = async (
   ds: DataSource,
@@ -353,12 +590,14 @@ export const cleanupProductionFixtureByIds = async (
   if (requestIds.length === 0 && modelIds.length === 0 && accountIds.length === 0) {
     return;
   }
-  await assertWritableTarget(ds, 'cleanupProductionFixtureByIds');
-  await deleteOwnedRows(ds, {
+  const helper = 'cleanupProductionFixtureByIds';
+  const database = await assertWritableTarget(ds, helper);
+  const ownedIdSet: OwnedIdSet = {
     repairRequestIds: requestIds,
     equipmentModelIds: modelIds,
     accountIds,
-  });
+  };
+  await deleteOwnedRows(ds, helper, database, ownedIdSet, ownedIdSet);
 };
 
 /**
@@ -487,7 +726,9 @@ export const seedProductionFixtureBusiness = async (opts: {
 
 /**
  * 建立夹具外哨兵链：账号（含 user_info）→ 型号 → 申请，全部动态主键。
- * 幂等：按专属标记 find-or-create；标记命中但归属不符时失败关闭（拒绝覆盖外部数据）。
+ * 幂等：按专属标记 find-or-create；标记命中后**逐字段核验归属**，不一致即失败关闭
+ * （拒绝覆盖外部数据）；只有本轮真正 INSERT 的行进 createdSentinelIds，复用的既有行进
+ * recoveredOwnedIds（不冒充本轮创建）。
  * @returns 哨兵链的实际 ID（同一次运行内使用，写进所有权上下文）
  */
 export const ensureProductionSentinelChain = async (opts: {
@@ -497,6 +738,7 @@ export const ensureProductionSentinelChain = async (opts: {
 }): Promise<{ accountId: number; equipmentModelId: number; repairRequestId: number }> => {
   const { dataSource, ownership } = opts;
   const helper = 'ensureProductionSentinelChain';
+  const database = 'sentinel';
   const markers = PRODUCTION_FIXTURE_MARKERS;
 
   await assertWritableTarget(dataSource, helper);
@@ -505,10 +747,43 @@ export const ensureProductionSentinelChain = async (opts: {
   const modelRepo = dataSource.getRepository(EquipmentModelEntity);
   const requestRepo = dataSource.getRepository(RepairRequestEntity);
 
+  // 账号：自然标记只用于定位，命中后必须逐字段核验（否则会复用并最终回收别人的账号）
   const existingAccount = await accountRepo.findOne({
     where: { loginName: PRODUCTION_SENTINEL.loginName },
-    select: { id: true },
+    select: ACCOUNT_OWNERSHIP_SELECT,
   });
+  if (existingAccount) {
+    const mismatch = accountOwnershipMismatch(existingAccount, SENTINEL_ACCOUNT_CONFIG);
+    if (mismatch) {
+      throw ownershipViolation(
+        helper,
+        database,
+        `哨兵账号(id=${existingAccount.id}) 字段与归属不符：${mismatch}，归属不明确`,
+      );
+    }
+  }
+
+  // 型号：同样逐字段核验 modelCode / modelName / enabled / sortOrder
+  const existingModel = await modelRepo.findOne({
+    where: { modelCode: markers.sentinelModelCode },
+    select: MODEL_OWNERSHIP_SELECT,
+  });
+  if (existingModel) {
+    const mismatch = modelOwnershipMismatch(existingModel, {
+      modelCode: markers.sentinelModelCode,
+      modelName: SENTINEL_MODEL_NAME,
+      sortOrder: SENTINEL_MODEL_SORT_ORDER,
+    });
+    if (mismatch) {
+      throw ownershipViolation(
+        helper,
+        database,
+        `哨兵型号(id=${existingModel.id}) 字段与归属不符：${mismatch}，归属不明确`,
+      );
+    }
+  }
+
+  // 归属核验全部通过后才创建缺失项：任何一项不符都在**任何写入之前**失败关闭
   const accountId =
     existingAccount?.id ??
     (
@@ -518,11 +793,6 @@ export const ensureProductionSentinelChain = async (opts: {
         SENTINEL_ACCOUNT_CONFIG,
       )
     ).accountId;
-
-  const existingModel = await modelRepo.findOne({
-    where: { modelCode: markers.sentinelModelCode },
-    select: { id: true },
-  });
   const equipmentModelId =
     existingModel?.id ??
     (
@@ -552,8 +822,8 @@ export const ensureProductionSentinelChain = async (opts: {
     ) {
       throw ownershipViolation(
         helper,
-        'sentinel',
-        `哨兵申请(id=${existingRequest.id}) 已存在但归属不服（账号 ${existingRequest.customerAccountId} / 型号 ${existingRequest.equipmentModelId}）`,
+        database,
+        `哨兵申请(id=${existingRequest.id}) 已存在但归属不符（账号 ${existingRequest.customerAccountId} / 型号 ${existingRequest.equipmentModelId}）`,
       );
     }
   }
@@ -578,16 +848,30 @@ export const ensureProductionSentinelChain = async (opts: {
       )
     ).id;
 
-  const sentinelIds = ownership.createdSentinelIds;
-  if (!sentinelIds.accountIds.includes(accountId)) {
-    sentinelIds.accountIds.push(accountId);
-  }
-  if (!sentinelIds.equipmentModelIds.includes(equipmentModelId)) {
-    sentinelIds.equipmentModelIds.push(equipmentModelId);
-  }
-  if (!sentinelIds.repairRequestIds.includes(repairRequestId)) {
-    sentinelIds.repairRequestIds.push(repairRequestId);
-  }
+  // 记录边界：本轮 INSERT 的进 createdSentinelIds，复用既有的进 recoveredOwnedIds
+  const record = (list: number[], id: number): void => {
+    if (!list.includes(id)) {
+      list.push(id);
+    }
+  };
+  record(
+    existingAccount
+      ? ownership.recoveredOwnedIds.accountIds
+      : ownership.createdSentinelIds.accountIds,
+    accountId,
+  );
+  record(
+    existingModel
+      ? ownership.recoveredOwnedIds.equipmentModelIds
+      : ownership.createdSentinelIds.equipmentModelIds,
+    equipmentModelId,
+  );
+  record(
+    existingRequest
+      ? ownership.recoveredOwnedIds.repairRequestIds
+      : ownership.createdSentinelIds.repairRequestIds,
+    repairRequestId,
+  );
 
   return { accountId, equipmentModelId, repairRequestId };
 };
@@ -622,6 +906,7 @@ export const readProductionSentinelSnapshot = async (
 /**
  * 回收哨兵链：只按调用方持有的 ID（存在即删，不存在 no-op；先子后父，守卫先行）。
  * 空集合为 no-op（连哨兵账号 ID 都没有时不执行任何守卫/DELETE）。
+ * 删除账号前枚举全部引用申请：存在不在已验证集合内的外部申请时**失败关闭**（不兜底删除）。
  */
 export const cleanupProductionSentinelChain = async (
   ds: DataSource,
@@ -633,10 +918,12 @@ export const cleanupProductionSentinelChain = async (
   if (requestIds.length === 0 && modelIds.length === 0 && accountIds.length === 0) {
     return;
   }
-  await assertWritableTarget(ds, 'cleanupProductionSentinelChain');
-  await deleteOwnedRows(ds, {
+  const helper = 'cleanupProductionSentinelChain';
+  const database = await assertWritableTarget(ds, helper);
+  const ownedIdSet: OwnedIdSet = {
     repairRequestIds: requestIds,
     equipmentModelIds: modelIds,
     accountIds,
-  });
+  };
+  await deleteOwnedRows(ds, helper, database, ownedIdSet, ownedIdSet);
 };

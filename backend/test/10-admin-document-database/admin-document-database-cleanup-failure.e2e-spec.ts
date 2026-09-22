@@ -25,6 +25,8 @@ import {
   shouldRunAdminDocFixtureCleanup,
 } from './admin-document-database-fixture';
 import {
+  PRODUCTION_FIXTURE_ACCOUNTS,
+  PRODUCTION_FIXTURE_MODEL_SPEC,
   cleanupProductionFixtureByIds,
   cleanupProductionFixtureResidue,
   cleanupProductionSentinelChain,
@@ -75,6 +77,22 @@ const createMockDataSource = (options: {
     const rowsOf = (): Array<Record<string, unknown>> =>
       explicitRows ?? (options.accountIds ?? []).map((id) => ({ id }));
 
+    const findOptionsWith = (findOptions?: {
+      where?: Record<string, unknown> | Array<Record<string, unknown>>;
+    }): Record<string, unknown> | Array<Record<string, unknown>> | undefined => findOptions?.where;
+
+    /** 支持单条件与 OR 条件数组（TypeORM 的 `where: [a, b]` 形式） */
+    const selectRows = (
+      where: Record<string, unknown> | Array<Record<string, unknown>> | undefined,
+    ): Array<Record<string, unknown>> => {
+      const rows = rowsOf();
+      if (!explicitRows || !where) {
+        return rows;
+      }
+      const conditions = Array.isArray(where) ? where : [where];
+      return rows.filter((row) => conditions.some((condition) => matchWhere(row, condition)));
+    };
+
     return {
       delete: (criteria: unknown): Promise<void> => {
         state.deleteCalls.push({ entityName, criteria });
@@ -86,19 +104,12 @@ const createMockDataSource = (options: {
         }
         return Promise.resolve();
       },
-      find: (findOptions?: { where?: Record<string, unknown> }): Promise<unknown[]> => {
-        const rows = rowsOf();
-        const where = findOptions?.where;
-        return Promise.resolve(
-          explicitRows && where ? rows.filter((row) => matchWhere(row, where)) : rows,
-        );
-      },
-      findOne: (findOptions?: { where?: Record<string, unknown> }): Promise<unknown> => {
-        const rows = rowsOf();
-        const where = findOptions?.where;
-        const matched = explicitRows && where ? rows.filter((row) => matchWhere(row, where)) : rows;
-        return Promise.resolve(matched[0] ?? null);
-      },
+      find: (findOptions?: {
+        where?: Record<string, unknown> | Array<Record<string, unknown>>;
+      }): Promise<unknown[]> => Promise.resolve(selectRows(findOptionsWith(findOptions))),
+      findOne: (findOptions?: {
+        where?: Record<string, unknown> | Array<Record<string, unknown>>;
+      }): Promise<unknown> => Promise.resolve(selectRows(findOptionsWith(findOptions))[0] ?? null),
       save: (value: unknown): Promise<unknown> => {
         state.dbWriteCalls.push({ entityName, operation: 'save' });
         return Promise.resolve(value);
@@ -348,12 +359,25 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
     });
 
     it('归属校验失败关闭：标记命中但归属不符的残留 → 拒绝删除且写删均为 0', async () => {
+      const customerConfig = PRODUCTION_FIXTURE_ACCOUNTS.customer;
       const { dataSource, state } = createMockDataSource({
         database: 'lithography_e2e',
         // 以 [实体名, 行集合] 元组构造：实体名不是对象字面量属性，规避命名格式规则
+        // 账号与型号字段**完全匹配**（自然标记 + 全字段），以确认拒绝来自「申请归属」而非字段校验
         rowsByEntity: Object.fromEntries([
-          ['AccountEntity', [{ id: 701, loginName: 'testpr3r5customer' }]],
-          ['EquipmentModelEntity', [{ id: 702, modelCode: 'E2E-ADM-DOCDB-PROD-MODEL' }]],
+          [
+            'AccountEntity',
+            [
+              {
+                id: 701,
+                loginName: customerConfig.loginName,
+                loginEmail: customerConfig.loginEmail,
+                status: customerConfig.status,
+                identityHint: customerConfig.identityType,
+              },
+            ],
+          ],
+          ['EquipmentModelEntity', [{ id: 702, ...PRODUCTION_FIXTURE_MODEL_SPEC }]],
           [
             'RepairRequestEntity',
             [
@@ -391,8 +415,20 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
       expect(mockApp.appState.closeCalls).toBe(1);
     });
 
-    it('允许的隔离库：守卫先行，按「申请 → 型号 → 账号依赖 → user_info → account」精确删除', async () => {
-      const { dataSource, state } = createMockDataSource({ database: 'lithography_e2e' });
+    it('允许的隔离库：守卫先行，按「申请 → 型号 → user_info → account」精确删除', async () => {
+      const { dataSource, state } = createMockDataSource({
+        database: 'lithography_e2e',
+        // 账号引用的申请：必须在已验证所有权集合内（本轮记录的申请）
+        rowsByEntity: Object.fromEntries([
+          [
+            'RepairRequestEntity',
+            [
+              { id: 501, customerAccountId: 701, acceptedByEngineerAccountId: null },
+              { id: 502, customerAccountId: 701, acceptedByEngineerAccountId: null },
+            ],
+          ],
+        ] as Array<[string, Array<Record<string, unknown>>]>),
+      });
 
       await cleanupProductionFixtureByIds(
         dataSource,
@@ -407,24 +443,47 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
       expect(state.deleteCalls.map((call) => call.entityName)).toEqual([
         'RepairRequestEntity',
         'EquipmentModelEntity',
-        'RepairRequestEntity',
-        'RepairRequestEntity',
         'UserInfoEntity',
         'AccountEntity',
       ]);
-      // 全部为本轮**实际记录**的 ID（不含任何固定主键）
+      // 全部为本轮**实际记录**的 ID（不含任何固定主键，也不按账号 ID 批量兜底）
       expect(extractInValues(state.deleteCalls[0].criteria, 'id')).toEqual([501, 502]);
       expect(extractInValues(state.deleteCalls[1].criteria, 'id')).toEqual([601]);
-      expect(extractInValues(state.deleteCalls[2].criteria, 'customerAccountId')).toEqual([701]);
-      expect(extractInValues(state.deleteCalls[3].criteria, 'acceptedByEngineerAccountId')).toEqual(
-        [701],
-      );
-      expect(extractInValues(state.deleteCalls[4].criteria, 'accountId')).toEqual([701]);
-      expect(extractInValues(state.deleteCalls[5].criteria, 'id')).toEqual([701]);
+      expect(extractInValues(state.deleteCalls[2].criteria, 'accountId')).toEqual([701]);
+      expect(extractInValues(state.deleteCalls[3].criteria, 'id')).toEqual([701]);
+    });
+
+    it('账号被归属不明的申请引用：失败关闭，账号与外部申请均不删除', async () => {
+      const { dataSource, state } = createMockDataSource({
+        database: 'lithography_e2e',
+        // 外部（非本轮记录）申请引用了本轮账号：不得按账号 ID 批量兜底删除
+        rowsByEntity: Object.fromEntries([
+          [
+            'RepairRequestEntity',
+            [{ id: 901, customerAccountId: 701, acceptedByEngineerAccountId: null }],
+          ],
+        ] as Array<[string, Array<Record<string, unknown>>]>),
+      });
+
+      await expect(
+        cleanupProductionFixtureByIds(dataSource, ownershipWith({ accountIds: [701] })),
+      ).rejects.toThrow(/账号引用申请/);
+
+      expect(state.guardQueryCalls).toBe(1);
+      expect(state.deleteCalls).toHaveLength(0);
+      expect(state.dbWriteCalls).toHaveLength(0);
     });
 
     it('哨兵链：允许的隔离库按调用方持有的 ID 精确回收（先子后父）', async () => {
-      const { dataSource, state } = createMockDataSource({ database: 'lithography_e2e' });
+      const { dataSource, state } = createMockDataSource({
+        database: 'lithography_e2e',
+        rowsByEntity: Object.fromEntries([
+          [
+            'RepairRequestEntity',
+            [{ id: 803, customerAccountId: 801, acceptedByEngineerAccountId: null }],
+          ],
+        ] as Array<[string, Array<Record<string, unknown>>]>),
+      });
 
       await cleanupProductionSentinelChain(dataSource, {
         accountId: 801,
@@ -435,14 +494,12 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
       expect(state.deleteCalls.map((call) => call.entityName)).toEqual([
         'RepairRequestEntity',
         'EquipmentModelEntity',
-        'RepairRequestEntity',
-        'RepairRequestEntity',
         'UserInfoEntity',
         'AccountEntity',
       ]);
       expect(extractInValues(state.deleteCalls[0].criteria, 'id')).toEqual([803]);
       expect(extractInValues(state.deleteCalls[1].criteria, 'id')).toEqual([802]);
-      expect(extractInValues(state.deleteCalls[5].criteria, 'id')).toEqual([801]);
+      expect(extractInValues(state.deleteCalls[3].criteria, 'id')).toEqual([801]);
     });
 
     it('空 ID 集合为 no-op：不执行守卫查询、不产生任何写删', async () => {
@@ -473,7 +530,13 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
     });
 
     it('部分账号创建失败：如实返回 created / failures，仅按已记录的成功 ID 回收', async () => {
-      const { dataSource, state } = createMockDataSource({ database: 'lithography_e2e' });
+      const { dataSource, state } = createMockDataSource({
+        database: 'lithography_e2e',
+        // 库中不存在引用这些账号的申请（有的话即归属不明，必须失败关闭）
+        rowsByEntity: Object.fromEntries([['RepairRequestEntity', []]] as Array<
+          [string, Array<Record<string, unknown>>]
+        >),
+      });
       const ownership = createProductionFixtureOwnership();
 
       const execute = jest
@@ -499,21 +562,13 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
       // 调用方按已记录 ID 回收：仅 601/603 进入删除条件，创建失败的 engineer 不出现
       await cleanupProductionFixtureByIds(dataSource, ownership);
 
-      // 账号删除前先按账号依赖精确回收申请（外键 RESTRICT），再 user_info → account
+      // 账号引用申请枚举完成（无归属不明者）→ 按本轮记录 ID 回收 user_info → account
       expect(state.deleteCalls.map((call) => call.entityName)).toEqual([
-        'RepairRequestEntity',
-        'RepairRequestEntity',
         'UserInfoEntity',
         'AccountEntity',
       ]);
-      expect(extractInValues(state.deleteCalls[0].criteria, 'customerAccountId')).toEqual([
-        601, 603,
-      ]);
-      expect(extractInValues(state.deleteCalls[1].criteria, 'acceptedByEngineerAccountId')).toEqual(
-        [601, 603],
-      );
-      expect(extractInValues(state.deleteCalls[2].criteria, 'accountId')).toEqual([601, 603]);
-      expect(extractInValues(state.deleteCalls[3].criteria, 'id')).toEqual([601, 603]);
+      expect(extractInValues(state.deleteCalls[0].criteria, 'accountId')).toEqual([601, 603]);
+      expect(extractInValues(state.deleteCalls[1].criteria, 'id')).toEqual([601, 603]);
     });
   });
 });
