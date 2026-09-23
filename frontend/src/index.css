@@ -729,21 +729,29 @@ body {
   font-size: 0.6875rem;
 }
 
+/* 表头/正文行高采用「固定高度 + 垂直居中」方案（原型实测：表头 35.5px、正文行 38.5px；
+   第三轮修复：此前 10px 块向 padding 会让 24px 的 size=small 按钮与 23px 的 StatusPill
+   以 inline-block 基线把行盒撑到 45px）。border-box 全局生效，height 含 1px 底线；
+   height 在表格单元格上是最小高度，内容永不超出（长文本列已全部 ellipsis + nowrap） */
 .kb-table-scope .ant-table .ant-table-thead > tr > th.ant-table-cell {
   background: var(--kb-table-head-bg);
   border-bottom: 1px solid var(--kb-table-head-border);
   color: var(--kb-text-muted);
   font-size: 0.625rem;
   font-weight: 600;
+  height: 35.5px;
   line-height: 1.5;
-  padding: 0.625rem 0.5625rem;
+  padding: 0 0.5625rem;
+  vertical-align: middle;
   white-space: nowrap;
 }
 
 .kb-table-scope .ant-table .ant-table-tbody > tr > td.ant-table-cell {
   border-bottom: 1px solid var(--kb-divider);
+  height: 38.5px;
   line-height: 1.5;
-  padding: 0.625rem 0.5625rem;
+  padding: 0 0.5625rem;
+  vertical-align: middle;
 }
 
 .kb-table-scope .ant-table .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell,
@@ -814,7 +822,7 @@ body {
 .kb-primary-action .ant-btn.ant-btn-color-primary.ant-btn-variant-solid {
   background: var(--kb-primary);
   border-color: var(--kb-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-action);
   box-shadow: var(--kb-primary-shadow);
   color: var(--kb-on-primary);
   font-size: 0.75rem;

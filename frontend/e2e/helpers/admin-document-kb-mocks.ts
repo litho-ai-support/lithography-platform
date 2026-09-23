@@ -109,6 +109,43 @@ export const ADMIN_DOCUMENT_KB_FIXTURES = {
     aiConversationTotal: 1,
     aiReportTotal: 1,
   },
+  /** 详情页 fixture（id 与列表条目同源：资料 501 / 申请 901），供眉题等逐页验收渲染就绪态。 */
+  referenceDocumentDetail: {
+    id: 501,
+    title: 'E-201 故障处理手册',
+    documentType: 'ERROR_CODE_MANUAL',
+    equipmentModelId: 47,
+    equipmentModelName: '光刻机 200 型',
+    description: '覆盖 E-201 故障码的标准处理流程与复位步骤。',
+    originalFilename: 'e201-manual.pdf',
+    mimeType: 'application/pdf',
+    hasFile: true,
+    contentText: 'E-201 故障码标准处理流程：先断开高压，再执行复位，最后试运行确认。',
+    creatorNickname: '管理员',
+    createdAt: '2026-08-30 15:00:00',
+    updatedAt: '2026-08-30 15:00:00',
+  },
+  myRepairRequestDetail: {
+    id: 901,
+    requestNo: 'RR20260901090001A1B2C3',
+    errorCode: 'E-201',
+    faultDescription: '设备报 E-201 故障码，无法继续曝光作业。',
+    contentMd: '## 故障现象\n\n设备报 E-201 故障码。',
+    createdAt: '2026-09-01 09:00:00',
+    isAccepted: true,
+    acceptedAt: '2026-09-01 10:00:00',
+    latestResolutionStatus: 'RESOLVED',
+    equipmentModel: { id: 47, modelCode: 'LITHO-200', modelName: '光刻机 200 型' },
+    responses: [
+      {
+        id: 1,
+        engineerNickname: '林工程师',
+        resolutionStatus: 'RESOLVED',
+        responseText: '已按手册完成复位，设备恢复正常。',
+        createdAt: '2026-09-01 10:10:00',
+      },
+    ],
+  },
 } as const;
 
 type GraphQLRequestBody = {
@@ -175,6 +212,10 @@ function dataByOperation(
           variables,
         ),
       };
+    case 'ReferenceDocument':
+      return { referenceDocument: { ...ADMIN_DOCUMENT_KB_FIXTURES.referenceDocumentDetail } };
+    case 'MyRepairRequest':
+      return { myRepairRequest: { ...ADMIN_DOCUMENT_KB_FIXTURES.myRepairRequestDetail } };
     case 'AdminUsers':
       return { adminUsers: { items: [], page: 1, pageSize: 20, total: 0 } };
     case 'MyRepairRequests':

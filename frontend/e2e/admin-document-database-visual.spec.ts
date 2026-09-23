@@ -111,8 +111,9 @@ const KB_BASELINE = {
       borderBottomColor: 'rgb(241, 245, 249)', // #f1f5f9
       color: 'rgb(51, 65, 85)',
       fontSize: '11px',
+      height: '38.5px', // 原型正文行高实测；固定高度 + 垂直居中，控件不再撑高行盒
       lineHeight: '16.5px',
-      padding: '10px 9px',
+      padding: '0px 9px',
     },
     th: {
       backgroundColor: 'rgb(248, 250, 252)',
@@ -120,8 +121,9 @@ const KB_BASELINE = {
       color: 'rgb(100, 116, 139)',
       fontSize: '10px',
       fontWeight: '600',
+      height: '35.5px', // 原型表头实测；固定高度 + 垂直居中
       lineHeight: '15px',
-      padding: '10px 9px',
+      padding: '0px 9px',
     },
   },
   toolbar: {
@@ -396,6 +398,7 @@ async function measureKbPane(page: Page) {
         borderBottomColor: g(td).borderBottomColor,
         color: g(td).color,
         fontSize: g(td).fontSize,
+        height: g(td).height,
         lineHeight: g(td).lineHeight,
         padding: g(td).padding,
       },
@@ -405,6 +408,7 @@ async function measureKbPane(page: Page) {
         color: g(th).color,
         fontSize: g(th).fontSize,
         fontWeight: g(th).fontWeight,
+        height: g(th).height,
         lineHeight: g(th).lineHeight,
         padding: g(th).padding,
         rectHeight: +th.getBoundingClientRect().height.toFixed(2),
@@ -479,16 +483,17 @@ function expectKbPaneBaseline(snapshot: KbPaneSnapshot): void {
   expect(snapshot.searchInput).toMatchObject(KB_BASELINE.searchInput);
   expect(snapshot.searchIcon).toMatchObject({ height: '16px', width: '16px' });
   expect(snapshot.toolbarButton).toMatchObject(KB_BASELINE.toolbarButton);
-  // 表头 10px / #64748b / #f8fafc / padding 10px 9px；表头高度贴近原型 35.5px
+  // 表头 10px / #64748b / #f8fafc / 水平 padding 9px；表头高精确命中原型 35.5px（±0.5px
+  // 浏览器渲染容差，负责人裁定不再使用宽容差）
   expect(snapshot.th).toMatchObject(KB_BASELINE.table.th);
   expect(snapshot.th.rectHeight).toBeGreaterThanOrEqual(35);
-  expect(snapshot.th.rectHeight).toBeLessThanOrEqual(37);
-  // 正文 11px / #334155 / padding 10px 9px / 行线 #f1f5f9；行高贴近原型 38.5px
-  // （上限 50 容忍 StatusPill/操作按钮等 inline-block 控件的业务偏差，仍低于 AntD 默认 55px；
-  //   维修申请的变长文本列已全部 ellipsis + nowrap，不会再因换行把行高撑到两行）
+  expect(snapshot.th.rectHeight).toBeLessThanOrEqual(36);
+  // 正文 11px / #334155 / 水平 padding 9px / 行线 #f1f5f9；四 Tab 行高统一精确命中原型
+  // 38.5px（±0.5px 容差）——固定高度 + 垂直居中后 StatusPill / size=small 操作按钮
+  // 不再以 inline-block 基线把行盒撑到 45px
   expect(snapshot.td).toMatchObject(KB_BASELINE.table.td);
-  expect(snapshot.firstRowHeight).toBeGreaterThanOrEqual(35);
-  expect(snapshot.firstRowHeight).toBeLessThanOrEqual(50);
+  expect(snapshot.firstRowHeight).toBeGreaterThanOrEqual(38);
+  expect(snapshot.firstRowHeight).toBeLessThanOrEqual(39);
   // 卡底：12px 16px / 10px / #94a3b8
   expect(snapshot.footer).toEqual(KB_BASELINE.footer);
 }
@@ -636,25 +641,26 @@ test.describe('mocked admin document database - knowledge base visual baseline (
 
         // 按钮半径规则（frontend/docs/gkj-visual-baseline.md 6.5）：主按钮 8px、
         // 表格操作（size=small）6px、状态胶囊 999px；搜索框/工具按钮 6px 已由
-        // KB_BASELINE.toolbarButton/search 覆盖
+        // KB_BASELINE.toolbarButton/search 覆盖。第三轮修复起逐 Tab 覆盖：
+        // 凡表格内出现操作按钮/状态胶囊即断言，不再只盯单一 Tab。
         if (tab.fileStem === 'reference-documents') {
           const primaryRadius = await page
             .locator('.kb-primary-action .ant-btn')
             .evaluate((el) => getComputedStyle(el).borderRadius);
           expect(primaryRadius, '主按钮半径规则').toBe('8px');
         }
-        if (tab.fileStem === 'repair-requests') {
-          const paneLoc = activePane(page);
-          const actionRadius = await paneLoc
-            .locator('.kb-table-scope .ant-table-tbody .ant-btn')
+        const paneLoc = activePane(page);
+        const tableAction = paneLoc.locator('.kb-table-scope .ant-table-tbody .ant-btn');
+        if ((await tableAction.count()) > 0) {
+          const actionRadius = await tableAction
             .first()
             .evaluate((el) => getComputedStyle(el).borderRadius);
-          expect(actionRadius, '表格操作按钮半径规则').toBe('6px');
-          const pillRadius = await paneLoc
-            .locator('.status-pill')
-            .first()
-            .evaluate((el) => getComputedStyle(el).borderRadius);
-          expect(pillRadius, '状态胶囊半径规则').toBe('999px');
+          expect(actionRadius, `${tab.name} 表格操作按钮半径规则`).toBe('6px');
+        }
+        const pill = paneLoc.locator('.kb-table-scope .status-pill');
+        if ((await pill.count()) > 0) {
+          const pillRadius = await pill.first().evaluate((el) => getComputedStyle(el).borderRadius);
+          expect(pillRadius, `${tab.name} 状态胶囊半径规则`).toBe('999px');
         }
 
         tabEvidence[tab.fileStem] = { page: pageSnapshot, pane: paneSnapshot, png, tab: tab.name };
@@ -752,6 +758,45 @@ test.describe('mocked admin document database - knowledge base visual baseline (
       ),
     );
     console.log(`[visual-evidence] ${evidenceJson}`);
+  });
+
+  test('按钮半径覆盖：列表失败态「重试」与摘要 Drawer 弹层「重试」均为 6px（1440×900）', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await seedAuthSession(page, 'SUPER_ADMIN');
+    await page.setViewportSize({ height: 900, width: 1440 });
+
+    // 阶段一：列表查询网络层 abort → 卡内失败态「重试」（size=small → 紧凑控件 6px）
+    await installAdminDocumentKbGraphqlMocks(page, {
+      abortOperationNames: ['AdminRepairRequests'],
+    });
+    await page.goto(PAGE_PATH);
+    await hideNonPr3FloatingEntry(page);
+    await focusTab(page, '维修申请');
+    const pane = activePane(page);
+    const listRetry = pane.getByRole('button', { name: /重\s*试/ }).first();
+    await expect(listRetry).toBeVisible();
+    const listRetryRadius = await listRetry.evaluate((el) => getComputedStyle(el).borderRadius);
+    expect(listRetryRadius, '列表失败态重试按钮半径规则').toBe('6px');
+
+    // 阶段二：撤销旧路由后换装 mock，仅 abort 摘要查询 → Drawer 打开且弹层「重试」为 6px
+    // （Drawer 渲染在 body 门户，不在 .kb-table-scope 内，必须单独覆盖弹层动作）
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await installAdminDocumentKbGraphqlMocks(page, {
+      abortOperationNames: ['AdminRepairRequestSummary'],
+    });
+    await page.goto(PAGE_PATH);
+    await hideNonPr3FloatingEntry(page);
+    await focusTab(page, '维修申请');
+    await pane.locator('.kb-table-scope .ant-table-tbody .ant-btn').first().click();
+    const drawer = page.locator('.ant-drawer').filter({ hasText: '维修申请摘要' });
+    await expect(drawer).toBeVisible();
+    // AntD 两字按钮会在中间插入全角空格（「重 试」），用正则容忍（同「摘 要」口径）
+    const drawerRetry = drawer.getByRole('button', { name: /重\s*试/ });
+    await expect(drawerRetry).toBeVisible();
+    const drawerRetryRadius = await drawerRetry.evaluate((el) => getComputedStyle(el).borderRadius);
+    expect(drawerRetryRadius, 'Drawer 弹层重试按钮半径规则').toBe('6px');
   });
 
   test('S→M→L→M 往返：L 下搜索/筛选/分页/操作/退出可达、无整页横滚；回 M 恢复基准', async ({
