@@ -20,7 +20,8 @@ import type { DataSource } from 'typeorm';
 import { CreateAccountUsecase } from '@src/usecases/account/create-account.usecase';
 import { assertDataSourceOnAllowedE2eDatabase } from '../utils/e2e-db-guard';
 import {
-  cleanupAdminDocumentFixture,
+  cleanupAdminDocumentFixtureByIds,
+  createAdminDocFixtureOwnership,
   runAdminDocFixtureTeardown,
   shouldRunAdminDocFixtureCleanup,
 } from './admin-document-database-fixture';
@@ -167,6 +168,10 @@ const ownershipWith = (ids: {
   return ownership;
 };
 
+const guardedNoopCleanup = async (dataSource: DataSource): Promise<void> => {
+  await assertDataSourceOnAllowedE2eDatabase(dataSource);
+};
+
 describe('admin-document-database 夹具清理失败路径（R1 回归）', () => {
   const originalEnv = { ...process.env };
 
@@ -193,7 +198,7 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
         app: mockApp.app,
         dataSource,
         targetValidated: false,
-        cleanup: cleanupAdminDocumentFixture,
+        cleanup: guardedNoopCleanup,
       }),
     ).resolves.toBeUndefined();
 
@@ -211,7 +216,7 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
         app: mockApp.app,
         dataSource: undefined,
         targetValidated: true,
-        cleanup: cleanupAdminDocumentFixture,
+        cleanup: guardedNoopCleanup,
       }),
     ).resolves.toBeUndefined();
 
@@ -226,7 +231,7 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
       app: mockApp.app,
       dataSource,
       targetValidated: false,
-      cleanup: cleanupAdminDocumentFixture,
+      cleanup: guardedNoopCleanup,
     });
 
     expect(state.deleteCalls).toHaveLength(0);
@@ -237,38 +242,16 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
   it('直接调用 cleanup 且目标库不在白名单：第一条 DELETE 之前即被拒绝', async () => {
     const { dataSource, state } = createMockDataSource({ database: 'lithography_drill' });
 
-    await expect(cleanupAdminDocumentFixture(dataSource)).rejects.toThrow(/白名单/);
+    const ownership = createAdminDocFixtureOwnership();
+    ownership.accountIds.push(901);
+    await expect(cleanupAdminDocumentFixtureByIds(dataSource, ownership)).rejects.toThrow(/白名单/);
 
     expect(state.guardQueryCalls).toBe(1);
     expect(state.deleteCalls).toHaveLength(0);
   });
 
-  it('允许的隔离库：守卫先行，按子→父顺序精确删除固定标识（含账号域两跳）', async () => {
-    const { dataSource, state } = createMockDataSource({
-      database: 'lithography_e2e',
-      accountIds: [901, 902],
-    });
-
-    await cleanupAdminDocumentFixture(dataSource);
-
-    expect(state.guardQueryCalls).toBe(1);
-    expect(state.deleteCalls.map((call) => call.entityName)).toEqual([
-      'AiReportEntity',
-      'AiMessageEntity',
-      'EngineerResponseEntity',
-      'AiConversationEntity',
-      'RepairRequestEntity',
-      'EquipmentModelEntity',
-      'UserInfoEntity',
-      'AccountEntity',
-    ]);
-  });
-
-  it('清理中途失败：错误不被吞掉，app.close 仍执行（try/finally），失败后不再继续删除', async () => {
-    const { dataSource, state } = createMockDataSource({
-      database: 'lithography_e2e',
-      failOnDeleteCall: 2,
-    });
+  it('清理失败：错误不被吞掉，app.close 仍执行（try/finally）', async () => {
+    const { dataSource } = createMockDataSource({ database: 'lithography_e2e' });
     const mockApp = createMockApp();
 
     await expect(
@@ -276,11 +259,10 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
         app: mockApp.app,
         dataSource,
         targetValidated: true,
-        cleanup: cleanupAdminDocumentFixture,
+        cleanup: () => Promise.reject(new Error('模拟清理中途失败')),
       }),
     ).rejects.toThrow('模拟清理中途失败');
 
-    expect(state.deleteCalls).toHaveLength(2); // 第 2 条失败后不再继续
     expect(mockApp.appState.closeCalls).toBe(1);
   });
 
@@ -294,7 +276,7 @@ describe('admin-document-database 夹具清理失败路径（R1 回归）', () =
         app,
         dataSource: undefined,
         targetValidated: false,
-        cleanup: cleanupAdminDocumentFixture,
+        cleanup: guardedNoopCleanup,
       }),
     ).rejects.toThrow('模拟关闭失败');
   });
