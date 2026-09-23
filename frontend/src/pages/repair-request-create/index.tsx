@@ -13,7 +13,11 @@ import { PageHeader } from '@/shared/ui/page-header';
 export function RepairRequestCreatePage() {
   return (
     <div className="page-stack">
-      <PageHeader description="提交设备故障信息，创建维修申请。" title="创建维修申请" />
+      <PageHeader
+        description="提交设备故障信息，创建维修申请。"
+        eyebrow="New Repair Request"
+        title="创建维修申请"
+      />
       <div className="surface-panel">
         <div className="max-w-xl">
           <RepairRequestForm />

@@ -195,7 +195,11 @@ export function CustomerRepairRequestsPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader description="查看自己提交的维修申请、接单情况与处理进度。" title="我的维修申请" />
+      <PageHeader
+        description="查看自己提交的维修申请、接单情况与处理进度。"
+        eyebrow="My Repair Requests"
+        title="我的维修申请"
+      />
 
       <div className="surface-panel">
         {listState.status === 'failed' ? (

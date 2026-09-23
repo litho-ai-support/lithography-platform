@@ -43,6 +43,7 @@ export function EngineerRepairRequestDetailPage() {
     <div className="page-stack">
       <PageHeader
         description="查看维修申请详情与工程师回复，工程师可直接接单跟进处理。"
+        eyebrow="Repair Request Detail"
         title="维修申请详情"
       />
       <EngineerRepairRequestDetailPanel

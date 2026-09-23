@@ -21,6 +21,7 @@ export function ReferenceDocumentsPage() {
     <div className="page-stack">
       <PageHeader
         description="查阅光刻机维护知识库：错误代码手册、维护指南、安全规范与检查表。"
+        eyebrow="Reference Documents"
         title="参考资料库"
       />
       <ReferenceDocumentList canManage={canManage} />

@@ -1,15 +1,22 @@
-// 管理员文档数据库知识库视觉基准验收与证据采集（PR3 R7，0922 第二轮 Review 修复）。
+// 管理员文档数据库知识库视觉基准验收与证据采集（PR3 第三轮 Review S1 改版）。
 //
-// 验收内容（修复计划 §7 与视觉报告 §5）：
+// 本 spec 为「无后端确定性视觉验收」：GraphQL 全部走仓库内 mock
+//（helpers/admin-document-kb-mocks.ts，最小完整四 Tab 数据），会话由
+// helpers/auth-session-seed 预置——不依赖真实后端、开发库、
+// backend/env/.env.development、本机账号或任何未入库文件，fresh clone 直接可跑。
+// 真实前后端链路（含登录）由 admin-document-database-real.spec.ts 单独承担，职责分离。
+//
+// 验收内容：
+// - 数值基准（KB_BASELINE）由原型实测固化为入库真源：本文件常量 + frontend/docs/gkj-visual-baseline.md
+//   第 6 节；自动化只验证当前实现的 computed style、几何、overflow 和截图物理尺寸，
+//   不在运行时读取原型文件，也不访问任何远程 CDN。原型并排对照仅作为可选人工流程。
 // - 三视口（1920×1080、1440×900、1366×768）× 四标签共 12 张整页截图；1920 套
 //   不隐藏全局 AI 浮动入口，其余两套按复查建议隐藏；必须为 viewport 截图，
 //   物理尺寸严格等于指定视口（不得用 fullPage 高度替代指定分辨率）；
-// - computed-style/geometry 目标来自 docs/tmp/gkj.html 原型实测（下方 KB_BASELINE，
-//   口径见视觉报告 §3），不把当前组件值反写为 expect；
 // - 重点机械断言：纯色工作区 #f3f4f6、宽屏铺满（内容右缘 = 视口 - 26）、页头
 //   10/20/12px 层级、卡片 10px 圆角/轻阴影、工具区 61px 内 12px/36px 搜索框、
 //   表头 10px、正文 11px、单元格 10px 9px；每视口附页头、汇总、工具区、表头和
-//   一行正文的 1:1 局部图（原型与实现各一套，元素截图不二次缩放）；
+//   一行正文的 1:1 实现局部图（元素截图不二次缩放，供与原型人工并排对照）；
 // - 维修申请「型号告警态」：告警与表格同卡（工具区 → 告警 → 表格相邻无外部间距）；
 // - S→M→L→M：L 下搜索/筛选/分页/操作/退出可达、无整页横滚；回 M 恢复基准；
 // - 共享外观回归：登录、用户管理、客户申请、独立参考资料页保持默认外观，
@@ -17,29 +24,21 @@
 //
 // 截图与 JSON 写入 testInfo outputPath（frontend/test-results/...），由采集人复制归档到
 // docs/tmp/PR 证据目录（本地可追溯，不随 PR 提交）。
-// 前提（不满足时自动 skip，与 admin-document-database-real.spec.ts 同口径）：
-// 本地后端 127.0.0.1:3000 可用、backend/env/.env.development 存在、前端真实通道可用。
 
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import {
-  hasFrontendGraphQLEndpoint,
-  isRealBackendAvailable,
-  readBackendEnv,
-  readBackendEnvOrNull,
-} from './helpers/real-backend';
+import { installAdminDocumentKbGraphqlMocks } from './helpers/admin-document-kb-mocks';
+import { seedAuthSession } from './helpers/auth-session-seed';
 
 const PAGE_PATH = '/admin/document-database';
-const GKJ_HTML_PATH = fileURLToPath(new URL('../../docs/tmp/gkj.html', import.meta.url));
 const MODEL_WARNING_TEXT = '设备型号选项加载失败';
 
 /**
- * gkj 原型知识库页实测基准（Playwright Chromium，dpr=1，根字号 16px，1440×900）。
- * 全部来自 docs/tmp/gkj.html `#knowledge-base-page` 的 getComputedStyle/getBoundingClientRect
- * （视觉报告 §3），不是当前实现的反写值。
+ * 知识库页数值基准（Playwright Chromium，dpr=1，根字号 16px，1440×900）。
+ * 真源：frontend/docs/gkj-visual-baseline.md 第 6 节 + 本常量（原型实测固化为入库基准，
+ * 第三轮 Review S1 起，自动化不再运行时读取原型文件）。修改基准必须先改文档再改这里。
  */
 const KB_BASELINE = {
   card: {
@@ -165,19 +164,6 @@ const VIEWPORTS = [
   { height: 900, width: 1440 },
   { height: 768, width: 1366 },
 ] as const;
-
-async function loginAs(
-  page: Page,
-  env: Record<string, string>,
-  loginName: string,
-  landingPath: RegExp,
-): Promise<void> {
-  await page.goto('/login');
-  await page.getByLabel('账号或邮箱').fill(loginName);
-  await page.getByLabel('密码').fill(env.MOCK_SEED_PASSWORD);
-  await page.getByRole('button', { name: /登\s*录/ }).click();
-  await expect(page).toHaveURL(landingPath);
-}
 
 function activePane(page: Page): Locator {
   return page.locator('.ant-tabs-tabpane-active');
@@ -556,7 +542,8 @@ async function shootTheadFirstRow(
   evidence[name] = { clipHeight: +clip.height.toFixed(2), clipWidth: +clip.width.toFixed(2), png };
 }
 
-/** 每个视口：实现侧页头/汇总/工具区/表头+首行 4 张 1:1 局部图（参考资料标签激活时）。 */
+/** 每个视口：实现侧页头/汇总/工具区/表头+首行 4 张 1:1 局部图（参考资料标签激活时），
+    供采集人与原型在相同视口/字号档并排人工对照。 */
 async function captureImplementationLocals(
   page: Page,
   viewport: { height: number; width: number },
@@ -569,131 +556,46 @@ async function captureImplementationLocals(
   await shootLocal(
     page,
     page.locator('.page-header--kb'),
-    path.join(outputDir, `r7-kb-local-${tag}-header.png`),
+    path.join(outputDir, `kb-local-${tag}-header.png`),
     evidence,
     'header',
   );
   await shootLocal(
     page,
     page.locator('.kb-card.kb-summary'),
-    path.join(outputDir, `r7-kb-local-${tag}-summary.png`),
+    path.join(outputDir, `kb-local-${tag}-summary.png`),
     evidence,
     'summary',
   );
   await shootLocal(
     page,
     pane.locator('.kb-toolbar'),
-    path.join(outputDir, `r7-kb-local-${tag}-toolbar.png`),
+    path.join(outputDir, `kb-local-${tag}-toolbar.png`),
     evidence,
     'toolbar',
   );
   await shootTheadFirstRow(
     page,
     pane,
-    path.join(outputDir, `r7-kb-local-${tag}-thead-first-row.png`),
+    path.join(outputDir, `kb-local-${tag}-thead-first-row.png`),
     evidence,
     'theadFirstRow',
   );
   return evidence;
 }
 
-/** 每个视口：原型（gkj.html）侧同四项 1:1 局部图，供直接对照（不二次缩放对齐）。 */
-async function capturePrototypeLocals(
-  page: Page,
-  viewport: { height: number; width: number },
-  outputDir: string,
-): Promise<Record<string, unknown>> {
-  const tag = `${viewport.width}x${viewport.height}`;
-  const proto = await page.context().newPage();
-  const evidence: Record<string, unknown> = {};
-  try {
-    await proto.setViewportSize(viewport);
-    await proto.goto(pathToFileURL(GKJ_HTML_PATH).href);
-    // 等 Tailwind CDN 生效（text-xl → 20px；默认 h2 为 24px）
-    await proto.waitForFunction(
-      () => {
-        const h2 = document.querySelector('#knowledge-base-page h2');
-        return h2 !== null && getComputedStyle(h2).fontSize === '20px';
-      },
-      undefined,
-      { timeout: 30_000 },
-    );
-    await proto.click('[data-view="knowledge"]');
-    await waitForFontsReady(proto);
-    const kb = proto.locator('#knowledge-base-page');
-    await shootLocal(
-      proto,
-      kb.locator(':scope > div.flex.items-start'),
-      path.join(outputDir, `r7-gkj-local-${tag}-header.png`),
-      evidence,
-      'header',
-    );
-    await shootLocal(
-      proto,
-      kb.locator('.kb-card').nth(0),
-      path.join(outputDir, `r7-gkj-local-${tag}-summary.png`),
-      evidence,
-      'summary',
-    );
-    await shootLocal(
-      proto,
-      kb.locator('.kb-card').nth(1).locator(':scope > div').first(),
-      path.join(outputDir, `r7-gkj-local-${tag}-toolbar.png`),
-      evidence,
-      'toolbar',
-    );
-    const theadBox = await kb.locator('.kb-table thead').boundingBox();
-    const rowBox = await kb.locator('.kb-table tbody tr').first().boundingBox();
-    if (theadBox === null || rowBox === null) throw new Error('原型缺少表头或首行');
-    const clip = {
-      height: rowBox.y + rowBox.height - theadBox.y,
-      width: Math.max(theadBox.width, rowBox.width),
-      x: theadBox.x,
-      y: theadBox.y,
-    };
-    const filePath = path.join(outputDir, `r7-gkj-local-${tag}-thead-first-row.png`);
-    await proto.screenshot({ path: filePath, clip });
-    const png = readPngDimensions(filePath);
-    expect(Math.abs(png.width - Math.round(clip.width))).toBeLessThanOrEqual(2);
-    expect(Math.abs(png.height - Math.round(clip.height))).toBeLessThanOrEqual(2);
-    evidence.theadFirstRow = {
-      clipHeight: +clip.height.toFixed(2),
-      clipWidth: +clip.width.toFixed(2),
-      png,
-    };
-  } finally {
-    await proto.close();
-  }
-  return evidence;
-}
-
-test.describe('real backend admin document database - knowledge base visual baseline (R7)', () => {
-  test.beforeEach(async () => {
-    const env = readBackendEnvOrNull();
-    test.skip(
-      env === null,
-      'backend/env/.env.development 缺失（本地文件，不入库），跳过真实后端用例',
-    );
-    test.skip(
-      !hasFrontendGraphQLEndpoint(),
-      '前端真实通道不可达（未配置 VITE_GRAPHQL_ENDPOINT 且 vite dev server 无 /graphql 转发），跳过真实后端用例',
-    );
-    test.skip(
-      !(await isRealBackendAvailable(env as Record<string, string>)),
-      '本地后端不可用或不可登录，跳过真实后端用例',
-    );
-  });
-
+test.describe('mocked admin document database - knowledge base visual baseline (PR3 R3)', () => {
   test('M 档四标签三视口：12 张整页截图、kb 机械基准、1:1 局部图与 JSON 证据', async ({
     page,
   }, testInfo) => {
     test.setTimeout(300_000);
-    const env = readBackendEnv();
+    await installAdminDocumentKbGraphqlMocks(page);
+    await seedAuthSession(page, 'SUPER_ADMIN');
+
     const evidenceDir = testInfo.outputPath();
     mkdirSync(evidenceDir, { recursive: true });
 
     await page.setViewportSize({ height: 1080, width: 1920 });
-    await loginAs(page, env, 'mock_super_admin', /\/admin$/);
     await page.goto(PAGE_PATH);
     await expect(page.getByRole('heading', { name: '文档数据库' })).toBeVisible();
     await waitForFontsReady(page);
@@ -726,22 +628,44 @@ test.describe('real backend admin document database - knowledge base visual base
         expectKbPaneBaseline(paneSnapshot);
 
         // 复查 B2：viewport 截图（不加 fullPage），物理尺寸必须严格等于指定视口
-        const key = `r7-${tab.fileStem}-M-${tag}`;
+        const key = `kb-visual-${tab.fileStem}-M-${tag}`;
         const pngPath = path.join(evidenceDir, `${key}.png`);
         await page.screenshot({ path: pngPath });
         const png = readPngDimensions(pngPath);
         expect(png).toEqual({ height: viewport.height, width: viewport.width });
+
+        // 按钮半径规则（frontend/docs/gkj-visual-baseline.md 6.5）：主按钮 8px、
+        // 表格操作（size=small）6px、状态胶囊 999px；搜索框/工具按钮 6px 已由
+        // KB_BASELINE.toolbarButton/search 覆盖
+        if (tab.fileStem === 'reference-documents') {
+          const primaryRadius = await page
+            .locator('.kb-primary-action .ant-btn')
+            .evaluate((el) => getComputedStyle(el).borderRadius);
+          expect(primaryRadius, '主按钮半径规则').toBe('8px');
+        }
+        if (tab.fileStem === 'repair-requests') {
+          const paneLoc = activePane(page);
+          const actionRadius = await paneLoc
+            .locator('.kb-table-scope .ant-table-tbody .ant-btn')
+            .first()
+            .evaluate((el) => getComputedStyle(el).borderRadius);
+          expect(actionRadius, '表格操作按钮半径规则').toBe('6px');
+          const pillRadius = await paneLoc
+            .locator('.status-pill')
+            .first()
+            .evaluate((el) => getComputedStyle(el).borderRadius);
+          expect(pillRadius, '状态胶囊半径规则').toBe('999px');
+        }
+
         tabEvidence[tab.fileStem] = { page: pageSnapshot, pane: paneSnapshot, png, tab: tab.name };
       }
 
-      // 每视口 1:1 局部图（原型与实现各一套，供直接对照）
+      // 每视口实现侧 1:1 局部图（供与原型人工并排对照）
       const localEvidence = await captureImplementationLocals(page, viewport, evidenceDir);
-      const prototypeEvidence = await capturePrototypeLocals(page, viewport, evidenceDir);
 
       evidence[tag] = {
         floatingEntryPreserved,
         local: localEvidence,
-        prototype: prototypeEvidence,
         tabs: tabEvidence,
       };
       for (const tab of TABS) {
@@ -751,7 +675,7 @@ test.describe('real backend admin document database - knowledge base visual base
     }
 
     evidence.tableScroll = tables;
-    const evidenceJson = path.join(evidenceDir, 'r7-kb-evidence.json');
+    const evidenceJson = path.join(evidenceDir, 'kb-visual-evidence.json');
     writeFileSync(evidenceJson, JSON.stringify(evidence, null, 2));
     console.log(`[visual-evidence] ${evidenceJson}`);
   });
@@ -760,21 +684,15 @@ test.describe('real backend admin document database - knowledge base visual base
     page,
   }, testInfo) => {
     test.setTimeout(90_000);
-    const env = readBackendEnv();
 
-    // 仅注入设备型号查询失败（网络层 abort），触发维修申请 Tab 的型号告警，
+    // 仅让设备型号查询失败（网络层 abort），触发维修申请 Tab 的型号告警，
     // 用于确认告警出现时四个状态块仍以卡内相邻布局为真源（无外部间距叠加）
-    await page.route('**/graphql', async (route) => {
-      const postData = route.request().postData() ?? '';
-      if (postData.includes('AdminDocumentDatabaseEquipmentModels')) {
-        await route.abort();
-        return;
-      }
-      await route.continue();
+    await installAdminDocumentKbGraphqlMocks(page, {
+      abortOperationNames: ['AdminDocumentDatabaseEquipmentModels'],
     });
+    await seedAuthSession(page, 'SUPER_ADMIN');
 
     await page.setViewportSize({ height: 900, width: 1440 });
-    await loginAs(page, env, 'mock_super_admin', /\/admin$/);
     await page.goto(PAGE_PATH);
     await waitForFontsReady(page);
     await hideNonPr3FloatingEntry(page);
@@ -820,15 +738,15 @@ test.describe('real backend admin document database - knowledge base visual base
     expect(geometry.gapAfterToolbar).toBe(geometry.blockPaddingTop);
     expect(geometry.gapBeforeTable).toBe(geometry.blockPaddingBottom);
 
-    const pngPath = testInfo.outputPath('r7-repair-requests-M-model-warning-1440x900.png');
+    const pngPath = testInfo.outputPath('kb-repair-requests-M-model-warning-1440x900.png');
     await page.screenshot({ path: pngPath });
     expect(readPngDimensions(pngPath)).toEqual({ height: 900, width: 1440 });
 
-    const evidenceJson = path.join(testInfo.outputPath(), 'r7-kb-evidence-model-warning.json');
+    const evidenceJson = path.join(testInfo.outputPath(), 'kb-evidence-model-warning.json');
     writeFileSync(
       evidenceJson,
       JSON.stringify(
-        { 'r7-repair-requests-M-model-warning-1440x900': { geometry, page: pageSnapshot } },
+        { 'kb-repair-requests-M-model-warning-1440x900': { geometry, page: pageSnapshot } },
         null,
         2,
       ),
@@ -840,10 +758,10 @@ test.describe('real backend admin document database - knowledge base visual base
     page,
   }) => {
     test.setTimeout(90_000);
-    const env = readBackendEnv();
+    await installAdminDocumentKbGraphqlMocks(page);
+    await seedAuthSession(page, 'SUPER_ADMIN');
 
     await page.setViewportSize({ height: 900, width: 1440 });
-    await loginAs(page, env, 'mock_super_admin', /\/admin$/);
     await page.goto(PAGE_PATH);
     await waitForFontsReady(page);
     await expectFontScale(page, 'M');
@@ -892,7 +810,7 @@ test.describe('real backend admin document database - knowledge base visual base
     page,
   }, testInfo) => {
     test.setTimeout(120_000);
-    const env = readBackendEnv();
+    await installAdminDocumentKbGraphqlMocks(page);
     const evidenceDir = testInfo.outputPath();
     mkdirSync(evidenceDir, { recursive: true });
     const evidence: Record<string, unknown> = {};
@@ -940,20 +858,20 @@ test.describe('real backend admin document database - knowledge base visual base
     await page.goto('/login');
     await expect(page.getByRole('button', { name: /登\s*录/ })).toBeVisible();
     await expectDefaultShell('login');
-    await shoot('r7-shared-login-1440x900.png');
+    await shoot('kb-shared-login-1440x900.png');
 
     // 2) 用户管理（SUPER_ADMIN）
-    await loginAs(page, env, 'mock_super_admin', /\/admin$/);
+    await seedAuthSession(page, 'SUPER_ADMIN');
     await page.goto('/admin/users');
     await expect(page.getByRole('heading', { name: '用户管理' })).toBeVisible();
     await expectDefaultShell('admin-users');
-    await shoot('r7-shared-admin-users-1440x900.png');
+    await shoot('kb-shared-admin-users-1440x900.png');
 
     // 3) 独立参考资料页（SUPER_ADMIN）
     await page.goto('/reference-documents');
     await expect(page.getByRole('heading', { name: '参考资料库' })).toBeVisible();
     await expectDefaultShell('reference-documents');
-    await shoot('r7-shared-reference-documents-1440x900.png');
+    await shoot('kb-shared-reference-documents-1440x900.png');
 
     // 对照：知识库页确实启用了变体（同登录态下页面之间互不影响）
     await page.goto(PAGE_PATH);
@@ -964,16 +882,16 @@ test.describe('real backend admin document database - knowledge base visual base
     expect(kbShell.mainMaxWidth).toBe('none');
     evidence['admin-document-database'] = kbShell;
 
-    // 4) 客户申请（CUSTOMER）：退出后换号登录
+    // 4) 客户申请（CUSTOMER）：退出后换预置客户会话
     await page.getByRole('button', { name: /退出登录/ }).click();
     await expect(page).toHaveURL(/\/login/);
-    await loginAs(page, env, 'mock_customer_alpha', /\/customer$/);
+    await seedAuthSession(page, 'CUSTOMER');
     await page.goto('/customer/repair-requests');
     await expect(page.getByRole('heading', { name: '我的维修申请' })).toBeVisible();
     await expectDefaultShell('customer-repair-requests');
-    await shoot('r7-shared-customer-repair-requests-1440x900.png');
+    await shoot('kb-shared-customer-repair-requests-1440x900.png');
 
-    const evidenceJson = path.join(evidenceDir, 'r7-shared-look-regression.json');
+    const evidenceJson = path.join(evidenceDir, 'kb-shared-look-regression.json');
     writeFileSync(evidenceJson, JSON.stringify(evidence, null, 2));
     console.log(`[visual-evidence] ${evidenceJson}`);
   });

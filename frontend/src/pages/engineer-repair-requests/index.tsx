@@ -14,7 +14,11 @@ import { PageHeader } from '@/shared/ui/page-header';
 export function EngineerRepairRequestsPage() {
   return (
     <div className="page-stack">
-      <PageHeader description="查看待接单维修申请与你已接单的维修申请。" title="工程师维修申请" />
+      <PageHeader
+        description="查看待接单维修申请与你已接单的维修申请。"
+        eyebrow="Repair Requests"
+        title="工程师维修申请"
+      />
       <EngineerRepairRequestList />
     </div>
   );

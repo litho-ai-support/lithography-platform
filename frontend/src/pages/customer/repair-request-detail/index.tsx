@@ -112,7 +112,11 @@ export function CustomerRepairRequestDetailPage({ requestId }: { requestId: numb
   if (detailState.status === 'loading') {
     return (
       <div className="page-stack">
-        <PageHeader description="正在加载维修申请详情…" title="维修申请详情" />
+        <PageHeader
+          description="正在加载维修申请详情…"
+          eyebrow="Repair Request Detail"
+          title="维修申请详情"
+        />
         <div className="surface-panel" />
       </div>
     );
@@ -121,7 +125,11 @@ export function CustomerRepairRequestDetailPage({ requestId }: { requestId: numb
   if (detailState.status === 'failed') {
     return (
       <div className="page-stack">
-        <PageHeader description="无法查看该维修申请。" title="维修申请详情" />
+        <PageHeader
+          description="无法查看该维修申请。"
+          eyebrow="Repair Request Detail"
+          title="维修申请详情"
+        />
         <div className="surface-panel">
           <Alert
             action={
@@ -142,7 +150,11 @@ export function CustomerRepairRequestDetailPage({ requestId }: { requestId: numb
 
   return (
     <div className="page-stack">
-      <PageHeader description={`申请编号：${detail.requestNo}`} title="维修申请详情" />
+      <PageHeader
+        description={`申请编号：${detail.requestNo}`}
+        eyebrow="Repair Request Detail"
+        title="维修申请详情"
+      />
 
       <div className="surface-panel">
         <div className="flex items-start justify-between gap-4">

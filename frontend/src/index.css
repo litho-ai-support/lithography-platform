@@ -81,6 +81,12 @@
   --empty-bg: #f8fafc;
   --empty-border: #cbd5e1;
   --empty-text: #94a3b8;
+  /* 按钮半径规则（原型 rounded-lg/rounded-md/rounded-full 实测，第三轮 Review S2 定 rules）：
+     组件按语义消费变量，禁止散落魔法数或依赖 AntD 默认值；AntD 侧镜像见 src/app/theme/index.ts
+     （borderRadius=--radius-action、borderRadiusSM=--radius-control，两处必须同步修改） */
+  --radius-action: 8px; /* 页面主要动作（主按钮） */
+  --radius-control: 6px; /* 搜索、筛选、表格操作和弹窗动作等紧凑控件 */
+  --radius-pill: 999px; /* 状态胶囊 */
   /* gkj 知识库页（#knowledge-base-page，PR3 R7）：页面级 opt-in 变体常量，仅
      /admin/document-database 消费；与通用 panel/search 基准不同（基准表第 6 节）。
      禁止其他页面消费本组变量；组件不得散落 raw hex */
@@ -666,12 +672,12 @@ body {
   padding: 12px;
 }
 
-/* 主搜索框：36px 高 / 6px 圆角 / 浅底 + 描边（原型 bg-slate-50 / border-slate-200）；图标 16×16 描边 */
+/* 主搜索框：36px 高 / 6px 圆角（--radius-control）/ 浅底 + 描边（原型 bg-slate-50 / border-slate-200）；图标 16×16 描边 */
 .kb-search {
   align-items: center;
   background: var(--kb-search-bg);
   border: 1px solid var(--kb-search-border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   display: flex;
   flex: 1;
   height: 2.25rem;
@@ -703,11 +709,11 @@ body {
   color: var(--kb-text-faint);
 }
 
-/* 工具按钮：36px 高 / 6px 圆角 / 白底 + 描边 / 12px tool 文字色 */
+/* 工具按钮：36px 高 / 6px 圆角（--radius-control）/ 白底 + 描边 / 12px tool 文字色 */
 .kb-toolbar-button {
   background: var(--kb-card-bg);
   border: 1px solid var(--kb-search-border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--kb-text-tool);
   flex-shrink: 0;
   font-size: 0.75rem;
@@ -1336,7 +1342,7 @@ body {
 /* StatusPill：gkj 状态胶囊语言 */
 .status-pill {
   align-items: center;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   display: inline-flex;
   font-size: 0.625rem;
   font-weight: 700;

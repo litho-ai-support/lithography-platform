@@ -13,6 +13,7 @@ export function AdminUsersPage() {
     <div className="page-stack">
       <PageHeader
         description="面向 SUPER_ADMIN 的用户管理：服务端分页查询、创建用户、资料编辑、启用/停用与密码重置；角色只在创建时单选，创建后只读。"
+        eyebrow="User Management"
         title="用户管理"
       />
 

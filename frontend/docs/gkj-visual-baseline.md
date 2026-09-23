@@ -139,6 +139,12 @@ ok/warn/critical 三种胶囊 `background-color` 均非 transparent。仅断言 
 > 它与第 2 节的 `.workspace-page` / `.panel-card` / `.platform-search` 通用工作台基准是
 > **两套视觉语言**，不得混用；本节是两套基准的切换说明，不是对第 2 节的修改。
 >
+> **自动化真源（第三轮 Review S1 起）**：`e2e/admin-document-database-visual.spec.ts`
+> 为无后端确定性视觉验收（GraphQL 走仓库内 mock，会话预置），数值基准以本节 +
+> spec 内 `KB_BASELINE` 常量为入库真源；自动化**不在运行时读取原型文件、不访问远程
+> CDN**。原型并排对照仅作为可选人工流程：在相同视口与 M 档下，将实现截图与本地原型
+> `#knowledge-base-page` 并排核对（本文件不随附原型文件）。
+>
 > 适用范围：仅 `/admin/document-database`。开启方式：AppLayout 按**精确路由**加
 > `.app-workspace--knowledge-base` / `.app-main--knowledge-base` modifier（不用前缀匹配），
 > 页面内消费 `.kb-*` opt-in 类与 `--kb-*` 变量。其他页面一律保持第 1–4 节基准。
@@ -185,3 +191,19 @@ ok/warn/critical 三种胶囊 `background-color` 均非 transparent。仅断言 
 2. 不复制原型非激活进度条占位的 48.5px、向量化 / 检索开关、分块数、批量操作与演示假数据。
 3. 本页新增写操作仅沿用既有参考资料管理权限（仅默认 Tab 右上入口）；三个只读 Tab 不新增写能力。
 4. 必要横滚只允许发生在表格内部（`.ant-table-content`），不得整页横滚、不得删字段。
+
+### 6.5 按钮半径规则（全局，第三轮 Review S2 定 rules）
+
+原型按钮半径实测：主按钮 `rounded-lg`=**8px**、工具区/搜索等紧凑控件 `rounded-md`=**6px**、
+状态胶囊 `rounded-full`=**999px**、知识库卡 **10px**。禁止依赖 AntD 默认值或散落魔法数，
+语义统一消费 Token/变量，两处镜像必须同步修改：
+
+| 语义                                                    | 值    | AntD 侧（src/app/theme/index.ts） | 原生 CSS 侧（index.css `:root`）       |
+| ------------------------------------------------------- | ----- | --------------------------------- | -------------------------------------- |
+| 页面主要动作（主按钮）                                  | 8px   | `token.borderRadius`              | `--radius-action`                      |
+| 搜索/筛选/表格操作/弹窗动作等紧凑控件（`size="small"`） | 6px   | `token.borderRadiusSM`            | `--radius-control`                     |
+| 状态胶囊                                                | 999px | —                                 | `--radius-pill`（`.status-pill` 消费） |
+| 知识库卡                                                | 10px  | —                                 | `--kb-card-radius`                     |
+
+自动化断言：`e2e/admin-document-database-visual.spec.ts` 机械校验主按钮 8px、
+搜索框/工具按钮 6px、状态胶囊 999px 与卡片 10px 的 computed style。
