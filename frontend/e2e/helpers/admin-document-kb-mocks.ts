@@ -146,6 +146,22 @@ export const ADMIN_DOCUMENT_KB_FIXTURES = {
       },
     ],
   },
+  /**
+   * 账号设置页 fixture（眉题用例 /account/settings，role 与会话种子 SUPER_ADMIN 一致）：
+   * 空 data 会让 mapper 守卫失败关闭并打控制台错误（dev StrictMode 下 ×2），
+   * 登记最小就绪态使页面渲染 ready 且控制台干净；字段与 MyAccountSettingsDto 契约对齐。
+   */
+  myAccountSettings: {
+    companyName: null,
+    contactEmail: null,
+    loginEmail: 'self@example.com',
+    loginName: 'admin',
+    nickname: '管理员',
+    phone: null,
+    role: 'SUPER_ADMIN',
+    status: 'ACTIVE',
+    updatedAt: '2026-09-01T10:00:00.000Z',
+  },
 } as const;
 
 type GraphQLRequestBody = {
@@ -220,6 +236,8 @@ function dataByOperation(
       return { adminUsers: { items: [], page: 1, pageSize: 20, total: 0 } };
     case 'MyRepairRequests':
       return { myRepairRequests: { items: [], page: 1, pageSize: 10, total: 0 } };
+    case 'MyAccountSettings':
+      return { myAccountSettings: { ...ADMIN_DOCUMENT_KB_FIXTURES.myAccountSettings } };
     default:
       return {};
   }

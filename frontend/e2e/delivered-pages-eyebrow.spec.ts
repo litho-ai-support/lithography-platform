@@ -9,8 +9,9 @@
 // 排除（非交付业务页）：登录页（未登录壳外页面，原型即无页头眉题）、
 // shared-ui-gallery 开发验收页、error-preview / labs / sandbox 等开发工具页。
 // 数据态说明：列表与详情查询均在 mock 登记表内（详情页返回 id 同源的最小
-// fixture：资料 501 / 申请 901），页面渲染就绪态；工程师详情等个别页面在空
-// data 下也能渲染页头，不受影响。
+// fixture：资料 501 / 申请 901；账号设置返回最小就绪态，避免空 data 触发
+// mapper 失败关闭的「未分类错误」控制台报错），页面渲染就绪态；工程师详情等
+// 个别页面在空 data 下也能渲染页头，不受影响。
 
 import { expect, test } from '@playwright/test';
 
