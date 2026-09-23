@@ -31,7 +31,11 @@ export function AccountSettingsPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader description="维护登录凭据、基础资料与登录密码。" title="账号设置" />
+      <PageHeader
+        description="维护登录凭据、基础资料与登录密码。"
+        eyebrow="Account Settings"
+        title="账号设置"
+      />
 
       <AccountSettingsPanel
         onPasswordChangeSucceeded={async (initiatedIdentity) => {

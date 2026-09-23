@@ -25,7 +25,11 @@ export function ReferenceDocumentDetailPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader description="查阅维护知识资料的完整内容与元数据。" title="参考资料详情" />
+      <PageHeader
+        description="查阅维护知识资料的完整内容与元数据。"
+        eyebrow="Reference Document Detail"
+        title="参考资料详情"
+      />
       <ReferenceDocumentDetailPanel
         canManage={canManage}
         documentId={parseReferenceDocumentIdParam(documentId)}

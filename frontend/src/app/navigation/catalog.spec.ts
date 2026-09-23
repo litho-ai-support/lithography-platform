@@ -28,10 +28,16 @@ describe('navigation catalog（S1 菜单表对账）', () => {
     ]);
   });
 
-  it('SUPER_ADMIN 仅见首页、参考资料、用户管理（文档数据库待 PR3 真实页面交付再加入）', () => {
+  it('SUPER_ADMIN 见首页、参考资料、用户管理、文档数据库与账号设置（PR3 S3）', () => {
     const paths = getNavigationItems('prod', 'SUPER_ADMIN').map((item) => item.path);
 
-    expect(paths).toEqual(['/', '/reference-documents', '/admin/users', '/account/settings']);
+    expect(paths).toEqual([
+      '/',
+      '/reference-documents',
+      '/admin/users',
+      '/admin/document-database',
+      '/account/settings',
+    ]);
   });
 
   it('匿名只见不受角色限制的入口', () => {

@@ -12,6 +12,7 @@ import { AppLayout } from '@/app/layout';
 
 import { AccountSettingsPage } from '@/pages/account-settings';
 import { AdminPage } from '@/pages/admin';
+import { AdminDocumentDatabasePage } from '@/pages/admin-document-database';
 import { AdminUsersPage } from '@/pages/admin-users';
 import {
   CustomerPage,
@@ -107,6 +108,14 @@ const router = createBrowserRouter([
         element: <AdminPage />,
         loader: protectedRouteLoader,
         path: 'admin',
+      },
+      {
+        // 文档数据库页（PR3 S3）：路由治理复用 protectedRouteLoader 与既有 /admin/**
+        // 角色策略（SUPER_ADMIN 放行，ENGINEER/CUSTOMER 按角色路径表拒绝），
+        // 与 admin/users 同模式，不新增第二份角色判定。
+        element: <AdminDocumentDatabasePage />,
+        loader: protectedRouteLoader,
+        path: 'admin/document-database',
       },
       {
         // 用户管理页：路由治理完全复用 protectedRouteLoader 与既有 /admin/**

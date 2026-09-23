@@ -68,6 +68,16 @@ const STABLE_NAVIGATION_ITEMS: NavigationItem[] = [
     tags: ['admin', 'users', 'management', '管理员', '用户管理'],
   },
   {
+    description: 'SUPER_ADMIN 的数据聚合视图：参考资料、维修申请、AI 会话与 AI 报告。',
+    id: 'admin-document-database',
+    kind: 'stable',
+    label: '文档数据库',
+    // PR3 S3 已交付真实聚合页；仅对 SUPER_ADMIN 展示，未授权直达由 /admin/** 路由层拒绝。
+    path: '/admin/document-database',
+    roles: ['SUPER_ADMIN'],
+    tags: ['admin', 'database', 'documents', 'aggregation', '文档数据库', '数据聚合'],
+  },
+  {
     description: '维护登录凭据、基础资料与登录密码；修改密码成功后需重新登录。',
     id: 'account-settings',
     kind: 'stable',
@@ -77,9 +87,6 @@ const STABLE_NAVIGATION_ITEMS: NavigationItem[] = [
     roles: ['CUSTOMER', 'ENGINEER', 'SUPER_ADMIN'],
     tags: ['account', 'settings', 'profile', 'password', '账号设置', '资料', '密码'],
   },
-  // 「文档数据库」菜单待 PR3 交付真实聚合页后再加入（审查裁定：当前 /admin 渲染
-  // 的是管理员入口面板，标作「文档数据库」会形成误导性占位入口，违反
-  // 「不得保留无效菜单」红线）；SUPER_ADMIN 经「首页」即可到达 /admin 角色主页。
 ];
 
 // 开发/试验入口：仅 dev/test 环境暴露。负责人 0914 裁定：error-preview 属生产的

@@ -9,7 +9,7 @@ const MAGIC_COLOR_PATTERN = /#[0-9a-fA-F]{3,8}\b|\b(?:rgb|hsl)a?\s*\(/gi;
 const INDEX_CSS_PATH = path.normalize('src/index.css');
 const THEME_PATH = path.normalize('src/app/theme/index.ts');
 // 白名单即「documented global token」：每一项都对应 gkj 视觉基准的映射记录，
-// 见 docs/plan/薛-PR1-S1现状与设计映射-20260914.md 第 3 节（Token/变量映射表）。
+// 见 frontend/docs/gkj-visual-baseline.md（第 2 节通用基准 / 第 6 节知识库页变体，PR3 R7）。
 const ALLOWED_INDEX_CSS_COLOR_TOKENS = new Set([
   '--color-ai-accent',
   '--color-ai-accent-hover',
@@ -45,6 +45,25 @@ const ALLOWED_INDEX_CSS_COLOR_TOKENS = new Set([
   '--text-muted',
   '--text-strong',
   '--workspace-bg',
+  // 知识库页（#knowledge-base-page）opt-in 变体常量（基准表第 6 节；仅 /admin/document-database 消费）
+  '--kb-workspace-bg',
+  '--kb-card-bg',
+  '--kb-card-border',
+  '--kb-card-shadow',
+  '--kb-divider',
+  '--kb-primary',
+  '--kb-primary-hover',
+  '--kb-primary-shadow',
+  '--kb-on-primary',
+  '--kb-text-body',
+  '--kb-text-muted',
+  '--kb-text-faint',
+  '--kb-text-tool',
+  '--kb-table-head-bg',
+  '--kb-table-head-border',
+  '--kb-table-row-hover',
+  '--kb-search-bg',
+  '--kb-search-border',
 ]);
 const ALLOWED_THEME_TOKEN_NAMES = new Set([
   'colorBorderSecondary',

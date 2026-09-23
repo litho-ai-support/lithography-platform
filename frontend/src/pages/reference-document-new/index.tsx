@@ -88,7 +88,11 @@ export function ReferenceDocumentNewPage() {
   if (createdId !== null) {
     return (
       <div className="page-stack">
-        <PageHeader description="参考资料已创建。" title="新增参考资料" />
+        <PageHeader
+          description="参考资料已创建。"
+          eyebrow="New Reference Document"
+          title="新增参考资料"
+        />
         <Result
           extra={[
             <Button
@@ -113,6 +117,7 @@ export function ReferenceDocumentNewPage() {
     <div className="page-stack">
       <PageHeader
         description="录入维护知识文本资料或上传文件（文本与文件至少提供一个）；适用设备型号留空表示通用资料。"
+        eyebrow="New Reference Document"
         title="新增参考资料"
       />
       <div className="surface-panel">

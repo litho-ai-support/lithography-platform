@@ -23,6 +23,16 @@ export interface AccountCredentialSnapshot {
   readonly createdAt: Date;
 }
 
+/**
+ * 账号对外展示信息快照（只读公开字段：安全昵称 + 所属公司名称）。
+ * 供管理员文档数据库等跨域读模型批量富集展示信息，不含任何敏感字段。
+ * 昵称经空白收敛：空白视为缺失（null），与 findNicknamesByAccountIds 口径一致。
+ */
+export interface AccountDisplayInfo {
+  readonly nickname: string | null;
+  readonly companyName: string | null;
+}
+
 export interface AccountSecurityUserInfoSnapshot {
   readonly accessGroup: IdentityTypeEnum[] | null;
   readonly metaDigest: IdentityTypeEnum[] | null;

@@ -24,9 +24,13 @@ export function createAppThemeConfig({ fontSize }: AppThemeConfigInput): ThemeCo
       key: APP_THEME_CSS_VAR_KEY,
     },
     token: {
+      // 按钮半径规则（第三轮 Review S2，原型 rounded-lg/rounded-md 实测）：
+      // borderRadius = 页面主要动作 8px；borderRadiusSM = 紧凑控件（size=small）6px。
+      // 原生 CSS 侧镜像为 index.css 的 --radius-action/--radius-control（CSS 无法读取
+      // TS 常量），两处必须同步修改；状态胶囊 999px 走 --radius-pill。
       borderRadius: 8,
       borderRadiusLG: 14,
-      borderRadiusSM: 4,
+      borderRadiusSM: 6,
       colorBgLayout: '#f3f4f6',
       colorBorderSecondary: '#e2e8f0',
       colorError: '#dc2626',

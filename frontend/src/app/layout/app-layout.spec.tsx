@@ -115,14 +115,14 @@ describe('AppLayout（S3 壳层）', () => {
     expect(screen.queryByRole('link', { name: '参考资料' })).not.toBeInTheDocument();
   });
 
-  it('SUPER_ADMIN 仅见首页、参考资料、用户管理（文档数据库待 PR3 加入）', () => {
+  it('SUPER_ADMIN 见首页、参考资料、用户管理与文档数据库（PR3 S3）', () => {
     useAuthSessionMock.mockReturnValue(sessionFor('SUPER_ADMIN'));
     renderLayout('/admin/users');
 
     expect(screen.getByRole('link', { name: '首页' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '用户管理' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '参考资料' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: '文档数据库' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '文档数据库' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '发起申请' })).not.toBeInTheDocument();
   });
 
@@ -132,6 +132,21 @@ describe('AppLayout（S3 壳层）', () => {
 
     expect(screen.getByRole('link', { name: '用户管理' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: '首页' })).not.toHaveAttribute('aria-current', 'page');
+  });
+
+  it('文档数据库路由应用知识库工作区变体，其他页面保持通用基准（PR3 R7）', () => {
+    useAuthSessionMock.mockReturnValue(sessionFor('SUPER_ADMIN'));
+    const view = renderLayout('/admin/document-database');
+
+    expect(document.querySelector('main.app-workspace--knowledge-base')).not.toBeNull();
+    expect(document.querySelector('.app-main--knowledge-base')).not.toBeNull();
+
+    view.unmount();
+    renderLayout('/admin/users');
+
+    // 变体按精确路由开启：其他页面不得继承纯色铺满（防前缀匹配误伤）
+    expect(document.querySelector('.app-workspace--knowledge-base')).toBeNull();
+    expect(document.querySelector('.app-main--knowledge-base')).toBeNull();
   });
 
   it('底部展示真实当前用户卡与退出入口', () => {
