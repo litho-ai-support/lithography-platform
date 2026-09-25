@@ -3,107 +3,316 @@
 /**
  * 工程师维修申请列表面板。
  *
- * - “待接单（AVAILABLE）”与“我的接单（MINE）”两个视图，取值即 GraphQL 参数，
- *   不创建第三套前端状态值；
- * - 加载中 / 空列表 / 加载失败（含重试）/ 分页交互齐全；
- * - 空态区分范围为空（total = 0）与当前页为空（保留分页器可回页，不形成死路）；
+ * - 四态视图（ALL / AVAILABLE / MINE / TAKEN_BY_OTHER）取值即 GraphQL 参数，
+ *   默认 ALL，不创建第三套前端状态值；
+ * - 筛选（设备型号 / 客户昵称关键词）与四态组合，值只来自后端真实查询，
+ *   不在前端对当前页做二次假过滤；筛选或范围变化都回到第 1 页；
+ * - 工具区沿用参考资料库的「主搜索 + 筛选按钮 + 展开区」交互：四态与主搜索常驻，
+ *   设备型号与清除筛选收进展开区；主搜索复用跨页共享中性原语 `ToolbarSearchField` /
+ *   `ToolbarButton`（不复制近似实现，也不消费知识库页专属的 .kb-* 类），
+ *   输入即时回显、防抖后自动应用，trim 后空串回到不筛选语义；
+ * - 九个业务字段归为「申请 / 客户 / 设备 / 处理进度」四组，组内主次两行，
+ *   长文本可换行或截断并保留完整可见途径（Tooltip），字段一个都不删；
+ *   表格最小宽度固定为四组实际所需值，1440×900 的主内容宽度内不产生横向滚动，
+ *   窄屏时横向滚动只发生在表格内部；
+ * - 加载 / 失败（含重试）/ 全局空态 / 筛选无结果 / 当前页空态分别处理，
+ *   一律复用 PR1 公共状态组件与容器；
  * - 点击列表项进入工程师详情路由；
  * - 页面与 UI 不解析 Apollo 原始错误：流程状态来自 feature application，
  *   transport 文案已由共享错误模型归一。
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { TableColumnsType } from 'antd';
-import { Alert, Button, Card, Empty, Pagination, Segmented, Skeleton, Table } from 'antd';
+import { Button, Pagination, Segmented, Select, Table, Tooltip } from 'antd';
 import { useNavigate } from 'react-router';
 
+import { isGraphQLIngressError } from '@/shared/graphql';
+import { EmptyState } from '@/shared/ui/empty-state';
+import { ErrorState } from '@/shared/ui/error-state';
+import { FilterBar } from '@/shared/ui/filter-bar';
 import { formatDateTimeText } from '@/shared/ui/format-date-time';
+import { LoadingState } from '@/shared/ui/loading-state';
+import { TableContainer } from '@/shared/ui/table-container';
+import { ToolbarButton, ToolbarSearchField } from '@/shared/ui/toolbar-controls';
 
 import { useEngineerRepairRequestList } from '../application/use-engineer-repair-request-list';
 import type {
   EngineerRepairListScope,
   EngineerRepairRequestListItem,
-  EngineerResolutionStatusValue,
 } from '../infrastructure/engineer-repair-request.types';
+import type { EquipmentModelOption } from '../infrastructure/repair-request.types';
+import { fetchEquipmentModels } from '../infrastructure/repair-request-adapter';
 
 import { ENGINEER_REPAIR_REQUEST_DETAIL_PATH } from './engineer-repair-request-paths';
-import { AcceptanceTag, ResolutionTag } from './repair-request-status-tags';
+import { AcceptanceViewStatusTag, ResolutionTag } from './repair-request-status-tags';
 
 const SCOPE_OPTIONS: Array<{ label: string; value: EngineerRepairListScope }> = [
+  { label: '全部', value: 'ALL' },
   { label: '待接单', value: 'AVAILABLE' },
   { label: '我的接单', value: 'MINE' },
+  { label: '他人已接单', value: 'TAKEN_BY_OTHER' },
 ];
 
 const EMPTY_TEXT_BY_SCOPE: Record<EngineerRepairListScope, string> = {
+  ALL: '暂无维修申请。',
   AVAILABLE: '暂无待接单的维修申请。',
   MINE: '暂无你的接单记录。',
+  TAKEN_BY_OTHER: '暂无他人已接单的维修申请。',
 };
 
+const FILTER_NO_RESULT_TEXT = '没有符合筛选条件的维修申请。';
+
+/** 主搜索防抖：输入即时回显，防抖到期后才提交筛选（与参考资料库标题搜索同一口径） */
+export const SEARCH_DEBOUNCE_MS = 300;
+
+/** 四组列宽合计 850：1440×900 主内容宽度内无需横向滚动，窄屏只在表格内部滚动 */
+const COLUMNS_MIN_WIDTH = 880;
+
+type ModelOptionsState =
+  | { status: 'loading' }
+  | { status: 'failed'; message: string }
+  | { status: 'ready'; models: EquipmentModelOption[] };
+
+function toModelOptionsUserMessage(error: unknown): string {
+  return isGraphQLIngressError(error) ? error.userMessage : '设备型号加载失败，请稍后重试。';
+}
+
+/** 纯拉取：只产出下一状态，不直接写 state（与创建表单同一模式），供初始加载与重试共用 */
+async function loadModelOptionsState(): Promise<ModelOptionsState> {
+  try {
+    const models = await fetchEquipmentModels();
+    return { status: 'ready', models };
+  } catch (error) {
+    return { status: 'failed', message: toModelOptionsUserMessage(error) };
+  }
+}
+
+/** 组内主行：字号与字重统一，长内容按需截断（完整值走 Tooltip） */
+function GroupPrimary({ children, truncate = false }: { children: string; truncate?: boolean }) {
+  return truncate ? (
+    <Tooltip title={children}>
+      <span className="truncate font-bold text-text text-xs">{children}</span>
+    </Tooltip>
+  ) : (
+    <span className="wrap-break-word font-bold text-text text-xs">{children}</span>
+  );
+}
+
 const columns: TableColumnsType<EngineerRepairRequestListItem> = [
-  { dataIndex: 'requestNo', key: 'requestNo', title: '申请编号', width: 160 },
   {
-    key: 'equipmentModel',
-    render: (_value, record) =>
-      `${record.equipmentModel.modelName}（${record.equipmentModel.modelCode}）`,
-    title: '设备型号',
-  },
-  { dataIndex: 'errorCode', key: 'errorCode', title: '错误码', width: 140 },
-  {
-    dataIndex: 'createdAt',
-    key: 'createdAt',
-    render: (value: string) => formatDateTimeText(value),
-    title: '创建时间',
-    width: 190,
+    key: 'application',
+    render: (_value, record) => (
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="font-bold font-mono text-primary text-xs">{record.requestNo}</span>
+        <span className="text-text-tertiary text-xs">{formatDateTimeText(record.createdAt)}</span>
+      </span>
+    ),
+    title: '申请',
+    width: 210,
   },
   {
-    dataIndex: 'isAccepted',
-    key: 'isAccepted',
-    render: (value: boolean) => <AcceptanceTag accepted={value} />,
-    title: '接单状态',
-    width: 110,
+    key: 'customer',
+    render: (_value, record) => (
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <GroupPrimary>{record.customerNickname}</GroupPrimary>
+        <span className="text-text-secondary text-xs">{record.customerCompanyName ?? '—'}</span>
+      </span>
+    ),
+    title: '客户',
+    width: 170,
   },
   {
-    dataIndex: 'latestResolutionStatus',
-    key: 'latestResolutionStatus',
-    render: (value: EngineerResolutionStatusValue | null) => <ResolutionTag status={value} />,
-    title: '最新处理状态',
-    width: 130,
+    key: 'equipment',
+    render: (_value, record) => (
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <GroupPrimary
+          truncate
+        >{`${record.equipmentModel.modelName}（${record.equipmentModel.modelCode}）`}</GroupPrimary>
+        <span className="text-text-secondary text-xs">{record.errorCode}</span>
+      </span>
+    ),
+    title: '设备',
+    width: 240,
+  },
+  {
+    key: 'progress',
+    render: (_value, record) => (
+      <span className="flex min-w-0 flex-col gap-1">
+        <span className="flex flex-wrap items-center gap-1">
+          <AcceptanceViewStatusTag viewStatus={record.acceptanceViewStatus} />
+          <ResolutionTag status={record.latestResolutionStatus} />
+        </span>
+        {record.acceptedEngineerNickname || record.acceptedAt ? (
+          <span className="flex flex-wrap items-center gap-1 text-xs">
+            <span className="font-bold text-text">{record.acceptedEngineerNickname ?? '—'}</span>
+            <span aria-hidden className="text-text-tertiary">
+              ·
+            </span>
+            <span className="text-text-tertiary">
+              {record.acceptedAt ? formatDateTimeText(record.acceptedAt) : '尚未接单'}
+            </span>
+          </span>
+        ) : (
+          <span className="text-text-tertiary text-xs">尚未接单</span>
+        )}
+      </span>
+    ),
+    title: '处理进度',
+    width: 230,
   },
 ];
 
-export function EngineerRepairRequestList() {
+export function EngineerRepairRequestList({
+  initialScope = 'ALL',
+}: {
+  /** 初始范围（缺省 ALL）：供列表路由以状态参数恢复「我的接单」等入口 */
+  initialScope?: EngineerRepairListScope;
+}) {
   const navigate = useNavigate();
-  const [scope, setScope] = useState<EngineerRepairListScope>('AVAILABLE');
-  const { state, goToPage, reload } = useEngineerRepairRequestList(scope);
+  const { state, scope, filter, setScope, setFilter, goToPage, reload } =
+    useEngineerRepairRequestList(initialScope);
+
+  // 设备型号筛选选项来自后端真实查询（与创建表单同一数据源与加载状态口径）
+  const [modelsState, setModelsState] = useState<ModelOptionsState>({ status: 'loading' });
+  const loadModels = useCallback(() => {
+    void loadModelOptionsState().then(setModelsState);
+  }, []);
+
+  // 重试：先显式回到 loading——失败态立即消失（重试按钮随之卸载，天然防连点）、
+  // Select 转为禁用 loading 态；初始挂载本就是 loading，不走此路径（避免 effect 内同步 setState）
+  const retryModels = useCallback(() => {
+    setModelsState({ status: 'loading' });
+    loadModels();
+  }, [loadModels]);
+
+  useEffect(() => {
+    loadModels();
+  }, [loadModels]);
+
+  // 主搜索（客户昵称）草稿：输入即时回显，防抖值才提交筛选，不逐字符发查询
+  const [nicknameDraft, setNicknameDraft] = useState('');
+  const [debouncedNickname, setDebouncedNickname] = useState('');
+  // 筛选展开区：设备型号与清除筛选收进展开区，常驻行只留四态与主搜索
+  const [filterOpen, setFilterOpen] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedNickname(nicknameDraft);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [nicknameDraft]);
+
+  // 防抖到期后应用主搜索：trim 后提交，空串回到不筛选语义（页码由状态机统一回第 1 页）。
+  // 这里读最新的 filter（含展开区已选的设备型号），不把型号覆盖回 null；
+  // 值未变化时状态机自身早退，不会因 filter 引用变化重复发请求。
+  useEffect(() => {
+    const trimmed = debouncedNickname.trim();
+    setFilter({ ...filter, customerNickname: trimmed === '' ? null : trimmed });
+  }, [debouncedNickname, filter, setFilter]);
+
+  const hasActiveFilter = filter.equipmentModelId !== null || filter.customerNickname !== null;
+
+  // 清除筛选：草稿与防抖值必须同时复位，否则防抖值里仍留着旧昵称，
+  // 应用 effect 会立刻把旧昵称回填成一次多余请求（列表闪回筛选无结果态）
+  const clearFilters = () => {
+    setNicknameDraft('');
+    setDebouncedNickname('');
+    setFilter({ equipmentModelId: null, customerNickname: null });
+  };
 
   return (
-    <Card title="维修申请列表">
+    <TableContainer title="维修申请列表">
       <div className="flex flex-col gap-4">
-        <div>
-          <Segmented
-            onChange={(value) => setScope(value as EngineerRepairListScope)}
-            options={SCOPE_OPTIONS}
-            value={scope}
+        <FilterBar>
+          {/* 四态选项宽度不可压缩：容器按可用宽度收缩，超出部分由本控件自身滚动，
+              保证窄屏整页与导航不横向溢出（计划 V2.3） */}
+          <div className="max-w-full min-w-0 overflow-x-auto">
+            <Segmented
+              onChange={(value) => setScope(value as EngineerRepairListScope)}
+              options={SCOPE_OPTIONS}
+              value={scope}
+            />
+          </div>
+          <ToolbarSearchField
+            clearLabel="清除客户昵称搜索"
+            onChange={setNicknameDraft}
+            placeholder="按客户昵称搜索"
+            value={nicknameDraft}
           />
-        </div>
+          <ToolbarButton
+            active={hasActiveFilter}
+            aria-expanded={filterOpen}
+            onClick={() => setFilterOpen((previous) => !previous)}
+          >
+            筛选
+          </ToolbarButton>
 
-        {state.status === 'loading' ? <Skeleton active paragraph={{ rows: 6 }} /> : null}
+          {/* 展开区：主搜索之外的精确条件；原型无展开态，属业务扩展 */}
+          {filterOpen ? (
+            <>
+              <Select<number | null>
+                allowClear
+                disabled={modelsState.status !== 'ready'}
+                loading={modelsState.status === 'loading'}
+                onChange={(value) => setFilter({ ...filter, equipmentModelId: value ?? null })}
+                options={
+                  modelsState.status === 'ready'
+                    ? modelsState.models.map((model) => ({
+                        label: `${model.modelName}（${model.modelCode}）`,
+                        value: model.id,
+                      }))
+                    : []
+                }
+                placeholder={modelsState.status === 'failed' ? '设备型号不可用' : '按设备型号筛选'}
+                style={{ minWidth: 220 }}
+                value={filter.equipmentModelId}
+              />
+              <ToolbarButton onClick={clearFilters}>清除筛选</ToolbarButton>
+            </>
+          ) : null}
+        </FilterBar>
+
+        {modelsState.status === 'failed' ? (
+          <ErrorState
+            action={
+              <Button onClick={retryModels} size="small">
+                重试
+              </Button>
+            }
+            title={modelsState.message}
+          />
+        ) : null}
+
+        {state.status === 'loading' ? <LoadingState label="正在加载维修申请…" /> : null}
 
         {state.status === 'failed' ? (
-          <Alert
+          <ErrorState
             action={
               <Button onClick={reload} size="small">
                 重试
               </Button>
             }
             title={state.message}
-            showIcon
-            type="error"
           />
         ) : null}
 
         {state.status === 'ready' && state.total === 0 ? (
-          <Empty description={EMPTY_TEXT_BY_SCOPE[scope]} />
+          hasActiveFilter ? (
+            <EmptyState
+              action={
+                <Button onClick={clearFilters} size="small">
+                  清除筛选
+                </Button>
+              }
+              title={FILTER_NO_RESULT_TEXT}
+            />
+          ) : (
+            <EmptyState title={EMPTY_TEXT_BY_SCOPE[scope]} />
+          )
         ) : null}
 
         {state.status === 'ready' && state.total > 0 ? (
@@ -118,24 +327,24 @@ export function EngineerRepairRequestList() {
                 })}
                 pagination={false}
                 rowKey="id"
-                scroll={{ x: 880 }}
+                scroll={{ x: COLUMNS_MIN_WIDTH }}
               />
             ) : (
-              <Empty description="当前页暂无数据，请翻页返回。" />
+              <EmptyState title="当前页暂无数据，请翻页返回。" />
             )}
-            <div className="flex justify-end">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-text-secondary text-xs">{`共 ${state.total} 条`}</span>
               <Pagination
                 current={state.page}
                 onChange={goToPage}
                 pageSize={state.pageSize}
                 showSizeChanger={false}
-                showTotal={(total) => `共 ${total} 条`}
                 total={state.total}
               />
             </div>
           </div>
         ) : null}
       </div>
-    </Card>
+    </TableContainer>
   );
 }

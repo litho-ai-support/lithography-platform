@@ -11,6 +11,7 @@ const LOGIN_RESPONSE = {
     role: 'ENGINEER',
     userInfo: {
       accessGroup: ['ENGINEER'],
+      avatarUrl: 'https://example.test/avatar/chen.png',
       nickname: '陈工',
     },
   },
@@ -52,6 +53,7 @@ describe('GraphQL auth login gateway', () => {
     expect(calls[0]?.query).toContain('accountId');
     expect(calls[0]?.query).toContain('nickname');
     expect(calls[0]?.query).toContain('accessGroup');
+    expect(calls[0]?.query).toContain('avatarUrl');
     expect(calls[0]?.query).not.toContain('refreshToken');
     expect(calls[0]?.query).not.toContain('metaDigest');
     expect(result).toEqual(LOGIN_RESPONSE.login);

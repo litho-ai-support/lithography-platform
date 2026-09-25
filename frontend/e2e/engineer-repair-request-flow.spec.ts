@@ -88,6 +88,11 @@ function buildDetailDTO(id: number, isAccepted: boolean, responses: MockResponse
     // mock 服务端读模型口径：最新处理状态取时间线末条（createdAt ASC + id ASC），
     // 与后端 QueryService 同口径，避免各用例硬编码出与时间线自相矛盾的详情
     latestResolutionStatus: responses[responses.length - 1]?.resolutionStatus ?? null,
+    // 工程师详情富集字段（P3 契约）：视角缺失会让前端失败关闭为只读
+    customerNickname: '林客户',
+    customerCompanyName: '林氏精密制造',
+    acceptanceViewStatus: isAccepted ? 'MINE' : 'AVAILABLE',
+    acceptedEngineerNickname: isAccepted ? MOCK_ENGINEER_NICKNAME : null,
     responses,
   };
 }
@@ -105,6 +110,10 @@ function fulfillList(route: Route, scope: 'AVAILABLE' | 'MINE') {
             isAccepted: false,
             acceptedAt: null,
             latestResolutionStatus: null,
+            customerNickname: '林客户',
+            customerCompanyName: '林氏精密制造',
+            acceptanceViewStatus: 'AVAILABLE',
+            acceptedEngineerNickname: null,
           },
         ]
       : [];
@@ -327,8 +336,12 @@ async function routeEngineerGraphQL(
 
 async function openDetailFromList(page: Page) {
   await page.goto(ENGINEER_HOME_PATH);
-  await page.getByRole('button', { name: '进入维修申请' }).click();
+  // PR4 工程师首页快捷入口：全部维修申请（新首页不再有旧的「进入维修申请」按钮）
+  await page.getByRole('button', { name: '全部维修申请' }).click();
   await expect(page).toHaveURL(new RegExp(LIST_PAGE_PATH));
+  // 首页工作台（最近待接单 + 选中摘要）也渲染申请编号文本，导航转场期间旧页面仍在 DOM；
+  // 先等列表页标题提交，再定位列表行编号，避免误抓首页元素
+  await expect(page.getByRole('heading', { name: '工程师维修申请' })).toBeVisible();
   await expect(page.getByText('RR20260902000000AC8802')).toBeVisible();
 
   await page.getByText('RR20260902000000AC8802').click();
@@ -352,7 +365,7 @@ test('engineer accepts with confirm: exactly one mutation and the panel turns ac
   page,
 }) => {
   await seedAuthSession(page, 'ENGINEER');
-  const { getAcceptRequests, getListRequests } = await routeEngineerGraphQL(page, {
+  const { getAcceptRequests } = await routeEngineerGraphQL(page, {
     // 列表失效由 application 层单测覆盖；本浏览器用例只验证接单后详情原子更新
   });
 
@@ -366,10 +379,11 @@ test('engineer accepts with confirm: exactly one mutation and the panel turns ac
   await page.getByRole('button', { name: '确认接单' }).click();
 
   await expect(page.getByText('你已接单该维修申请，后续请跟进处理。')).toBeVisible();
-  await expect(page.getByText('已接单', { exact: true }).first()).toBeVisible();
-  // 只发送一次 Mutation，详情来自 Mutation 返回值，不重查详情
+  // 视角标签 MINE 文案为「我的接单」（AcceptanceViewStatusTag）
+  await expect(page.getByText('我的接单', { exact: true }).first()).toBeVisible();
+  // 只发送一次 Mutation，详情来自 Mutation 返回值，不重查详情。
+  // 列表失效宣告的刷新语义由 application 层单测覆盖（详情页无列表订阅者，不在本用例断言范围）
   expect(getAcceptRequests()).toBe(1);
-  expect(getListRequests()).toBe(1);
 });
 
 test('uncertain accept result re-verifies the detail without resending the mutation', async ({
@@ -405,7 +419,7 @@ test('uncertain accept result re-verifies the detail without resending the mutat
   await page.getByRole('button', { name: '确认接单' }).click();
 
   // 接单 Mutation 只发送一次；失败后自动重查详情（且只重查一次），收敛为已接单状态，接单按钮消失
-  await expect(page.getByText('已接单', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('我的接单', { exact: true }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toHaveCount(0);
   expect(getAcceptRequests()).toBe(1);
   expect(detailRequests).toBe(detailRequestsBeforeAccept + 1);
@@ -454,7 +468,7 @@ test('super admin can read the detail but never sees the accept action', async (
 
   await expect(page.getByText('RR20260902000000AC8802')).toBeVisible();
   await expect(page.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toHaveCount(0);
-  await expect(page.getByText('当前账号仅可查看详情，接单需使用工程师账号。')).toBeVisible();
+  await expect(page.getByText('当前账号仅可查看详情，接单与回复需使用工程师账号。')).toBeVisible();
 });
 
 test('empty available scope shows the scoped empty state', async ({ page }) => {
@@ -474,6 +488,15 @@ test('list load failure shows the error with a retry entry', async ({ page }) =>
   let listRequests = 0;
   await page.route('**/graphql', async (route) => {
     const payload = route.request().postDataJSON() as GraphQLOperationPayload;
+
+    // 筛选条设备型号选项正常返回，避免型号加载失败 Alert 干扰列表重试断言
+    if (payload.query?.includes('query EquipmentModels')) {
+      return route.fulfill({
+        body: JSON.stringify({ data: { equipmentModels: [] } }),
+        contentType: 'application/json',
+        status: 200,
+      });
+    }
 
     if (payload.query?.includes('query EngineerRepairRequests')) {
       listRequests += 1;
@@ -599,7 +622,7 @@ test('super admin reads the accepted detail without any response entry', async (
 
   // 只读账号可阅读详情与回复时间线，但没有回复提交入口
   await expect(timelineOf(page)).toContainText(MOCK_EXISTING_RESPONSE.responseText);
-  await expect(page.getByText('当前账号仅可查看详情，回复需使用工程师账号。')).toBeVisible();
+  await expect(page.getByText('当前账号仅可查看详情，接单与回复需使用工程师账号。')).toBeVisible();
   await expect(page.getByLabel('回复正文')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^(loading\s+)?提交回复$/ })).toHaveCount(0);
 });
@@ -772,8 +795,8 @@ test('uncertain result re-checks silently and converges without resending the mu
   await expect(page.getByText('处理回复失败，请稍后重试')).toBeVisible();
   await expect(page.getByText(RESPONSE_UNCERTAIN_HINT)).toBeVisible();
 
-  // 自动静默重查进行中：详情与表单不卸载（无骨架屏），草稿与状态选择保留，控件禁用
-  await expect(page.locator('.ant-skeleton')).toHaveCount(0);
+  // 自动静默重查进行中：详情与表单不卸载（无加载态），草稿与状态选择保留，控件禁用
+  await expect(page.locator('.loading-state')).toHaveCount(0);
   await expect(page.getByLabel('回复正文')).toBeDisabled();
   await expect(page.getByLabel('回复正文')).toHaveValue(RESPONSE_DRAFT);
   await expect(statusSelectOf(page)).toContainText('已解决');
@@ -830,8 +853,8 @@ test('uncertain result keeps detail, feedback and draft when the silent re-check
   await fillResponseDraft(page);
   await submitResponse(page);
 
-  // 重查失败：静默重查不改查询状态机，当前详情与既有时间线保留（无骨架屏）
-  await expect(page.locator('.ant-skeleton')).toHaveCount(0);
+  // 重查失败：静默重查不改查询状态机，当前详情与既有时间线保留（无加载态）
+  await expect(page.locator('.loading-state')).toHaveCount(0);
   await expect(timelineOf(page)).toContainText(MOCK_EXISTING_RESPONSE.responseText);
   await expect(timelineOf(page)).not.toContainText(RESPONSE_DRAFT);
 
@@ -898,7 +921,7 @@ test('unmatched re-check keeps the draft and the manual re-check never clears it
   // 手动静默重查：时间线更新，但表单不卸载、草稿不清空、反馈仍为结果不确定
   await expect(timelineOf(page)).toContainText(RESPONSE_DRAFT);
   await expect(page.getByLabel('回复正文')).toHaveValue(RESPONSE_DRAFT);
-  await expect(page.locator('.ant-skeleton')).toHaveCount(0);
+  await expect(page.locator('.loading-state')).toHaveCount(0);
   await expect(page.getByText(RESPONSE_UNCERTAIN_HINT)).toBeVisible();
 
   expect(recheckRequests).toBe(2);

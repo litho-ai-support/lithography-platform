@@ -48,6 +48,10 @@ function buildDetail(id: number, isAccepted: boolean): EngineerRepairRequestDeta
     isAccepted,
     acceptedAt: isAccepted ? '2026-09-02T08:30:00.000Z' : null,
     latestResolutionStatus: null,
+    customerNickname: '林客户',
+    customerCompanyName: '林氏精密制造',
+    acceptanceViewStatus: isAccepted ? 'MINE' : 'AVAILABLE',
+    acceptedEngineerNickname: isAccepted ? '陈工' : null,
     responses: [],
   };
 }

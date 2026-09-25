@@ -1,12 +1,14 @@
 // src/features/repair-request/index.ts
 
 // barrel 只导出切片外实际消费的公开 API：
-// 工程师列表/详情面板、路径常量与客户创建表单。
+// 工程师首页工作台（Provider / 页头真实统计 / 主体）、工程师列表/详情面板、
+// 路径常量与客户创建表单。
 // application 层 hooks（useAcceptRepairRequest / useCreateEngineerResponse /
 // useEngineerRepairRequestDetail / useEngineerRepairRequestDetailFlow /
-// useEngineerRepairRequestList）与
+// useEngineerRepairRequestList / useEngineerRepairWorkbench）与
 // 工程师读写类型均为 feature 内部组成块，由编排 hook / UI 组件经相对路径消费，
-// 不作为跨模块公开入口。
+// 不作为跨模块公开入口：页面通过 Provider 组合工作台，不直接取用工作台读状态。
+export type { EngineerRepairListScope } from './infrastructure/engineer-repair-request.types';
 export type {
   CreateRepairRequestFailureReason,
   CreateRepairRequestInput,
@@ -24,6 +26,11 @@ export {
 export { EngineerRepairRequestDetailPanel } from './ui/engineer-repair-request-detail-panel';
 export { EngineerRepairRequestList } from './ui/engineer-repair-request-list';
 export { ENGINEER_REPAIR_REQUEST_LIST_PATH } from './ui/engineer-repair-request-paths';
+export {
+  EngineerRepairWorkbench,
+  EngineerRepairWorkbenchProvider,
+  EngineerWorkbenchHeaderStats,
+} from './ui/engineer-repair-workbench';
 export { RepairRequestForm } from './ui/repair-request-form';
 
 // ---- 维修申请公共读模型（PR #A 契约；客户切片与工程师切片共用） ----

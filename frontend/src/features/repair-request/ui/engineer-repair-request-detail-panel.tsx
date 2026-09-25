@@ -5,21 +5,23 @@
  *
  * - 唯一业务入口是 feature application 的编排 hook；
  *   UI 不触碰 adapter，不解析 Apollo 原始错误；
- * - 展示申请编号、设备型号、错误码、创建/接单时间、接单状态、最新处理状态、
- *   故障描述、contentMd 与已有工程师回复的只读时间线；
- * - 仅在申请仍可接单（未接单）且当前账号为精确 ENGINEER 时显示接单主操作；
- *   非工程师账号（如查看用超管）可阅读详情但不展示接单按钮，仅提示只读；
- *   点击前 Popconfirm 确认，
- *   进行中按钮 loading，application 层 ref 锁兜底防止并行 Mutation；
+ * - 展示申请编号、客户昵称/公司、设备型号、错误码、提交时间、接单视角状态、
+ *   接单工程师与接单时间、故障描述、contentMd 与已有工程师回复的只读时间线；
+ * - 操作可见性由「后端视角状态 + 会话单值业务角色」共同精确控制（三态 + 角色）：
+ *   AVAILABLE + 精确 ENGINEER → 接单；MINE + 精确 ENGINEER → 回复；
+ *   TAKEN_BY_OTHER → 只读；SUPER_ADMIN（非精确工程师写身份）→ 只读；
+ *   视角状态缺失（防腐兜底，正常不可达）→ 失败关闭只读，不出现任何写入口；
+ *   接单前 Popconfirm 确认，进行中按钮 loading，application 层 ref 锁兜底
+ *   防止并行 Mutation；
  * - 接单成功后详情由 Mutation 返回值原子更新（不切骨架屏，不闪现），
  *   页面以 Alert 明确展示已由当前工程师接单；
  * - 接单反馈（已由本人接单 / 申请已被接单 / 其他失败）用内联 Alert，
  *   与既有反馈先例一致，不引入全局 toast；
- * - 接单冲突后重查若落入 not-accessible（申请已被接走、当前工程师不再可读），
- *   仍优先展示冲突反馈，避免被通用不可访问文案掩盖；
- *   该分支不渲染详情与接单按钮，不泄露申请归属；
- * - 回复区域（精确 ENGINEER 且已接单时展示）：正文 TextArea、PENDING/RESOLVED
- *   状态选择与提交按钮；未接单时提示先接单，不提供回复入口；
+ * - 接单冲突/结果不确定后由 application 重查详情：
+ *   重查结果带出真实接单工程师与接单时间，不做乐观伪造；
+ *   冲突反馈优先于通用不可访问反馈，避免掩盖冲突事实；
+ * - 回复区域（MINE + 精确 ENGINEER 时展示）：正文 TextArea、PENDING/RESOLVED
+ *   状态选择与提交按钮；未接单/他人接单时不提供回复入口；
  *   提交中（含收敛重查中）禁用输入控件并 loading，连点由 application 锁兜底；
  *   成功（含不确定结果收敛成功）后清空草稿并重置状态选择，
  *   失败/不确定未收敛时草稿保留，用户无需重新输入；
@@ -32,26 +34,20 @@
  * - 统一不可访问反馈引导返回工程师列表，不泄露申请归属；
  * - 详情就绪后始终提供「返回维修申请列表」入口（与接单状态、查看者角色无关），
  *   且固定前往列表路径，保证从地址栏直达详情页也能稳定返回；
- * - 本仓库无 markdown 渲染依赖，contentMd 按保留换行的纯文本展示。
+ * - 附件不属于维修申请功能：不渲染附件区域，也不渲染「暂无附件」类占位；
+ * - 本仓库无 markdown 渲染依赖，contentMd 按保留换行的纯文本展示；
+ * - 故障描述、补充说明、回复正文与只读/空态提示统一取应用正文基准 text-sm
+ *   （裸 div 不写字号会落到浏览器默认 16px，与同页 14px 正文层级不一致）。
  */
 
 import { useEffect } from 'react';
-import {
-  Alert,
-  Button,
-  Card,
-  Descriptions,
-  Form,
-  Input,
-  Popconfirm,
-  Result,
-  Select,
-  Skeleton,
-  Timeline,
-} from 'antd';
+import { Alert, Button, Descriptions, Form, Input, Popconfirm, Select, Timeline } from 'antd';
 import { useNavigate } from 'react-router';
 
+import { DataCard } from '@/shared/ui/data-card';
+import { ErrorState } from '@/shared/ui/error-state';
 import { formatDateTimeText } from '@/shared/ui/format-date-time';
+import { LoadingState } from '@/shared/ui/loading-state';
 
 import {
   ENGINEER_RESPONSE_TEXT_OVER_CAPACITY_MESSAGE,
@@ -67,7 +63,7 @@ import type {
 import { RESOLUTION_STATUS_LABELS } from '../infrastructure/repair-request-read.types';
 
 import { ENGINEER_REPAIR_REQUEST_LIST_PATH } from './engineer-repair-request-paths';
-import { AcceptanceTag, ResolutionTag } from './repair-request-status-tags';
+import { AcceptanceViewStatusTag, ResolutionTag } from './repair-request-status-tags';
 
 function AcceptFeedbackAlert({ result }: { result: AcceptRepairRequestResult | null }) {
   if (!result) {
@@ -259,15 +255,15 @@ export function EngineerRepairRequestDetailPanel({
 
   if (state.status === 'loading') {
     return (
-      <Card>
-        <Skeleton active paragraph={{ rows: 8 }} />
-      </Card>
+      <DataCard>
+        <LoadingState label="正在加载维修申请详情…" />
+      </DataCard>
     );
   }
 
   if (state.status === 'failed') {
     return (
-      <Card>
+      <DataCard>
         <div className="flex flex-col gap-4">
           {/*
            * 接单反馈优先于不可访问/加载失败反馈：接单冲突后重查可能落入
@@ -277,44 +273,64 @@ export function EngineerRepairRequestDetailPanel({
           <AcceptFeedbackAlert result={lastAcceptResult} />
 
           {state.reason === 'not-accessible' ? (
-            <Result
-              extra={
+            <ErrorState
+              action={
                 <Button onClick={() => navigate(ENGINEER_REPAIR_REQUEST_LIST_PATH)} type="primary">
                   返回维修申请列表
                 </Button>
               }
-              status="warning"
               title={state.message}
             />
           ) : (
-            <Alert
+            <ErrorState
               action={
                 <Button onClick={reload} size="small">
                   重试
                 </Button>
               }
-              showIcon
               title={state.message}
-              type="error"
             />
           )}
         </div>
-      </Card>
+      </DataCard>
     );
   }
 
   const detail = state.detail;
+  const viewStatus = detail.acceptanceViewStatus;
+  // 操作可见性 = 后端视角状态（事实）× 会话单值业务角色（写身份），失败关闭：
+  // 视角缺失或 TAKEN_BY_OTHER 一律只读；AVAILABLE/MINE 还需精确 ENGINEER 才出现写入口
+  const canAccept = viewStatus === 'AVAILABLE' && canHandleAsEngineer;
+  const canReply = viewStatus === 'MINE' && canHandleAsEngineer;
+  const readOnlyHint =
+    !canAccept && !canReply
+      ? !canHandleAsEngineer
+        ? '当前账号仅可查看详情，接单与回复需使用工程师账号。'
+        : viewStatus === 'TAKEN_BY_OTHER'
+          ? '该申请已由其他工程师接单跟进，当前为只读查看。'
+          : viewStatus === null
+            ? '该申请的接单状态暂不可用，当前为只读查看。'
+            : null
+      : null;
 
   return (
-    <Card>
-      <div className="flex flex-col gap-4">
-        <AcceptFeedbackAlert result={lastAcceptResult} />
-
+    <>
+      <DataCard title="申请信息">
         <Descriptions
           bordered
           column={{ lg: 2, md: 1, sm: 1, xs: 1 }}
           items={[
             { children: detail.requestNo, key: 'requestNo', label: '申请编号' },
+            {
+              children: detail.customerNickname ?? '—',
+              key: 'customerNickname',
+              label: '客户昵称',
+            },
+            {
+              children: detail.customerCompanyName ?? '—',
+              key: 'customerCompanyName',
+              label: '客户公司',
+            },
             {
               children: `${detail.equipmentModel.modelName}（${detail.equipmentModel.modelCode}）`,
               key: 'equipmentModel',
@@ -324,12 +340,17 @@ export function EngineerRepairRequestDetailPanel({
             {
               children: formatDateTimeText(detail.createdAt),
               key: 'createdAt',
-              label: '创建时间',
+              label: '提交时间',
             },
             {
-              children: <AcceptanceTag accepted={detail.isAccepted} />,
-              key: 'isAccepted',
+              children: <AcceptanceViewStatusTag viewStatus={viewStatus} />,
+              key: 'acceptanceViewStatus',
               label: '接单状态',
+            },
+            {
+              children: detail.acceptedEngineerNickname ?? '—',
+              key: 'acceptedEngineerNickname',
+              label: '接单工程师',
             },
             {
               children: detail.acceptedAt ? formatDateTimeText(detail.acceptedAt) : '—',
@@ -344,99 +365,96 @@ export function EngineerRepairRequestDetailPanel({
           ]}
           size="small"
         />
+      </DataCard>
 
-        <div className="flex flex-col gap-1">
-          <div className="font-medium">故障描述</div>
-          <div className="whitespace-pre-wrap">{detail.faultDescription}</div>
-        </div>
+      <DataCard title="故障描述">
+        <div className="text-sm whitespace-pre-wrap">{detail.faultDescription}</div>
+      </DataCard>
 
-        {detail.contentMd ? (
-          <div className="flex flex-col gap-1">
-            <div className="font-medium">补充说明</div>
-            <div className="whitespace-pre-wrap">{detail.contentMd}</div>
-          </div>
-        ) : null}
+      {detail.contentMd ? (
+        <DataCard title="补充说明">
+          <div className="text-sm whitespace-pre-wrap">{detail.contentMd}</div>
+        </DataCard>
+      ) : null}
 
-        <div className="flex flex-col gap-2">
-          <div className="font-medium">工程师回复</div>
-          {detail.responses.length > 0 ? (
-            <Timeline
-              items={detail.responses.map((response) => ({
-                children: (
-                  <div className="flex flex-col gap-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{response.engineerNickname}</span>
-                      <ResolutionTag status={response.resolutionStatus} />
-                      <span className="text-text-secondary text-xs">
-                        {formatDateTimeText(response.createdAt)}
-                      </span>
-                    </div>
-                    <div className="whitespace-pre-wrap">{response.responseText}</div>
+      <DataCard title="工程师回复">
+        {detail.responses.length > 0 ? (
+          <Timeline
+            items={detail.responses.map((response) => ({
+              children: (
+                <div className="flex flex-col gap-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{response.engineerNickname}</span>
+                    <ResolutionTag status={response.resolutionStatus} />
+                    <span className="text-text-secondary text-xs">
+                      {formatDateTimeText(response.createdAt)}
+                    </span>
                   </div>
-                ),
-                key: response.id,
-              }))}
-            />
-          ) : (
-            <div className="text-text-secondary">暂无工程师回复。</div>
-          )}
-        </div>
+                  <div className="text-sm whitespace-pre-wrap">{response.responseText}</div>
+                </div>
+              ),
+              key: response.id,
+            }))}
+          />
+        ) : (
+          <div className="text-sm text-text-secondary">暂无工程师回复。</div>
+        )}
+      </DataCard>
 
-        {!detail.isAccepted && canHandleAsEngineer ? (
-          <div className="flex flex-col gap-2">
-            <div>
-              <Popconfirm
-                cancelText="取消"
-                description="接单后该维修申请将由你跟进处理。"
-                okText="确认接单"
-                onConfirm={() => void accept()}
-                title="确认接单该维修申请？"
-              >
-                <Button loading={accepting} type="primary">
-                  接单
-                </Button>
-              </Popconfirm>
+      {/* 操作区：接单 / 回复 / 只读提示共用一块，反馈紧邻对应入口 */}
+      <DataCard title="接单与回复">
+        <div className="flex flex-col gap-4">
+          <AcceptFeedbackAlert result={lastAcceptResult} />
+
+          {canAccept ? (
+            <div className="flex flex-col gap-2">
+              <div>
+                <Popconfirm
+                  cancelText="取消"
+                  description="接单后该维修申请将由你跟进处理。"
+                  okText="确认接单"
+                  onConfirm={() => void accept()}
+                  title="确认接单该维修申请？"
+                >
+                  <Button loading={accepting} type="primary">
+                    接单
+                  </Button>
+                </Popconfirm>
+              </div>
+              <div className="text-sm text-text-secondary">请先接单后才能回复该申请。</div>
             </div>
-            <div className="text-text-secondary">请先接单后才能回复该申请。</div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {!detail.isAccepted && !canHandleAsEngineer ? (
-          <div className="text-text-secondary">当前账号仅可查看详情，接单需使用工程师账号。</div>
-        ) : null}
+          {canReply ? (
+            <div className="flex flex-col gap-2">
+              <div className="font-medium text-sm">追加处理回复</div>
+              <EngineerResponseForm
+                lastResult={lastCreateResponseResult}
+                onReload={() => void confirmResponseResult()}
+                onSubmit={(input) => void createResponse(input)}
+                requestId={detail.id}
+                submitting={submitting || reconciling}
+              />
+            </div>
+          ) : null}
 
-        {/*
-         * 回复区域：精确 ENGINEER 且已接单时展示表单（Plan P0-7 权限矩阵）。
-         * 提交经 application createResponse；成功/失败/不确定反馈见
-         * CreateResponseFeedbackAlert；时间线由 application 原子更新。
-         */}
-        {detail.isAccepted && canHandleAsEngineer ? (
-          <div className="flex flex-col gap-2">
-            <div className="font-medium">追加处理回复</div>
-            <EngineerResponseForm
-              lastResult={lastCreateResponseResult}
-              onReload={() => void confirmResponseResult()}
-              onSubmit={(input) => void createResponse(input)}
-              requestId={detail.id}
-              submitting={submitting || reconciling}
-            />
-          </div>
-        ) : null}
-
-        {detail.isAccepted && !canHandleAsEngineer ? (
-          <div className="text-text-secondary">当前账号仅可查看详情，回复需使用工程师账号。</div>
-        ) : null}
-
-        {/*
-         * 底部常驻返回入口：不依赖接单状态与查看者角色，
-         * 固定前往列表路径（不用 navigate(-1)），从地址栏直达详情页也能稳定返回。
-         */}
-        <div className="flex justify-start">
-          <Button onClick={() => navigate(ENGINEER_REPAIR_REQUEST_LIST_PATH)}>
-            返回维修申请列表
-          </Button>
+          {/*
+           * 只读提示：精确 ENGINEER 看到的是事实性状态说明（视角缺失为防腐兜底分支），
+           * 非精确工程师写身份（如查看用超管）只读并提示使用工程师账号。
+           */}
+          {readOnlyHint ? <div className="text-sm text-text-secondary">{readOnlyHint}</div> : null}
         </div>
+      </DataCard>
+
+      {/*
+       * 底部常驻返回入口：不依赖接单状态与查看者角色，
+       * 固定前往列表路径（不用 navigate(-1)），从地址栏直达详情页也能稳定返回。
+       */}
+      <div className="flex justify-start">
+        <Button onClick={() => navigate(ENGINEER_REPAIR_REQUEST_LIST_PATH)}>
+          返回维修申请列表
+        </Button>
       </div>
-    </Card>
+    </>
   );
 }

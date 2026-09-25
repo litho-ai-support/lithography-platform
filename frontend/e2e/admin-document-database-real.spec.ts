@@ -7,8 +7,9 @@
 // 950001~950002、参考资料 970001~970003（970002 含下载入口）。
 // 分页用例以本次运行唯一故障码（RUN_ID）自建 12 行跑满两页，try 从首笔写入前
 // 开始、逐笔记录精确 ID，finally 经 deleteMyRepairRequest 逐 ID 幂等软删（清理失败
-// 归并进 primaryError 让测试转红），共享开发库不做物理删除（与
-// reference-document-real.spec 同一安全边界）。
+// 归并进 primaryError 让测试转红）；共享开发库不做物理删除（与
+// reference-document-real.spec 同一安全边界），仅当目标库严格为 lithography_e2e 且
+// 显式授权物理清理时，才按同一批精确 ID 物理删除，避免残留污染官方 Mock Seed。
 // 前提不满足（无本地后端 / 无 env / 无前端真实通道）时用例自动跳过，不阻塞。
 //
 // 断言作用域注意：Tabs 非激活面板保持挂载（仅隐藏），因此所有标签内
@@ -18,6 +19,7 @@
 import { expect, type Page, test } from '@playwright/test';
 
 import {
+  deleteRepairRequestRowsByIds,
   hasFrontendGraphQLEndpoint,
   isRealBackendAvailable,
   readBackendEnv,
@@ -26,6 +28,13 @@ import {
 } from './helpers/real-backend';
 
 const PAGE_PATH = '/admin/document-database';
+
+// 分页夹具的物理清理边界（负责人最小收口要求）：
+// - 仅当目标库严格为专用隔离库 lithography_e2e 且执行者显式授权物理清理时，
+//   才按本次运行记录并经唯一故障码反查核实归属的精确 ID 物理删除；
+// - 共享开发库（lithography_drill 等）保持既有软删边界，不做物理删除。
+const PHYSICAL_CLEANUP_DB_NAME = 'lithography_e2e';
+const PHYSICAL_CLEANUP_OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
 
 // ---- seed 行（backend/scripts/seed-mock.ts，只读断言） ----
 
@@ -132,22 +141,40 @@ async function listRunRequestIds(env: Record<string, string>): Promise<number[]>
 }
 
 /**
- * 分页夹具清理（S4-01）：删除目标取「本次记录的精确 ID」∩「按运行唯一故障码反查的
- * 可见行」的并集——反查作为安全网，兜住创建中途抛错、ID 尚未记录但行已落库的情况。
- * 逐条幂等软删（deleteMyRepairRequest）后再反查确认可见行为零。任一环节失败即
- * 抛出，由用例 finally 归并到 primaryError——主断言通过而清理失败时让测试转红，
- * 主断言已失败时保留原始失败原因不被掩盖。共享开发库只软删不物理删除
- * （与 reference-document-real.spec 同边界）。
+ * 分页夹具清理（S4-01）：软删目标取「本次记录的精确 ID」∪「按运行唯一故障码反查的可见行」，
+ * 反查作为安全网兜住创建中途抛错、ID 尚未记录但行已落库的情况。逐条幂等软删
+ * （deleteMyRepairRequest）后再反查确认可见行为零。任一环节失败即抛出，由用例 finally
+ * 归并到 primaryError——主断言通过而清理失败时让测试转红，主断言已失败时保留原始失败原因不被掩盖。
+ *
+ * 物理清理边界（负责人最小收口）：
+ * - 目标必须是「本次记录 ID」∩「本次唯一故障码反查已核实归属的 ID」——逐个确认归属后才允许
+ *   进入 DELETE 语句；仅被记录但反查未能核实归属的 ID 不进入物理删除，并计入失败（该用例转红）；
+ * - 共享开发库只软删不物理删除（与 reference-document-real.spec 同边界）；仅当目标库严格为
+ *   lithography_e2e 且执行者显式授权（E2E_ALLOW_PHYSICAL_CLEANUP=1）时才物理删除，
+ *   保证不残留影响官方 Mock Seed 计数校验。绝不按编号前缀/行数/猜测 ID 删除。
+ *   物理删除后的残留核验由受安全门保护的 helper 内部完成，非零即抛错。
  */
 async function cleanupRunRequests(
   env: Record<string, string>,
   createdIds: readonly number[],
 ): Promise<void> {
   const failures: string[] = [];
-  const reverseFound = await listRunRequestIds(env);
-  const targets = Array.from(new Set([...createdIds, ...reverseFound]));
+  // 反查必须在软删前完成：软删后这些行对该筛选不可见，物理清理目标无从确定。
+  // 反查边界是本次运行唯一故障码（RUN_ERROR_CODE），其返回集合即「已核实归属」依据。
+  const ownershipVerifiedIds = await listRunRequestIds(env);
+  const verified = new Set(ownershipVerifiedIds);
 
-  for (const id of targets) {
+  // 逐个确认：本次记录的 ID 必须全部能由唯一故障码反查出来，否则无法保证清理目标正确。
+  const unverifiedIds = createdIds.filter((id) => !verified.has(id));
+
+  if (unverifiedIds.length > 0) {
+    failures.push(`自建申请 ID 未能按本次运行故障码核实归属：${unverifiedIds.join(',')}`);
+  }
+
+  // 软删（可逆）沿用既有边界：记录 ID ∪ 反查 ID
+  const softDeleteTargets = Array.from(new Set([...createdIds, ...ownershipVerifiedIds]));
+
+  for (const id of softDeleteTargets) {
     try {
       const response = await realGraphqlCall(
         env,
@@ -168,6 +195,20 @@ async function cleanupRunRequests(
 
   if (remaining.length > 0) {
     failures.push(`清理后仍可见自建行：${remaining.join(',')}`);
+  }
+
+  // 物理删除（不可逆）只允许「已记录」且「已核实归属」的交集
+  const physicalTargets = createdIds.filter((id) => verified.has(id));
+  const physicalCleanupEnabled =
+    env.DB_NAME === PHYSICAL_CLEANUP_DB_NAME && process.env[PHYSICAL_CLEANUP_OPT_IN_ENV] === '1';
+
+  if (physicalCleanupEnabled) {
+    try {
+      // 受安全门保护的 helper（内部 assertPhysicalCleanupAllowed + 删除后残留核验），失败即抛错
+      deleteRepairRequestRowsByIds(physicalTargets);
+    } catch (error) {
+      failures.push(`自建申请物理清理失败：${(error as Error).message}`);
+    }
   }
 
   if (failures.length > 0) {

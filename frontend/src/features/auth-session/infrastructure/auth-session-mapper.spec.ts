@@ -29,6 +29,7 @@ describe('decodeAuthSessionPayload', () => {
         role: 'ENGINEER',
         userInfo: {
           accessGroup: ['ENGINEER'],
+          avatarUrl: ' https://example.test/avatar/chen.png ',
           nickname: ' 陈工 ',
         },
       }),
@@ -38,10 +39,42 @@ describe('decodeAuthSessionPayload', () => {
       role: 'ENGINEER',
       userInfo: {
         accessGroup: ['ENGINEER'],
+        avatarUrl: 'https://example.test/avatar/chen.png',
         nickname: '陈工',
       },
     });
   });
+
+  it.each([
+    ['a missing avatarUrl (legacy snapshot)', undefined],
+    ['a blank avatarUrl', '   '],
+    ['a non-string avatarUrl', 42],
+  ])(
+    'falls back to a null avatarUrl for %s instead of rejecting the session',
+    (_caseName, value) => {
+      expect(
+        decodeAuthSessionPayload({
+          accessToken: 'access-token',
+          accountId: 900101,
+          role: 'ENGINEER',
+          userInfo: {
+            accessGroup: ['ENGINEER'],
+            avatarUrl: value,
+            nickname: '陈工',
+          },
+        }),
+      ).toEqual({
+        accessToken: 'access-token',
+        accountId: 900101,
+        role: 'ENGINEER',
+        userInfo: {
+          accessGroup: ['ENGINEER'],
+          avatarUrl: null,
+          nickname: '陈工',
+        },
+      });
+    },
+  );
 
   it('rejects non-record and missing-field payloads', () => {
     expect(decodeAuthSessionPayload(null)).toBeNull();

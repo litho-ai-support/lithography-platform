@@ -6,6 +6,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { formatDateTimeText } from '@/shared/ui/format-date-time';
+
 import { ENGINEER_RESPONSE_TEXT_OVER_CAPACITY_MESSAGE } from '../application/engineer-response-text-capacity';
 import type { EngineerRepairRequestDetailState } from '../application/use-engineer-repair-request-detail';
 import type {
@@ -47,6 +49,10 @@ const READY_DETAIL: EngineerRepairRequestDetail = {
   acceptedAt: null,
   latestResolutionStatus: null,
   equipmentModel: { id: 1, modelCode: 'LITHO-100', modelName: '样例光刻机' },
+  customerNickname: '林客户',
+  customerCompanyName: '林氏精密制造',
+  acceptanceViewStatus: 'AVAILABLE',
+  acceptedEngineerNickname: null,
   responses: [],
 };
 
@@ -149,6 +155,8 @@ describe('工程师详情面板的返回列表入口', () => {
     ...READY_DETAIL,
     isAccepted: true,
     acceptedAt: '2026-09-02T09:00:00.000Z',
+    acceptanceViewStatus: 'MINE',
+    acceptedEngineerNickname: '陈工',
   };
 
   it.each([
@@ -175,6 +183,99 @@ describe('工程师详情面板的返回列表入口', () => {
 });
 
 /**
+ * 操作可见性三态矩阵（视角状态 × 会话单值业务角色）与富集字段展示。
+ */
+describe('工程师详情面板的三态可见性与字段展示', () => {
+  beforeEach(() => {
+    flowMock.mockReset();
+    navigateMock.mockReset();
+  });
+
+  function readyFlow(detail: EngineerRepairRequestDetail) {
+    setFlow({ detail, requestSeq: 1, status: 'ready' }, null);
+  }
+
+  it('ENGINEER + AVAILABLE：展示客户与设备富集字段及接单状态标签', () => {
+    readyFlow(READY_DETAIL);
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={true} requestId={123} />);
+
+    expect(screen.getByText('林客户')).toBeTruthy();
+    expect(screen.getByText('林氏精密制造')).toBeTruthy();
+    expect(screen.getByText('样例光刻机（LITHO-100）')).toBeTruthy();
+    expect(screen.getByText('E-0001')).toBeTruthy();
+    // 视角胶囊（待接单）与接单工程师/接单时间占位
+    expect(document.querySelector('.status-pill')?.textContent).toBe('待接单');
+    expect(screen.getByText('接单工程师')).toBeTruthy();
+    expect(screen.getByText('接单时间')).toBeTruthy();
+  });
+
+  it('不渲染附件区域或任何附件占位能力（附件不属于维修申请功能）', () => {
+    readyFlow(READY_DETAIL);
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={true} requestId={123} />);
+
+    // 既无附件文案/占位，也无下载类按钮冒充已完成能力
+    expect(screen.queryByText(/附件/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /下载/ })).toBeNull();
+  });
+
+  it('ENGINEER + TAKEN_BY_OTHER：只读查看，展示真实接单人与接单时间，无写入口', () => {
+    readyFlow({
+      ...READY_DETAIL,
+      isAccepted: true,
+      acceptedAt: '2026-09-02T09:30:00.000Z',
+      acceptanceViewStatus: 'TAKEN_BY_OTHER',
+      acceptedEngineerNickname: '赵工',
+    });
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={true} requestId={123} />);
+
+    // 只读提示为事实性状态说明，不出现接单/回复入口
+    expect(screen.getByText('该申请已由其他工程师接单跟进，当前为只读查看。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /接\s*单/ })).toBeNull();
+    expect(screen.queryByLabelText('回复正文')).toBeNull();
+    expect(screen.queryByRole('button', { name: /提交回复/ })).toBeNull();
+    // 重查后的真实接单人与时间原样展示，不做乐观伪造
+    expect(screen.getByText('赵工')).toBeTruthy();
+    expect(screen.getByText(formatDateTimeText('2026-09-02T09:30:00.000Z'))).toBeTruthy();
+  });
+
+  it('ENGINEER + 视角状态缺失：失败关闭只读，不出现任何写入口', () => {
+    readyFlow({ ...READY_DETAIL, acceptanceViewStatus: null });
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={true} requestId={123} />);
+
+    expect(screen.getByText('该申请的接单状态暂不可用，当前为只读查看。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /接\s*单/ })).toBeNull();
+    expect(screen.queryByLabelText('回复正文')).toBeNull();
+    expect(screen.queryByRole('button', { name: /提交回复/ })).toBeNull();
+  });
+
+  it('SUPER_ADMIN + AVAILABLE：只读查看，提示使用工程师账号，无接单入口', () => {
+    readyFlow(READY_DETAIL);
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={false} requestId={123} />);
+
+    expect(screen.getByText('当前账号仅可查看详情，接单与回复需使用工程师账号。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /接\s*单/ })).toBeNull();
+    expect(screen.queryByLabelText('回复正文')).toBeNull();
+    expect(screen.queryByRole('button', { name: /提交回复/ })).toBeNull();
+    expect(screen.getByRole('button', { name: '返回维修申请列表' })).toBeTruthy();
+  });
+
+  it('SUPER_ADMIN + TAKEN_BY_OTHER：只读查看且提示账号口径', () => {
+    readyFlow({
+      ...READY_DETAIL,
+      isAccepted: true,
+      acceptedAt: '2026-09-02T09:30:00.000Z',
+      acceptanceViewStatus: 'TAKEN_BY_OTHER',
+      acceptedEngineerNickname: '赵工',
+    });
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={false} requestId={123} />);
+
+    expect(screen.getByText('当前账号仅可查看详情，接单与回复需使用工程师账号。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /接\s*单/ })).toBeNull();
+    expect(screen.queryByLabelText('回复正文')).toBeNull();
+  });
+});
+
+/**
  * 回复区域（精确 ENGINEER 且已接单时展示）。
  * 编排 hook 桩成确定状态，验证权限矩阵、草稿归属、禁用态与反馈取舍。
  */
@@ -187,7 +288,12 @@ describe('工程师详情面板的回复区域', () => {
   });
 
   const ACCEPTED: EngineerRepairRequestDetailState = {
-    detail: { ...READY_DETAIL, isAccepted: true },
+    detail: {
+      ...READY_DETAIL,
+      isAccepted: true,
+      acceptanceViewStatus: 'MINE',
+      acceptedEngineerNickname: '陈工',
+    },
     requestSeq: 1,
     status: 'ready',
   };
@@ -259,7 +365,7 @@ describe('工程师详情面板的回复区域', () => {
     setFlow(ACCEPTED, null);
     renderPanel(false);
 
-    expect(screen.getByText('当前账号仅可查看详情，回复需使用工程师账号。')).toBeTruthy();
+    expect(screen.getByText('当前账号仅可查看详情，接单与回复需使用工程师账号。')).toBeTruthy();
     expect(screen.queryByLabelText('回复正文')).toBeNull();
     expect(screen.queryByRole('button', { name: /提交回复/ })).toBeNull();
   });
@@ -370,7 +476,13 @@ describe('工程师详情面板的回复区域', () => {
 
   it('不确定且重查失败：草稿、当前详情与不确定提示都保留', async () => {
     const DETAIL_WITH_RESPONSE: EngineerRepairRequestDetailState = {
-      detail: { ...READY_DETAIL, isAccepted: true, responses: [RESPONSE] },
+      detail: {
+        ...READY_DETAIL,
+        isAccepted: true,
+        acceptanceViewStatus: 'MINE',
+        acceptedEngineerNickname: '陈工',
+        responses: [RESPONSE],
+      },
       requestSeq: 1,
       status: 'ready',
     };

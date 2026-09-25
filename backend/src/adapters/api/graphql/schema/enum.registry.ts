@@ -11,7 +11,10 @@ import {
   ThirdPartyProviderEnum,
 } from '@app-types/models/account.types';
 import { Gender, UserState } from '@app-types/models/user-info.types';
-import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
+import {
+  EngineerResolutionStatus,
+  RepairRequestAcceptanceViewStatus,
+} from '@app-types/models/repair-request.types';
 import {
   CreatableVerificationRecordType,
   SubjectType,
@@ -42,6 +45,9 @@ export function registerEnums(): void {
   registerEnumType(EngineerResolutionStatus, { name: 'EngineerResolutionStatus' });
   registerEnumType(AiConversationStatus, { name: 'AiConversationStatus' });
   registerEnumType(AiMessageRole, { name: 'AiMessageRole' });
+  registerEnumType(RepairRequestAcceptanceViewStatus, {
+    name: 'RepairRequestAcceptanceViewStatus',
+  });
   registerEnumType(OrderDirection, { name: 'OrderDirection' });
   registerEnumType(GqlPaginationMode, { name: 'PaginationMode' });
   registerEnumType(GqlSortDirection, { name: 'SortDirection' });

@@ -237,6 +237,47 @@ export function deleteE2EReferenceDocumentRowsByIds(ids: readonly number[]): voi
   mysqlQuery(`DELETE FROM reference_document WHERE id IN (${ids.join(',')})`);
 }
 
+/**
+ * 按本次运行记录的精确 ID 物理清理维修申请行（与 deleteE2EReferenceDocumentRowsByIds 同口径）。
+ *
+ * 与 deleteRepairRequestByRequestNo 的区别：后者只做 requestNo 格式白名单、不带物理清理安全门，
+ * 本 helper 在访问数据库前强制 assertPhysicalCleanupAllowed（显式 opt-in + 测试库命名门）。
+ *
+ * - ID 列表为空时 no-op，不启动 mysql 进程；
+ * - 每个 ID 按安全正整数白名单校验，先于任何 SQL 组装；
+ * - SQL 仅包含传入的精确 ID（IN 列表），绝不按编号前缀、行数或猜测 ID 匹配；
+ * - DELETE 后按同一批 ID 查残留计数，非零即抛错——清理失败必须是可观测的失败，
+ *   而不是「命令返回成功但行仍在」；
+ * - 安全门不通过时抛错，mysql 进程绝不启动（含 finally 兜底路径）。
+ */
+export function deleteRepairRequestRowsByIds(ids: readonly number[]): void {
+  if (ids.length === 0) {
+    return;
+  }
+
+  for (const id of ids) {
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error(`物理清理目标 ID 未通过正整数校验，拒绝执行：${JSON.stringify(id)}`);
+    }
+  }
+
+  assertPhysicalCleanupAllowed(readBackendEnv());
+
+  const idList = ids.join(',');
+
+  mysqlQuery(`DELETE FROM repair_request WHERE id IN (${idList})`);
+
+  // 严格比对原始计数输出（而非 Number 解析）：空串/非数字输出同样视为核验失败，
+  // 绝不允许「拿不到计数」被当成「零残留」。
+  const remainingCount = mysqlQuery(`SELECT COUNT(*) FROM repair_request WHERE id IN (${idList})`);
+
+  if (remainingCount !== '0') {
+    throw new Error(
+      `物理清理残留核验失败：目标 ID 仍有 ${remainingCount === '' ? '未知' : remainingCount} 行驻留（${idList}）`,
+    );
+  }
+}
+
 // ---- 文件上传 / 下载 REST 链路（0909 第二轮阻塞项 1 的 e2e 支撑） ----
 
 /** 以指定账号真实登录换取 accessToken（Node 侧 REST 调用复用 realLogin 收口） */

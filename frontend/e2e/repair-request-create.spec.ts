@@ -83,6 +83,43 @@ async function fillAndSubmitForm(page: Page) {
   await page.getByRole('button', { name: '提交申请' }).click();
 }
 
+/**
+ * 假 Token 角色守卫用例的精确响应拦截（trace 实测，2026-09-25）：
+ * ENGINEER 访问 /customer/repair-requests/new 由路由 loader 直接重定向到 /engineer，
+ * 重定向目标页只发起 `query EngineerRepairRequests`（scope AVAILABLE / MINE 各一次）；
+ * seedAuthSession 写入的是假 Token，不接管时后端返 UNAUTHENTICATED 会触发全局失效
+ * 链路（清会话 + 跳登录），与守卫断言竞态。只接管该操作并返回空页数据，
+ * 其余请求不接管（保持真实网络行为，异常操作会照常暴露）。
+ */
+async function fulfillEngineerWorkbenchQuery(page: Page): Promise<void> {
+  await page.route('**/graphql', async (route) => {
+    const payload = route.request().postDataJSON() as {
+      query?: string;
+      variables?: { pagination?: { page?: number; pageSize?: number } };
+    };
+
+    if (!payload.query?.includes('query EngineerRepairRequests')) {
+      await route.continue();
+      return;
+    }
+
+    await route.fulfill({
+      body: JSON.stringify({
+        data: {
+          engineerRepairRequests: {
+            items: [],
+            total: 0,
+            page: payload.variables?.pagination?.page ?? 1,
+            pageSize: payload.variables?.pagination?.pageSize ?? 10,
+          },
+        },
+      }),
+      contentType: 'application/json',
+      status: 200,
+    });
+  });
+}
+
 test('anonymous visit is redirected to login with returnTo', async ({ page }) => {
   await page.goto(CREATE_PAGE_PATH);
   await expect(page).toHaveURL(/\/login\?returnTo=%2Fcustomer%2Frepair-requests%2Fnew$/);
@@ -90,6 +127,7 @@ test('anonymous visit is redirected to login with returnTo', async ({ page }) =>
 
 test('engineer visit is redirected to the role home, not 403', async ({ page }) => {
   await seedAuthSession(page, 'ENGINEER');
+  await fulfillEngineerWorkbenchQuery(page);
   await page.goto(CREATE_PAGE_PATH);
   await expect(page).toHaveURL(/\/engineer$/);
 });

@@ -12,6 +12,7 @@ import {
   deleteE2EReferenceDocumentRowsByIds,
   deleteE2EReferenceDocumentStorageFilesByIds,
   deleteRepairRequestByRequestNo,
+  deleteRepairRequestRowsByIds,
   findRepairRequestByRequestNo,
   hasFrontendGraphQLEndpoint,
   mysqlQuery,
@@ -170,6 +171,91 @@ describe('real-backend 参考资料物理清理安全门（负责人 0909 阻塞
     expect(sql).not.toContain('970200');
     expect(sql).not.toContain('LIKE');
   });
+});
+
+describe('real-backend 维修申请按精确 ID 物理清理（本轮收口新增 helper）', () => {
+  const OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
+  const originalOptIn = process.env[OPT_IN_ENV];
+  const TEST_DB_ENV =
+    'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=lithography_e2e\n';
+
+  // DELETE 与残留核验 SELECT 的字面量按调用顺序取出（helper 每次调用起一个 mysql 进程）
+  function executedSqls(): string[] {
+    return execFileSyncMock.mock.calls.map((call) => {
+      const args = call[1] as string[];
+      const flagIndex = args.indexOf('-e');
+
+      return args[flagIndex + 1] as string;
+    });
+  }
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset().mockReturnValue('');
+    readFileSyncMock.mockReset().mockReturnValue(TEST_DB_ENV);
+    delete process.env[OPT_IN_ENV];
+  });
+
+  afterAll(() => {
+    if (originalOptIn === undefined) {
+      delete process.env[OPT_IN_ENV];
+    } else {
+      process.env[OPT_IN_ENV] = originalOptIn;
+    }
+  });
+
+  it('空 ID 列表是 no-op，不启动 mysql 进程', () => {
+    expect(() => deleteRepairRequestRowsByIds([])).not.toThrow();
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
+    '非法 ID（%p）直接抛错且绝不启动 mysql 进程',
+    (invalidId) => {
+      process.env[OPT_IN_ENV] = '1';
+
+      expect(() => deleteRepairRequestRowsByIds([invalidId])).toThrow('未通过正整数校验');
+      expect(execFileSyncMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('无显式授权（缺 E2E_ALLOW_PHYSICAL_CLEANUP=1）物理清理被拒绝且 mysql 进程未被调用', () => {
+    expect(() => deleteRepairRequestRowsByIds([920006])).toThrow(
+      '缺少 E2E_ALLOW_PHYSICAL_CLEANUP=1',
+    );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('opt-in 但库名为共享开发库 lithography_drill 时被拒绝且 mysql 进程未被调用', () => {
+    process.env[OPT_IN_ENV] = '1';
+    readFileSyncMock.mockReturnValue(
+      'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=lithography_drill\n',
+    );
+
+    expect(() => deleteRepairRequestRowsByIds([920006])).toThrow('不属于测试库命名');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('opt-in + 测试库：只按精确 ID 删除，并按同一批 ID 核验残留为零', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReset().mockReturnValueOnce('').mockReturnValueOnce('0');
+
+    expect(() => deleteRepairRequestRowsByIds([920006, 920007])).not.toThrow();
+
+    expect(executedSqls()).toEqual([
+      'DELETE FROM repair_request WHERE id IN (920006,920007)',
+      'SELECT COUNT(*) FROM repair_request WHERE id IN (920006,920007)',
+    ]);
+  });
+
+  it.each([['2'], ['1'], ['']])(
+    '残留核验输出为 %p（非零或为空）时抛错，清理失败必须让用例转红',
+    (countOutput) => {
+      process.env[OPT_IN_ENV] = '1';
+      execFileSyncMock.mockReset().mockReturnValueOnce('').mockReturnValueOnce(countOutput);
+
+      expect(() => deleteRepairRequestRowsByIds([920006])).toThrow('物理清理残留核验失败');
+    },
+  );
 });
 
 describe('real-backend 前端真实通道探测（负责人 0909 必须修复 3）', () => {

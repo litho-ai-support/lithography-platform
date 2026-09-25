@@ -6,6 +6,12 @@ export type AuthSessionRole = (typeof AUTH_SESSION_ROLES)[number];
 
 export type AuthSessionUserSummary = {
   accessGroup: readonly AuthSessionRole[];
+  /**
+   * 本人真实头像 URL（后端登录结果已返回该字段）；无头像时为 null。
+   * 归一化保证字段恒存在：缺失/空白一律回落 null，消费方按 null 显示昵称首字，
+   * 不因缺字段判定会话非法（旧持久化快照刷新后必须仍可用）。
+   */
+  avatarUrl: string | null;
   nickname: string;
 };
 

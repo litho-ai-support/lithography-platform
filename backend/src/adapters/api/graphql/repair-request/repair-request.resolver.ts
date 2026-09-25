@@ -1,6 +1,9 @@
 // src/adapters/api/graphql/repair-request/repair-request.resolver.ts
 
-import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
+import {
+  EngineerResolutionStatus,
+  RepairRequestAcceptanceViewStatus,
+} from '@app-types/models/repair-request.types';
 import { mapJwtToUsecaseSession } from '@app-types/auth/session.types';
 import { JwtPayload } from '@app-types/jwt.types';
 import { IdentityTypeEnum } from '@app-types/models/account.types';
@@ -25,9 +28,13 @@ import { CreateEngineerResponseInput } from './dto/create-engineer-response.inpu
 import { CreateRepairRequestInput } from './dto/create-repair-request.input';
 import { DeleteMyRepairRequestResultDTO } from './dto/delete-my-repair-request-result.dto';
 import { RepairRequestDTO } from './dto/repair-request.dto';
+import { EngineerRepairRequestFilterInput } from './dto/engineer-repair-request-filter.input';
+import { ValidateRepairRequestInput } from './validate-repair-request-input.decorator';
 import {
   EngineerResponseDTO,
   RepairRequestDetailDTO,
+  RepairRequestEngineerListItemDTO,
+  RepairRequestEngineerPaginatedDTO,
   RepairRequestListItemDTO,
   RepairRequestPaginatedDTO,
 } from './dto/repair-request-read.dto';
@@ -179,29 +186,45 @@ export class RepairRequestResolver {
   }
 
   /**
-   * 工程师查询维修申请列表：scope = AVAILABLE（待接单）/ MINE（我的接单）
-   * 范围取值由 usecase 校验；排序与分页口径同客户列表；
+   * 工程师查询维修申请列表：scope 四态 ALL / AVAILABLE / MINE / TAKEN_BY_OTHER（缺省 ALL）
+   * 范围取值与筛选入参由 usecase 校验/收敛；排序与分页口径同客户列表；
+   * 客户昵称筛选由 usecase 经账号域批量解析后在分页计数前完成；
    * SUPER_ADMIN 按角色继承规则准入（负责人 20260901 裁定 2）
    */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(IdentityTypeEnum.ENGINEER, IdentityTypeEnum.SUPER_ADMIN)
-  @Query(() => RepairRequestPaginatedDTO, {
-    description: '工程师查询维修申请列表（待接单 / 我的接单）',
+  @Query(() => RepairRequestEngineerPaginatedDTO, {
+    description: '工程师查询维修申请列表（全部 / 待接单 / 我的接单 / 他人已接单）',
   })
-  @ValidateInput()
+  @ValidateRepairRequestInput()
   async engineerRepairRequests(
-    @Args('scope', { description: '列表范围：AVAILABLE（待接单）/ MINE（我的接单）' })
+    @Args('scope', {
+      type: () => String,
+      nullable: true,
+      defaultValue: 'ALL',
+      description: '列表范围：ALL（默认）/ AVAILABLE / MINE / TAKEN_BY_OTHER',
+    })
     scope: string,
     @Args('pagination') pagination: PaginationArgs,
     @currentUser() user: JwtPayload,
-  ): Promise<RepairRequestPaginatedDTO> {
+    @Args('filter', {
+      type: () => EngineerRepairRequestFilterInput,
+      nullable: true,
+      description: '可选筛选：设备型号 / 客户昵称关键词',
+    })
+    filter?: EngineerRepairRequestFilterInput,
+  ): Promise<RepairRequestEngineerPaginatedDTO> {
     const page = await this.listEngineerRepairRequestsUsecase.execute({
       session: mapJwtToUsecaseSession(user),
       scope,
+      filter: {
+        equipmentModelId: filter?.equipmentModelId,
+        customerNickname: filter?.customerNickname,
+      },
       pagination: mapGqlToCoreParams(pagination),
     });
     return {
-      items: page.items.map((item) => this.toListItemDTO(item)),
+      items: page.items.map((item) => this.toEngineerListItemDTO(item)),
       total: page.total,
       page: page.page,
       pageSize: page.pageSize,
@@ -229,8 +252,10 @@ export class RepairRequestResolver {
 
   /**
    * 工程师查询维修申请详情（含回复时间线）
-   * 细粒度读权限由 QueryService 按工程师身份判定（未接单未删除 ∨ 本人已接单）；
-   * 越权统一拒绝，不泄露存在性；SUPER_ADMIN 按角色继承规则准入（裁定 2）
+   * 工程师可读取任意未删除申请（含他人已接单的只读视角）；
+   * 细粒度读权限由 QueryService 按工程师身份判定；
+   * 越权统一拒绝，不泄露存在性；写权限仍由各写用例精确裁决（读放宽不等于写放宽）；
+   * SUPER_ADMIN 按角色继承规则准入（裁定 2）
    */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(IdentityTypeEnum.ENGINEER, IdentityTypeEnum.SUPER_ADMIN)
@@ -268,6 +293,7 @@ export class RepairRequestResolver {
 
   /**
    * 详情视图 → DTO（回复含工程师安全昵称，不返回工程师账号 ID）
+   * 工程师入口富集字段（客户/接单工程师资料与视角状态）存在时透传，客户入口为空
    */
   private toDetailDTO(detail: {
     id: number;
@@ -287,12 +313,46 @@ export class RepairRequestResolver {
       responseText: string;
       createdAt: Date;
     }>;
+    customerNickname?: string | null;
+    customerCompanyName?: string | null;
+    acceptanceViewStatus?: RepairRequestAcceptanceViewStatus | null;
+    acceptedEngineerNickname?: string | null;
   }): RepairRequestDetailDTO {
     return {
       ...this.toListItemDTO(detail),
       faultDescription: detail.faultDescription,
       contentMd: detail.contentMd,
       responses: detail.responses.map((response) => this.toResponseDTO(response)),
+      customerNickname: detail.customerNickname ?? null,
+      customerCompanyName: detail.customerCompanyName ?? null,
+      acceptanceViewStatus: detail.acceptanceViewStatus ?? null,
+      acceptedEngineerNickname: detail.acceptedEngineerNickname ?? null,
+    };
+  }
+
+  /**
+   * 工程师列表项视图 → DTO（不返回归属类账号 ID）
+   */
+  private toEngineerListItemDTO(view: {
+    id: number;
+    requestNo: string;
+    equipmentModel: { id: number; modelCode: string; modelName: string };
+    errorCode: string;
+    createdAt: Date;
+    isAccepted: boolean;
+    acceptedAt: Date | null;
+    latestResolutionStatus: EngineerResolutionStatus | null;
+    customerNickname: string;
+    customerCompanyName: string | null;
+    acceptanceViewStatus: RepairRequestAcceptanceViewStatus;
+    acceptedEngineerNickname: string | null;
+  }): RepairRequestEngineerListItemDTO {
+    return {
+      ...this.toListItemDTO(view),
+      customerNickname: view.customerNickname,
+      customerCompanyName: view.customerCompanyName,
+      acceptanceViewStatus: view.acceptanceViewStatus,
+      acceptedEngineerNickname: view.acceptedEngineerNickname,
     };
   }
 
