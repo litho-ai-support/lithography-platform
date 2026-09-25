@@ -4,7 +4,7 @@ import { expect, type Page, type Route, test } from '@playwright/test';
 
 import { readStoredAuthSession, seedAuthSession } from './helpers/auth-session-seed';
 import {
-  deleteRepairRequestByRequestNo,
+  cleanupE2ERepairRequest,
   findRepairRequestByRequestNo,
   hasFrontendGraphQLEndpoint,
   isRealBackendAvailable,
@@ -16,6 +16,8 @@ import {
 
 const CREATE_PAGE_PATH = '/customer/repair-requests/new';
 const CUSTOMER_HOME_PATH = '/customer';
+// 自建行的唯一故障码：既填进表单，也作为统一清理入口的预期事实之一（本轮测试自身掌握的值）
+const CREATE_ERROR_CODE = 'E2E-REAL';
 
 type GraphQLOperationPayload = {
   query?: string;
@@ -449,7 +451,7 @@ test.describe('real backend mutation', () => {
       await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
       await page.getByRole('combobox').click();
       await page.locator('.ant-select-item-option').first().click();
-      await page.getByLabel('设备错误码').fill('E2E-REAL');
+      await page.getByLabel('设备错误码').fill(CREATE_ERROR_CODE);
       await page.getByLabel('故障描述').fill('阶段五真实后端 e2e 用例');
       await page.getByRole('button', { name: '提交申请' }).click();
 
@@ -474,15 +476,18 @@ test.describe('real backend mutation', () => {
       expect(row.split('\t')[0]).toBe(String(expectedAccountId));
       expect(row.split('\t')[1]).toBe('0');
       expect(row.split('\t')[2]).toMatch(/^NULL$/);
-
-      // 清理：删除本用例产生的行，保持共享开发库基线干净（无删除接口，直连清理）
-      deleteRepairRequestByRequestNo(requestNo!);
-      expect(findRepairRequestByRequestNo(requestNo!, 'COUNT(*)')).toBe('0');
     } finally {
-      // 清理兜底：断言中途失败时仍删除本用例产生的行；受保护 helper 内部先白名单校验，
-      // 对不存在行是 no-op，幂等成立
+      // 清理兜底：断言中途失败时仍清理本用例产生的行，保持基线干净。
+      // 统一入口内部先做编号白名单校验，再按精确 ID 软删；仅专用隔离库 + 显式授权时
+      // 才按「精确 ID + 本轮预期事实」走受保护物理清理（同一连接同一事务核验后删除，
+      // 残留非零即抛错，因此这里不再重复断言 COUNT(*)=0）；对不存在行是 no-op，幂等成立。
       if (requestNo) {
-        deleteRepairRequestByRequestNo(requestNo);
+        await cleanupE2ERepairRequest({
+          env,
+          requestNo,
+          customerAccountId: expectedAccountId,
+          errorCode: CREATE_ERROR_CODE,
+        });
       }
     }
   });

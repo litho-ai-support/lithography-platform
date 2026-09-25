@@ -21,20 +21,15 @@ import { expect, type Page, test } from '@playwright/test';
 import {
   deleteRepairRequestRowsByIds,
   hasFrontendGraphQLEndpoint,
+  isPhysicalCleanupEnabled,
   isRealBackendAvailable,
   readBackendEnv,
   readBackendEnvOrNull,
   realGraphqlCall,
+  realLoginAccountId,
 } from './helpers/real-backend';
 
 const PAGE_PATH = '/admin/document-database';
-
-// 分页夹具的物理清理边界（负责人最小收口要求）：
-// - 仅当目标库严格为专用隔离库 lithography_e2e 且执行者显式授权物理清理时，
-//   才按本次运行记录并经唯一故障码反查核实归属的精确 ID 物理删除；
-// - 共享开发库（lithography_drill 等）保持既有软删边界，不做物理删除。
-const PHYSICAL_CLEANUP_DB_NAME = 'lithography_e2e';
-const PHYSICAL_CLEANUP_OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
 
 // ---- seed 行（backend/scripts/seed-mock.ts，只读断言） ----
 
@@ -123,8 +118,10 @@ async function loginAs(
   await expect(page).toHaveURL(landingPath);
 }
 
-/** 按唯一故障码反查本次运行自建行的精确 ID 列表（管理员视角） */
-async function listRunRequestIds(env: Record<string, string>): Promise<number[]> {
+/** 按唯一故障码反查本次运行自建行的精确 ID 与编号（管理员视角）——归属核实的依据 */
+async function listRunRequests(
+  env: Record<string, string>,
+): Promise<Array<{ id: number; requestNo: string }>> {
   const { body } = await realGraphqlCall(
     env,
     ADMIN_REPAIR_LIST_QUERY,
@@ -134,10 +131,13 @@ async function listRunRequestIds(env: Record<string, string>): Promise<number[]>
     },
     'mock_super_admin',
   );
-  const items = (body as { data?: { adminRepairRequests?: { items?: Array<{ id: number }> } } })
-    .data?.adminRepairRequests?.items;
+  const items = (
+    body as {
+      data?: { adminRepairRequests?: { items?: Array<{ id: number; requestNo: string }> } };
+    }
+  ).data?.adminRepairRequests?.items;
 
-  return (items ?? []).map((item) => item.id);
+  return (items ?? []).map((item) => ({ id: item.id, requestNo: item.requestNo }));
 }
 
 /**
@@ -152,27 +152,31 @@ async function listRunRequestIds(env: Record<string, string>): Promise<number[]>
  * - 共享开发库只软删不物理删除（与 reference-document-real.spec 同边界）；仅当目标库严格为
  *   lithography_e2e 且执行者显式授权（E2E_ALLOW_PHYSICAL_CLEANUP=1）时才物理删除，
  *   保证不残留影响官方 Mock Seed 计数校验。绝不按编号前缀/行数/猜测 ID 删除。
- *   物理删除后的残留核验由受安全门保护的 helper 内部完成，非零即抛错。
+ * - 物理删除逐条携带预期事实（编号 / 客户账号 / 故障码 / 设备型号），由受保护 helper 在
+ *   同一连接同一事务内核验目标行与子记录引用、删除后再核验残留为零，任一不达标即回滚报错。
  */
 async function cleanupRunRequests(
   env: Record<string, string>,
   createdIds: readonly number[],
+  expected: { customerAccountId: number; equipmentModelId: number },
 ): Promise<void> {
   const failures: string[] = [];
   // 反查必须在软删前完成：软删后这些行对该筛选不可见，物理清理目标无从确定。
   // 反查边界是本次运行唯一故障码（RUN_ERROR_CODE），其返回集合即「已核实归属」依据。
-  const ownershipVerifiedIds = await listRunRequestIds(env);
-  const verified = new Set(ownershipVerifiedIds);
+  const ownershipVerified = await listRunRequests(env);
+  const verifiedRequestNos = new Map(ownershipVerified.map((item) => [item.id, item.requestNo]));
 
   // 逐个确认：本次记录的 ID 必须全部能由唯一故障码反查出来，否则无法保证清理目标正确。
-  const unverifiedIds = createdIds.filter((id) => !verified.has(id));
+  const unverifiedIds = createdIds.filter((id) => !verifiedRequestNos.has(id));
 
   if (unverifiedIds.length > 0) {
     failures.push(`自建申请 ID 未能按本次运行故障码核实归属：${unverifiedIds.join(',')}`);
   }
 
   // 软删（可逆）沿用既有边界：记录 ID ∪ 反查 ID
-  const softDeleteTargets = Array.from(new Set([...createdIds, ...ownershipVerifiedIds]));
+  const softDeleteTargets = Array.from(
+    new Set([...createdIds, ...ownershipVerified.map((item) => item.id)]),
+  );
 
   for (const id of softDeleteTargets) {
     try {
@@ -191,20 +195,29 @@ async function cleanupRunRequests(
     }
   }
 
-  const remaining = await listRunRequestIds(env);
+  const remaining = await listRunRequests(env);
 
   if (remaining.length > 0) {
-    failures.push(`清理后仍可见自建行：${remaining.join(',')}`);
+    failures.push(`清理后仍可见自建行：${remaining.map((item) => item.id).join(',')}`);
   }
 
-  // 物理删除（不可逆）只允许「已记录」且「已核实归属」的交集
-  const physicalTargets = createdIds.filter((id) => verified.has(id));
-  const physicalCleanupEnabled =
-    env.DB_NAME === PHYSICAL_CLEANUP_DB_NAME && process.env[PHYSICAL_CLEANUP_OPT_IN_ENV] === '1';
+  // 物理删除（不可逆）只允许「已记录」且「已核实归属」的交集，并逐条携带本轮预期事实
+  //（编号 / 客户账号 / 故障码 / 设备型号）——helper 在同一连接同一事务内核验后才删除。
+  const physicalTargets = createdIds
+    .filter((id) => verifiedRequestNos.has(id))
+    .map((id) => ({
+      id,
+      expected: {
+        requestNo: verifiedRequestNos.get(id) as string,
+        customerAccountId: expected.customerAccountId,
+        errorCode: RUN_ERROR_CODE,
+        equipmentModelId: expected.equipmentModelId,
+      },
+    }));
 
-  if (physicalCleanupEnabled) {
+  if (isPhysicalCleanupEnabled(env)) {
     try {
-      // 受安全门保护的 helper（内部 assertPhysicalCleanupAllowed + 删除后残留核验），失败即抛错
+      // 受安全门保护的 helper（内部复查授权 + 库名门 + 事务内核验与残留核验），失败即抛错
       deleteRepairRequestRowsByIds(physicalTargets);
     } catch (error) {
       failures.push(`自建申请物理清理失败：${(error as Error).message}`);
@@ -401,6 +414,10 @@ test.describe('real backend admin document database', () => {
     const modelId = models?.[0]?.id;
     expect(modelId).toBeDefined();
 
+    // 物理清理的预期事实之一：客户甲账号 ID（JWT 口径，本轮测试自身掌握）。留在 try 外，
+    // 让清理兜底不依赖网络调用。
+    const customerAccountId = await realLoginAccountId(env);
+
     const createdIds: number[] = [];
     let primaryError: unknown = null;
 
@@ -448,7 +465,10 @@ test.describe('real backend admin document database', () => {
       primaryError = error;
     } finally {
       try {
-        await cleanupRunRequests(env, createdIds);
+        await cleanupRunRequests(env, createdIds, {
+          customerAccountId,
+          equipmentModelId: modelId as number,
+        });
       } catch (cleanupError) {
         // 主断言已通过时清理失败才让测试转红；否则保留原始失败原因不被掩盖
         if (primaryError === null) {

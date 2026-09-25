@@ -15,7 +15,7 @@
 import { expect, test } from '@playwright/test';
 
 import {
-  deleteRepairRequestByRequestNo,
+  cleanupE2ERepairRequest,
   findRepairRequestByRequestNo,
   hasFrontendGraphQLEndpoint,
   isRealBackendAvailable,
@@ -23,11 +23,14 @@ import {
   readBackendEnv,
   readBackendEnvOrNull,
   realGraphqlCall,
+  realLoginAccountId,
   REQUEST_NO_PATTERN,
 } from './helpers/real-backend';
 
 const LIST_PATH = '/customer/repair-requests';
 const CREATE_PAGE_PATH = '/customer/repair-requests/new';
+// 自建行的唯一故障码：既填进表单，也作为统一清理入口的预期事实之一（本轮测试自身掌握的值）
+const MANAGE_ERROR_CODE = 'E2E-MANAGE';
 const DELETE_MUTATION = `
   mutation DeleteMyRepairRequest($id: Int!) {
     deleteMyRepairRequest(id: $id) { id requestNo }
@@ -67,6 +70,10 @@ test.describe('real backend manage flow', () => {
     await page.getByRole('button', { name: /登\s*录/ }).click();
     await expect(page).toHaveURL(/\/customer$/);
 
+    // 客户账号 ID 在进入 try 前一次性取得（JWT 口径）：清理兜底不再依赖网络调用，
+    // 也不会在清理阶段才失败而掩盖主断言原因。
+    const customerAccountId = await realLoginAccountId(env);
+
     let requestNo: string | undefined;
     try {
       // 真实创建：型号来自真实库，提交走真实受保护通道
@@ -74,7 +81,7 @@ test.describe('real backend manage flow', () => {
       await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
       await page.getByRole('combobox').click();
       await page.locator('.ant-select-item-option').first().click();
-      await page.getByLabel('设备错误码').fill('E2E-MANAGE');
+      await page.getByLabel('设备错误码').fill(MANAGE_ERROR_CODE);
       await page.getByLabel('故障描述').fill('阶段三删除链路真实后端 e2e 用例');
       await page.getByRole('button', { name: '提交申请' }).click();
 
@@ -124,11 +131,18 @@ test.describe('real backend manage flow', () => {
           ?.deleteMyRepairRequest?.requestNo,
       ).toBe(requestNo);
     } finally {
-      // 清理兜底：无论断言成败都删除本用例自建的行，保持共享开发库基线干净；
-      // 受保护 helper 内部先白名单校验，主路径已软删除（deprecated=1）不影响物理 DELETE，
-      // 对不存在行是 no-op，幂等成立。
+      // 清理兜底：统一入口先做编号白名单校验，再按解析出的精确 ID 经产品通道软删
+      //（主路径已软删，重复软删幂等成功），保证断言中途失败也不留下可见行；
+      // 仅当环境为专用隔离库 lithography_e2e 且显式授权时，才按「精确 ID + 本轮预期事实」
+      // 走受保护物理清理（同一连接同一事务核验后删除，残留非零即抛错）；
+      // 共享开发库保持既有软删边界，不做物理删除。
       if (requestNo) {
-        deleteRepairRequestByRequestNo(requestNo);
+        await cleanupE2ERepairRequest({
+          env,
+          requestNo,
+          customerAccountId,
+          errorCode: MANAGE_ERROR_CODE,
+        });
       }
     }
   });
