@@ -183,6 +183,7 @@ describe('real-backend 维修申请按精确 ID 物理清理（本轮收口新�
     'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=lithography_e2e\n';
   const REQUEST_NO_A = 'RR20260902000000AB12CD';
   const REQUEST_NO_B = 'RR20260902000001CD34EF';
+  const FAULT_DESCRIPTION = '阶段五真实后端 e2e 用例';
 
   // 本轮预期事实由测试自身掌握；不得用「从目标行反读回来的值」充当预期（否则核验自证）
   const VALID_TARGET: RepairRequestCleanupTarget = {
@@ -192,6 +193,7 @@ describe('real-backend 维修申请按精确 ID 物理清理（本轮收口新�
       customerAccountId: 9001,
       errorCode: 'E2E-REAL',
       equipmentModelId: 8101,
+      faultDescription: FAULT_DESCRIPTION,
     },
   };
   const SECOND_TARGET: RepairRequestCleanupTarget = {
@@ -201,6 +203,7 @@ describe('real-backend 维修申请按精确 ID 物理清理（本轮收口新�
       customerAccountId: 9001,
       errorCode: 'E2E-REAL',
       equipmentModelId: 8101,
+      faultDescription: FAULT_DESCRIPTION,
     },
   };
 
@@ -283,6 +286,18 @@ describe('real-backend 维修申请按精确 ID 物理清理（本轮收口新�
       '预期故障码未通过白名单校验',
     ],
     ['设备型号非正整数', { equipmentModelId: -1 }, '预期设备型号未通过正整数校验'],
+    ['设备型号零值', { equipmentModelId: 0 }, '预期设备型号未通过正整数校验'],
+    [
+      '故障描述注入引号',
+      { faultDescription: "诊断'; DROP TABLE repair_request;--" },
+      '预期故障描述未通过白名单校验',
+    ],
+    [
+      '故障描述含反斜杠（MySQL 转义符）',
+      { faultDescription: '诊断\\1' },
+      '预期故障描述未通过白名单校验',
+    ],
+    ['故障描述超长', { faultDescription: 'x'.repeat(256) }, '预期故障描述未通过白名单校验'],
   ])('目标事实非法（%s）在任何 SQL 组装/数据库进程之前被拒绝', (_label, broken, message) => {
     process.env[OPT_IN_ENV] = '1';
 
@@ -362,6 +377,69 @@ describe('real-backend 维修申请按精确 ID 物理清理（本轮收口新�
 
     expect(sql).toContain('DELETE FROM repair_request WHERE id IN (920006,920007)');
     expect(sql).not.toContain('920008');
+  });
+
+  // 负责人最小修复计划 P3：型号 / 描述 / 编号任一与目标行不符都必须能被事务内核验捕获。
+  // 逐 ID 绑定的预期事实必须真的进 SQL（而不是只挂在 Node 侧对象上），否则核验形同虚设。
+  it.each([
+    ['设备型号', 'equipment_model_id = 8101'],
+    ['故障描述', `fault_description = '${FAULT_DESCRIPTION}'`],
+    ['申请编号', `request_no = '${REQUEST_NO_A}'`],
+  ])(
+    '%s不匹配可在事务内被发现：该事实逐项绑定在核验门中，且核验门先于 DELETE / COMMIT',
+    (_label, predicate) => {
+      process.env[OPT_IN_ENV] = '1';
+      execFileSyncMock.mockReturnValue(cleanupDiagnostics());
+
+      deleteRepairRequestRowsByIds([VALID_TARGET]);
+
+      const sql = executedSqls()[0] as string;
+
+      // 五项预期事实全部逐项绑定在同一个 field_mismatch_rows 计数里
+      expect(sql).toContain(predicate);
+      expect(sql).toContain(`id = 920006 AND request_no = '${REQUEST_NO_A}'`);
+      expect(sql).toContain('customer_account_id = 9001');
+      expect(sql).toContain("error_code = 'E2E-REAL'");
+
+      // 失败关闭顺序：核验门（含 field_mismatch_rows）→ DELETE → 残留门 → COMMIT
+      const mismatchIndex = sql.indexOf('field_mismatch_rows=');
+      const deleteIndex = sql.indexOf('DELETE FROM repair_request');
+      const commitIndex = sql.indexOf('COMMIT');
+
+      expect(mismatchIndex).toBeGreaterThan(-1);
+      expect(deleteIndex).toBeGreaterThan(mismatchIndex);
+      expect(commitIndex).toBeGreaterThan(deleteIndex);
+    },
+  );
+
+  it.each([
+    ['设备型号与创建记录不符', `920006\t${REQUEST_NO_A}\t9001\t9999\t${FAULT_DESCRIPTION}`],
+    ['故障描述与创建记录不符', `920006\t${REQUEST_NO_A}\t9001\t8101\t另一条描述`],
+    ['反查编号与创建记录不符', `920006\t${REQUEST_NO_B}\t9001\t8101\t${FAULT_DESCRIPTION}`],
+  ])('%s：事务在 DELETE 之前由核验门中止（回滚，不提交删除）', (_label, lockedRow) => {
+    process.env[OPT_IN_ENV] = '1';
+    const aborted = Object.assign(new Error('Command failed: mysql'), {
+      stderr:
+        "ERROR 3819 (HY000) at line 5: Check constraint 'e2e_repair_request_cleanup_must_be_zero' is violated.",
+      stdout: [lockedRow, cleanupDiagnostics({ field_mismatch_rows: '1' })].join('\n'),
+    });
+
+    execFileSyncMock.mockImplementation(() => {
+      throw aborted;
+    });
+
+    expect(() => deleteRepairRequestRowsByIds([VALID_TARGET])).toThrow(
+      '维修申请物理清理事务中止（已回滚，未执行删除）',
+    );
+
+    // 整批只在同一个 mysql 进程（同一连接同一事务）内：核验门中止即回滚，DELETE 未提交
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+
+    const sql = executedSqls()[0] as string;
+
+    expect(sql.indexOf('DELETE FROM repair_request')).toBeGreaterThan(
+      sql.indexOf('field_mismatch_rows='),
+    );
   });
 
   it.each([
@@ -464,6 +542,8 @@ describe('real-backend 统一清理入口 cleanupE2ERepairRequest（创建 / 管
     requestNo: CLEANUP_REQUEST_NO,
     customerAccountId: 9001,
     errorCode: CLEANUP_ERROR_CODE,
+    equipmentModelId: 8101,
+    faultDescription: '阶段五真实后端 e2e 用例',
   };
 
   beforeEach(() => {
@@ -608,6 +688,25 @@ describe('真实 E2E 清理路径统一收口（不再有仅凭编号的直接�
 
     expect(source).not.toMatch(/export\s+(async\s+)?function\s+deleteRepairRequestByRequestNo/);
     expect(source).toMatch(/DELETE FROM repair_request WHERE \$\{idPredicate\}/);
+  });
+
+  // 负责人最小修复计划 P2/P3：清理目标必须是「创建时的本轮事实」，不能退回反查自证。
+  it.each(CLEANUP_CALL_SITES)('%s 向统一入口传入型号与描述两项本轮事实', async (specFile) => {
+    const source = await readSource(`../${specFile}`);
+
+    expect(source).toContain('equipmentModelId: createdEquipmentModelId');
+    expect(source).toMatch(/faultDescription: \w+_FAULT_DESCRIPTION/);
+  });
+
+  it('分页夹具的物理清理预期编号取创建响应记录值，不把反查所得编号当预期值', async () => {
+    const source = await readSource('../admin-document-database-real.spec.ts');
+
+    // 创建成功即把 id 与 requestNo 一并记入目标记录，清理时预期值来自该记录
+    expect(source).toContain('createdRecord?.requestNo');
+    expect(source).toContain('requestNo: row.requestNo');
+    // 不再有「反查编号充当预期值」的写法（核验退化为自证的旧路径）
+    expect(source).not.toContain('verifiedRequestNos');
+    expect(source).toMatch(/faultDescription: row\.faultDescription/);
   });
 });
 

@@ -18,9 +18,12 @@ const CREATE_PAGE_PATH = '/customer/repair-requests/new';
 const CUSTOMER_HOME_PATH = '/customer';
 // 自建行的唯一故障码：既填进表单，也作为统一清理入口的预期事实之一（本轮测试自身掌握的值）
 const CREATE_ERROR_CODE = 'E2E-REAL';
+// 故障描述同口径：填进表单的值即本轮预期事实，物理清理的同一事务内会逐字段核验
+const CREATE_FAULT_DESCRIPTION = '阶段五真实后端 e2e 用例';
 
 type GraphQLOperationPayload = {
   query?: string;
+  variables?: { input?: { equipmentModelId?: number } };
 };
 
 function fulfillModelsSuccess(route: Route) {
@@ -424,13 +427,22 @@ test.describe('real backend mutation', () => {
     const env = readBackendEnv();
     const expectedAccountId = await realLoginAccountId(env);
     const mutationAuthorizations: string[] = [];
+    // 本轮自建行的预期事实之一：创建 Mutation 实际发送的设备型号（被动记录，不回读目标行）。
+    // 初值 0 表示「尚未记录」：创建成功后必须已被记录（见下方齐备性断言），清理入口只接受正整数。
+    let createdEquipmentModelId = 0;
 
-    // 只观察不拦截：记录真实受保护通道的 Authorization 头
+    // 只观察不拦截：记录真实受保护通道的 Authorization 头，并按同一口径被动记录设备型号
     await page.route('**/graphql', (route) => {
       const payload = route.request().postDataJSON() as GraphQLOperationPayload;
 
       if (payload.query?.includes('mutation CreateRepairRequest')) {
         mutationAuthorizations.push(route.request().headers().authorization ?? '');
+
+        const modelId = payload.variables?.input?.equipmentModelId;
+
+        if (typeof modelId === 'number') {
+          createdEquipmentModelId = modelId;
+        }
       }
 
       return route.continue();
@@ -452,7 +464,7 @@ test.describe('real backend mutation', () => {
       await page.getByRole('combobox').click();
       await page.locator('.ant-select-item-option').first().click();
       await page.getByLabel('设备错误码').fill(CREATE_ERROR_CODE);
-      await page.getByLabel('故障描述').fill('阶段五真实后端 e2e 用例');
+      await page.getByLabel('故障描述').fill(CREATE_FAULT_DESCRIPTION);
       await page.getByRole('button', { name: '提交申请' }).click();
 
       await expect(page.getByText('维修申请创建成功')).toBeVisible();
@@ -463,6 +475,8 @@ test.describe('real backend mutation', () => {
       expect(requestNo).toBeTruthy();
       // 白名单校验：业务断言（受保护 helper 内部还有强制校验，见 real-backend.ts 守卫说明）。
       expect(requestNo).toMatch(REQUEST_NO_PATTERN);
+      // 清理所需预期事实齐备性：创建成功即必须已被动记录到发送的设备型号，探针失效时用例转红
+      expect(createdEquipmentModelId).toBeGreaterThan(0);
 
       // 受保护通道证据：真实 Mutation 携带 Bearer
       expect(mutationAuthorizations.length).toBe(1);
@@ -481,12 +495,16 @@ test.describe('real backend mutation', () => {
       // 统一入口内部先做编号白名单校验，再按精确 ID 软删；仅专用隔离库 + 显式授权时
       // 才按「精确 ID + 本轮预期事实」走受保护物理清理（同一连接同一事务核验后删除，
       // 残留非零即抛错，因此这里不再重复断言 COUNT(*)=0）；对不存在行是 no-op，幂等成立。
+      // 预期事实（编号 / 客户账号 / 故障码 / 设备型号 / 故障描述）全部取本轮自有值：
+      // 型号来自创建成功时已记录的被动探针，缺失即由入口的正整数白名单拒绝清理。
       if (requestNo) {
         await cleanupE2ERepairRequest({
           env,
           requestNo,
           customerAccountId: expectedAccountId,
           errorCode: CREATE_ERROR_CODE,
+          equipmentModelId: createdEquipmentModelId,
+          faultDescription: CREATE_FAULT_DESCRIPTION,
         });
       }
     }

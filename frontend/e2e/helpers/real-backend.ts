@@ -246,8 +246,9 @@ export function deleteE2EReferenceDocumentRowsByIds(ids: readonly number[]): voi
 
 /**
  * 物理清理目标：ID 必须是本次运行记录的精确 ID，expected 必须是本轮测试自身掌握的预期事实
- * （申请编号 / 客户账号 / 故障码 / 可选设备型号）——不接受「从目标行反读回来的值」充当预期，
- * 否则核验退化为自证。四处事实全部命中，该 ID 才允许进入删除语句。
+ * （申请编号 / 客户账号 / 故障码 / 设备型号 / 故障描述）——不接受「从目标行反读回来的值」充当预期，
+ * 否则核验退化为自证。五项事实一律必填、缺一项即拒绝清理（负责人最小修复计划 P1），
+ * 全部命中该 ID 才允许进入删除语句。
  */
 export interface RepairRequestCleanupTarget {
   readonly id: number;
@@ -255,13 +256,19 @@ export interface RepairRequestCleanupTarget {
     readonly requestNo: string;
     readonly customerAccountId: number;
     readonly errorCode: string;
-    readonly equipmentModelId?: number;
+    readonly equipmentModelId: number;
+    readonly faultDescription: string;
   };
 }
 
 // 故障码进 SQL 前必须命中白名单（列宽 varchar(100)，白名单只含无引号、无反斜杠的字符）；
 // 白名单外的值直接抛错，绝不转义拼接；申请编号沿用 REQUEST_NO_PATTERN 同口径。
 const CLEANUP_ERROR_CODE_PATTERN = /^[A-Za-z0-9._:-]{1,100}$/;
+
+// 故障描述进 SQL 前同样必须命中白名单：列类型 text，本轮自建描述只可能是短文本，
+// 白名单排除单引号（字符串字面量终止符）与反斜杠（MySQL 默认转义符）两个可越界字符，
+// 其余内容（含中文与空格）照常放行；长度上限按本轮自建描述的实际规模收紧。
+const CLEANUP_FAULT_DESCRIPTION_PATTERN = /^[^'\\]{1,255}$/;
 
 // 事务内守卫表与约束名（脚本中 CREATE TEMPORARY TABLE，会话级，断开即消失，不触碰持久结构）。
 // MySQL 8.0.16+ 真实强制 CHECK 约束（本项目 baseline Migration 亦依赖 CHECK）：
@@ -313,12 +320,15 @@ function assertRepairRequestCleanupTargets(targets: readonly RepairRequestCleanu
       );
     }
 
-    if (
-      expected.equipmentModelId !== undefined &&
-      (!Number.isSafeInteger(expected.equipmentModelId) || expected.equipmentModelId <= 0)
-    ) {
+    if (!Number.isSafeInteger(expected.equipmentModelId) || expected.equipmentModelId <= 0) {
       throw new Error(
         `物理清理预期设备型号未通过正整数校验，拒绝执行：${JSON.stringify(expected.equipmentModelId)}`,
+      );
+    }
+
+    if (!CLEANUP_FAULT_DESCRIPTION_PATTERN.test(expected.faultDescription)) {
+      throw new Error(
+        `物理清理预期故障描述未通过白名单校验，拒绝访问数据库：${JSON.stringify(expected.faultDescription)}`,
       );
     }
   }
@@ -333,16 +343,13 @@ function assertRepairRequestCleanupTargets(targets: readonly RepairRequestCleanu
 function buildRepairRequestCleanupSql(targets: readonly RepairRequestCleanupTarget[]): string {
   const idList = targets.map(({ id }) => id).join(',');
   const idPredicate = `id IN (${idList})`;
-  // 逐 ID 预期事实：每个 ID 绑定自己的编号/客户/故障码，设备型号按需参与
+  // 逐 ID 预期事实：每个 ID 绑定自己的五项本轮事实（编号 / 客户账号 / 故障码 / 设备型号 / 故障描述），
+  // 任一项与目标行不符都会被 field_mismatch_rows 计入，核验门随即中止批处理并回滚（不提交删除）。
   const expectedFacts = targets
-    .map(({ id, expected }) => {
-      const modelFact =
-        expected.equipmentModelId === undefined
-          ? ''
-          : ` AND equipment_model_id = ${expected.equipmentModelId}`;
-
-      return `(id = ${id} AND request_no = '${expected.requestNo}' AND customer_account_id = ${expected.customerAccountId} AND error_code = '${expected.errorCode}'${modelFact})`;
-    })
+    .map(
+      ({ id, expected }) =>
+        `(id = ${id} AND request_no = '${expected.requestNo}' AND customer_account_id = ${expected.customerAccountId} AND error_code = '${expected.errorCode}' AND equipment_model_id = ${expected.equipmentModelId} AND fault_description = '${expected.faultDescription}')`,
+    )
     .join(' OR ');
   const existingRows = `(SELECT COUNT(*) FROM repair_request WHERE ${idPredicate})`;
   const fieldMismatchRows = `(SELECT COUNT(*) FROM repair_request WHERE ${idPredicate} AND NOT (${expectedFacts}))`;
@@ -363,7 +370,7 @@ function buildRepairRequestCleanupSql(targets: readonly RepairRequestCleanupTarg
   return [
     'START TRANSACTION',
     `CREATE TEMPORARY TABLE ${CLEANUP_GUARD_TABLE} (violations INT NOT NULL, CONSTRAINT e2e_repair_request_cleanup_must_be_zero CHECK (violations = 0))`,
-    `SELECT id, request_no, customer_account_id, equipment_model_id, error_code FROM repair_request WHERE ${idPredicate} ORDER BY id FOR UPDATE`,
+    `SELECT id, request_no, customer_account_id, equipment_model_id, error_code, fault_description FROM repair_request WHERE ${idPredicate} ORDER BY id FOR UPDATE`,
     `SELECT CONCAT('database=', DATABASE(), ' expected_rows=${targets.length}', ' existing_rows=', ${existingRows}, ' field_mismatch_rows=', ${fieldMismatchRows}, ' child_rows=', ${childRows})`,
     `INSERT INTO ${CLEANUP_GUARD_TABLE} (violations) SELECT ${guardViolations}`,
     `DELETE FROM repair_request WHERE ${idPredicate}`,
@@ -458,10 +465,10 @@ function assertRepairRequestCleanupDiagnostics(output: string, expectedRows: num
  * 安全性质（负责人最小修复计划 P1/P2）：
  * - 入口内独立执行「显式授权门 + 测试库命名门 + 严格 lithography_e2e 库名门」，
  *   任一门不通过即抛错且 mysql 进程绝不启动（不依赖调用方或全局 setup 已经检查过）；
- * - 目标 ID 与预期事实先过 Node 侧白名单（编号 / 客户账号 / 故障码 / 设备型号），
+ * - 目标 ID 与五项预期事实先过 Node 侧白名单（编号 / 客户账号 / 故障码 / 设备型号 / 故障描述），
  *   先于任何 SQL 组装；不再有「仅凭编号格式直接 DELETE」的路径，也不按前缀/行数/猜测 ID 匹配；
  * - 同一连接、同一事务内完成：库名核验 → FOR UPDATE 锁定并读取目标行 → 逐项核对预期字段、
- *   客户账号、设备型号 → 核对子记录引用 → 全部门通过才 DELETE → 提交前残留核验为 0 → COMMIT；
+ *   客户账号、设备型号、故障描述 → 核对子记录引用 → 全部门通过才 DELETE → 提交前残留核验为 0 → COMMIT；
  *   任一门不通过即中止回滚（删除作废）并让用例转红。
  * - ID 列表为空时 no-op，不启动 mysql 进程。
  */
@@ -498,13 +505,18 @@ const DELETE_MY_REPAIR_REQUEST_MUTATION = `
  * 4. 仅当环境为专用隔离库 lithography_e2e 且执行者显式授权时，再按「精确 ID + 本轮预期事实」
  *    走受保护物理清理（同一连接同一事务核验后删除，残留非零即失败）；
  *    共享开发库保持既有软删边界，不做物理删除。
- * 任一环节失败即抛错：清理失败必须是可观测的失败，而不是静默残留。
+ * 任一门不通过即抛错：清理失败必须是可观测的失败，而不是静默残留。
+ *
+ * 五项预期事实（编号 / 客户账号 / 故障码 / 设备型号 / 故障描述）全部必填：调用方必须传入
+ * 本轮测试自身掌握的事实（创建 Mutation 实际发送/返回的值），不得用从目标行反查所得的值充当预期。
  */
 export async function cleanupE2ERepairRequest(options: {
   env: Record<string, string>;
   requestNo: string;
   customerAccountId: number;
   errorCode: string;
+  equipmentModelId: number;
+  faultDescription: string;
   customerLoginName?: string;
 }): Promise<void> {
   assertWhitelistedRequestNo(options.requestNo);
@@ -543,6 +555,8 @@ export async function cleanupE2ERepairRequest(options: {
         requestNo: options.requestNo,
         customerAccountId: options.customerAccountId,
         errorCode: options.errorCode,
+        equipmentModelId: options.equipmentModelId,
+        faultDescription: options.faultDescription,
       },
     },
   ]);
