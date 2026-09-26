@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import {
   DEDICATED_BACKEND_ORIGIN,
   DEDICATED_E2E_DB_NAME,
+  DEDICATED_E2E_PHYSICAL_CLEANUP_ENV,
 } from '../../e2e-real/dedicated-e2e-environment';
 
 // 后端源（origin）收口：默认仍指向本地 dev 后端 127.0.0.1:3000（既有真实链路 spec 口径不变）。
@@ -175,12 +176,6 @@ export function findRepairRequestByRequestNo(requestNo: string, selectExpression
   );
 }
 
-/** 按白名单 requestNo 物理删除维修申请行（清理用；对不存在行是 no-op，幂等成立）。 */
-export function deleteRepairRequestByRequestNo(requestNo: string): void {
-  assertWhitelistedRequestNo(requestNo);
-  mysqlQuery(`DELETE FROM repair_request WHERE request_no = '${requestNo}'`);
-}
-
 // 参考资料 real spec 自建行标题前缀（与 reference-document-real.spec 创建标题共用）。
 // 仅用于创建标题与列表定位断言；清理一律以本次运行记录的精确 ID 为边界，
 // 禁止按标题前缀批量删除——固定前缀不是数据身份，共享库中他人数据可能碰巧同前缀，
@@ -194,7 +189,8 @@ const STORAGE_REFERENCE_PATTERN = /^[0-9a-f]{32}\.[a-z0-9]{1,8}$/;
 // 物理清理安全门：物理 DELETE 只允许发生在「显式 opt-in + 库名属测试库」的配置上。
 // 共享开发库（DB_NAME 不含 e2e/test 标记）一律在启动 mysql 进程前拒绝；
 // 宁可残留软删行（对列表/详情不可见，由库策略另行清理），也不按前缀物理删除。
-const PHYSICAL_CLEANUP_OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
+// 授权变量与专用 E2E 配置模块共用同一常量，杜绝两套口径各自漂移。
+export const PHYSICAL_CLEANUP_OPT_IN_ENV = DEDICATED_E2E_PHYSICAL_CLEANUP_ENV;
 const TEST_DATABASE_NAME_PATTERN = /(^|[_-])(e2e|test)([_-]|\d|$)/i;
 
 export function assertPhysicalCleanupAllowed(env: Record<string, string>): void {
@@ -211,6 +207,15 @@ export function assertPhysicalCleanupAllowed(env: Record<string, string>): void 
       `物理清理被拒绝：DB_NAME=${JSON.stringify(dbName)} 不属于测试库命名（需含 e2e/test 段），拒绝物理删除`,
     );
   }
+}
+
+/**
+ * 物理清理是否可用于当前环境：目标库严格为专用隔离库 lithography_e2e 且执行者显式授权。
+ * 调用方据此决定是否进入物理清理分支（共享开发库只走软删边界）；
+ * 受保护 helper 仍会在访问数据库前独立复查，不依赖调用方或全局 setup 已经检查过。
+ */
+export function isPhysicalCleanupEnabled(env: Record<string, string>): boolean {
+  return env.DB_NAME === DEDICATED_E2E_DB_NAME && process.env[PHYSICAL_CLEANUP_OPT_IN_ENV] === '1';
 }
 
 /**
@@ -235,6 +240,542 @@ export function deleteE2EReferenceDocumentRowsByIds(ids: readonly number[]): voi
   assertPhysicalCleanupAllowed(readBackendEnv());
 
   mysqlQuery(`DELETE FROM reference_document WHERE id IN (${ids.join(',')})`);
+}
+
+// ---- 维修申请物理清理：统一安全入口（负责人最小修复计划 P1/P2） ----
+
+/**
+ * 物理清理目标：ID 必须是本次运行记录的精确 ID，expected 必须是本轮测试自身掌握的预期事实
+ * （申请编号 / 客户账号 / 故障码 / 设备型号 / 故障描述）——不接受「从目标行反读回来的值」充当预期，
+ * 否则核验退化为自证。五项事实一律必填、缺一项即拒绝清理（负责人最小修复计划 P1），
+ * 全部命中该 ID 才允许进入删除语句。
+ */
+export interface RepairRequestCleanupTarget {
+  readonly id: number;
+  readonly expected: {
+    readonly requestNo: string;
+    readonly customerAccountId: number;
+    readonly errorCode: string;
+    readonly equipmentModelId: number;
+    readonly faultDescription: string;
+    /**
+     * 已接单申请的接单工程师账号（可选）：提供后核验表达式追加
+     * is_accepted = 1 与 accepted_by_engineer_account_id 归属核对，
+     * 缺省时维持既有五项事实口径，不放宽任何既有校验。
+     */
+    readonly acceptedEngineerAccountId?: number;
+  };
+  /**
+   * 本轮为该申请创建的工程师回复（精确 ID + 本轮事实，负责人单卡片计划 P3）。
+   *
+   * - 缺省（不提供）：维持既有最强守卫 —— 该申请不得存在任何 engineer_response 子记录，
+   *   存在即整批中止回滚，绝不级联删除；
+   * - 提供后守卫收紧为「该申请下的 engineer_response 必须恰为本轮这些精确 ID 且字段逐项相符」，
+   *   清理时先删本轮回复行、再删申请行（外键 ON DELETE RESTRICT，顺序不可颠倒），
+   *   绝不按申请批量删回复、绝不删除未在本轮记录内的回复行。
+   */
+  readonly expectedResponses?: readonly RepairRequestCleanupResponseTarget[];
+}
+
+/**
+ * 本轮自建工程师回复的精确清理目标：
+ * id 必须来自本轮创建回复返回的 id，expected 必须来自本轮提交的事实
+ * （归属申请 / 回复工程师账号 / 接收客户账号 / 处理状态 / 回复正文），
+ * 逐项全部命中才允许删除该回复行；不接受从目标行反读回来的值充当预期。
+ */
+export interface RepairRequestCleanupResponseTarget {
+  readonly id: number;
+  readonly expected: {
+    readonly requestId: number;
+    readonly engineerAccountId: number;
+    readonly customerAccountId: number;
+    readonly resolutionStatus: EngineerResponseResolutionStatus;
+    readonly responseText: string;
+  };
+}
+
+/** 与 engineer_response.resolution_status 枚举严格一致（第三套状态值不允许） */
+export type EngineerResponseResolutionStatus = 'PENDING' | 'RESOLVED';
+
+// 故障码进 SQL 前必须命中白名单（列宽 varchar(100)，白名单只含无引号、无反斜杠的字符）；
+// 白名单外的值直接抛错，绝不转义拼接；申请编号沿用 REQUEST_NO_PATTERN 同口径。
+const CLEANUP_ERROR_CODE_PATTERN = /^[A-Za-z0-9._:-]{1,100}$/;
+
+// 故障描述进 SQL 前同样必须命中白名单：列类型 text，本轮自建描述只可能是短文本，
+// 白名单排除单引号（字符串字面量终止符）与反斜杠（MySQL 默认转义符）两个可越界字符，
+// 其余内容（含中文与空格）照常放行；长度上限按本轮自建描述的实际规模收紧。
+const CLEANUP_FAULT_DESCRIPTION_PATTERN = /^[^'\\]{1,255}$/;
+
+// 回复正文进 SQL 前同样必须命中白名单（列类型 text）：本轮自建回复只可能是短文本，
+// 白名单同样排除单引号与反斜杠两个可越界字符，长度上限按本轮自建回复的实际规模收紧。
+const CLEANUP_RESPONSE_TEXT_PATTERN = /^[^'\\]{1,255}$/;
+
+// 处理状态必须落在 engineer_response.resolution_status 枚举值域内（白名单，不拼接外部枚举）
+const CLEANUP_RESOLUTION_STATUSES: readonly EngineerResponseResolutionStatus[] = [
+  'PENDING',
+  'RESOLVED',
+];
+
+// 事务内守卫表与约束名（脚本中 CREATE TEMPORARY TABLE，会话级，断开即消失，不触碰持久结构）。
+// MySQL 8.0.16+ 真实强制 CHECK 约束（本项目 baseline Migration 亦依赖 CHECK）：
+// 违例即 ERROR 3819 中止批处理，未 COMMIT 的事务随连接中止回滚（本机实测确认）。
+const CLEANUP_GUARD_TABLE = 'e2e_repair_request_cleanup_guard';
+
+/**
+ * 严格库名门（在 assertPhysicalCleanupAllowed 的「测试库命名」之上再收紧一道）：
+ * 维修申请物理清理只允许发生在专用隔离库 lithography_e2e。默认连共享开发库
+ * （lithography_drill）时失败关闭、不执行删除，也不降级成在别的库上删除。
+ */
+function assertDedicatedRepairRequestCleanupDatabase(env: Record<string, string>): void {
+  if (env.DB_NAME !== DEDICATED_E2E_DB_NAME) {
+    throw new Error(
+      `维修申请物理清理被拒绝：DB_NAME=${JSON.stringify(env.DB_NAME)} 不是专用隔离库 ${JSON.stringify(DEDICATED_E2E_DB_NAME)}，失败关闭，不执行删除`,
+    );
+  }
+}
+
+function assertRepairRequestCleanupTargets(targets: readonly RepairRequestCleanupTarget[]): void {
+  const seenIds = new Set<number>();
+  const seenResponseIds = new Set<number>();
+
+  for (const { id, expected, expectedResponses = [] } of targets) {
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error(`物理清理目标 ID 未通过正整数校验，拒绝执行：${JSON.stringify(id)}`);
+    }
+
+    if (seenIds.has(id)) {
+      throw new Error(`物理清理目标 ID 重复，拒绝执行：${id}`);
+    }
+
+    seenIds.add(id);
+
+    if (!REQUEST_NO_PATTERN.test(expected.requestNo)) {
+      throw new Error(
+        `物理清理预期申请编号未通过白名单校验，拒绝访问数据库：${JSON.stringify(expected.requestNo)}`,
+      );
+    }
+
+    if (!Number.isSafeInteger(expected.customerAccountId) || expected.customerAccountId <= 0) {
+      throw new Error(
+        `物理清理预期客户账号未通过正整数校验，拒绝执行：${JSON.stringify(expected.customerAccountId)}`,
+      );
+    }
+
+    if (!CLEANUP_ERROR_CODE_PATTERN.test(expected.errorCode)) {
+      throw new Error(
+        `物理清理预期故障码未通过白名单校验，拒绝访问数据库：${JSON.stringify(expected.errorCode)}`,
+      );
+    }
+
+    if (!Number.isSafeInteger(expected.equipmentModelId) || expected.equipmentModelId <= 0) {
+      throw new Error(
+        `物理清理预期设备型号未通过正整数校验，拒绝执行：${JSON.stringify(expected.equipmentModelId)}`,
+      );
+    }
+
+    if (!CLEANUP_FAULT_DESCRIPTION_PATTERN.test(expected.faultDescription)) {
+      throw new Error(
+        `物理清理预期故障描述未通过白名单校验，拒绝访问数据库：${JSON.stringify(expected.faultDescription)}`,
+      );
+    }
+
+    if (
+      expected.acceptedEngineerAccountId !== undefined &&
+      (!Number.isSafeInteger(expected.acceptedEngineerAccountId) ||
+        expected.acceptedEngineerAccountId <= 0)
+    ) {
+      throw new Error(
+        `物理清理预期接单工程师账号未通过正整数校验，拒绝执行：${JSON.stringify(expected.acceptedEngineerAccountId)}`,
+      );
+    }
+
+    for (const response of expectedResponses) {
+      assertRepairRequestCleanupResponseTarget(response, id, seenResponseIds);
+    }
+  }
+}
+
+function assertRepairRequestCleanupResponseTarget(
+  response: RepairRequestCleanupResponseTarget,
+  requestId: number,
+  seenResponseIds: Set<number>,
+): void {
+  if (!Number.isSafeInteger(response.id) || response.id <= 0) {
+    throw new Error(`物理清理回复 ID 未通过正整数校验，拒绝执行：${JSON.stringify(response.id)}`);
+  }
+
+  if (seenResponseIds.has(response.id)) {
+    throw new Error(`物理清理回复 ID 重复，拒绝执行：${response.id}`);
+  }
+
+  seenResponseIds.add(response.id);
+
+  // 回复必须归属本轮那条申请：跨申请的回复 ID 一旦混入，会删掉不属于本目标的记录
+  if (response.expected.requestId !== requestId) {
+    throw new Error(
+      `物理清理回复归属申请与清理目标不一致，拒绝执行：回复 ${response.id} 声明归属 ${JSON.stringify(response.expected.requestId)}，实际目标 ${requestId}`,
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(response.expected.engineerAccountId) ||
+    response.expected.engineerAccountId <= 0
+  ) {
+    throw new Error(
+      `物理清理预期回复工程师账号未通过正整数校验，拒绝执行：${JSON.stringify(response.expected.engineerAccountId)}`,
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(response.expected.customerAccountId) ||
+    response.expected.customerAccountId <= 0
+  ) {
+    throw new Error(
+      `物理清理预期回复客户账号未通过正整数校验，拒绝执行：${JSON.stringify(response.expected.customerAccountId)}`,
+    );
+  }
+
+  if (!CLEANUP_RESOLUTION_STATUSES.includes(response.expected.resolutionStatus)) {
+    throw new Error(
+      `物理清理预期处理状态不在枚举值域内，拒绝执行：${JSON.stringify(response.expected.resolutionStatus)}`,
+    );
+  }
+
+  if (!CLEANUP_RESPONSE_TEXT_PATTERN.test(response.expected.responseText)) {
+    throw new Error(
+      `物理清理预期回复正文未通过白名单校验，拒绝访问数据库：${JSON.stringify(response.expected.responseText)}`,
+    );
+  }
+}
+
+/**
+ * 组装「同一连接、同一事务」的核验 + 删除脚本（本机实测结论）：
+ * - 单次 mysql -e 多语句即同一连接，可 START TRANSACTION ... COMMIT；
+ * - 守卫表 CHECK 违例让 CLI 在违例语句处中止（exit≠0），事务未 COMMIT 即回滚；
+ * - CLI 已产出的 stdout（锁定行快照 + 诊断行）保留在错误的 stdout 中，作为失败诊断。
+ */
+function buildRepairRequestCleanupSql(targets: readonly RepairRequestCleanupTarget[]): string {
+  const idList = targets.map(({ id }) => id).join(',');
+  const idPredicate = `id IN (${idList})`;
+  // 逐 ID 预期事实：每个 ID 绑定自己的本轮事实（编号 / 客户账号 / 故障码 / 设备型号 / 故障描述，
+  // 已接单目标追加 is_accepted 与接单工程师归属），
+  // 任一项与目标行不符都会被 field_mismatch_rows 计入，核验门随即中止批处理并回滚（不提交删除）。
+  const expectedFacts = targets
+    .map(({ id, expected }) => {
+      const facts = [
+        `id = ${id}`,
+        `request_no = '${expected.requestNo}'`,
+        `customer_account_id = ${expected.customerAccountId}`,
+        `error_code = '${expected.errorCode}'`,
+        `equipment_model_id = ${expected.equipmentModelId}`,
+        `fault_description = '${expected.faultDescription}'`,
+      ];
+
+      if (expected.acceptedEngineerAccountId !== undefined) {
+        facts.push(
+          'is_accepted = 1',
+          `accepted_by_engineer_account_id = ${expected.acceptedEngineerAccountId}`,
+        );
+      }
+
+      return `(${facts.join(' AND ')})`;
+    })
+    .join(' OR ');
+  const existingRows = `(SELECT COUNT(*) FROM repair_request WHERE ${idPredicate})`;
+  const fieldMismatchRows = `(SELECT COUNT(*) FROM repair_request WHERE ${idPredicate} AND NOT (${expectedFacts}))`;
+
+  // 本轮自建回复（负责人单卡片计划 P3）：逐 ID 绑定本轮事实；
+  // 未提供回复的目标其预期条数为 0，此时下方各项退化为既有「零子记录」口径，守卫不放宽。
+  const responseTargets = targets.flatMap(({ id, expectedResponses = [] }) =>
+    expectedResponses.map((response) => ({ requestId: id, ...response })),
+  );
+  const expectedResponseRows = responseTargets.length;
+  const responseIdList = responseTargets.map(({ id }) => id).join(',');
+  const responseRows = `(SELECT COUNT(*) FROM engineer_response WHERE request_id IN (${idList}))`;
+  const responseFieldMismatchRows =
+    expectedResponseRows === 0
+      ? '0'
+      : `(SELECT COUNT(*) FROM engineer_response WHERE id IN (${responseIdList}) AND NOT (${responseTargets
+          .map(
+            ({ id, requestId, expected }) =>
+              `(id = ${id} AND request_id = ${requestId} AND engineer_account_id = ${expected.engineerAccountId} AND customer_account_id = ${expected.customerAccountId} AND resolution_status = '${expected.resolutionStatus}' AND response_text = '${expected.responseText}')`,
+          )
+          .join(' OR ')}))`;
+  // 预期回复 ID 缺失：声明了本轮回复却在库里找不到对应行（陈旧 / 错误的 ID）。
+  // ID 去重由 Node 侧白名单保证，故实际命中行数恒不超过预期条数，本项恒为非负违例值。
+  const foundExpectedResponseRows =
+    expectedResponseRows === 0
+      ? '0'
+      : `(SELECT COUNT(*) FROM engineer_response WHERE id IN (${responseIdList}))`;
+  const missingResponseRows = `(${expectedResponseRows} - ${foundExpectedResponseRows})`;
+  // 多余回复子记录：该申请集合下的回复行数超出本轮预期条数的部分。
+  // GREATEST 兜底保证非负：负值会在 childRows 求和时抵消「申请字段不符」等正向违例，
+  // 使 CHECK 在核验未通过时误判为 0，从而让 DELETE 照常提交（数据已丢才由诊断发现）。
+  const unexpectedResponseRows = `GREATEST(${responseRows} - ${expectedResponseRows}, 0)`;
+  // 其他子表均以 ON DELETE RESTRICT 指向 repair_request，存在引用即整批中止交人工核对，绝不级联清理。
+  const otherChildRows = [
+    `(SELECT COUNT(*) FROM ai_conversation WHERE request_id IN (${idList}))`,
+    `(SELECT COUNT(*) FROM ai_report WHERE request_id IN (${idList}))`,
+  ].join(' + ');
+  const childRows = [
+    missingResponseRows,
+    unexpectedResponseRows,
+    responseFieldMismatchRows,
+    otherChildRows,
+  ].join(' + ');
+  const guardViolations = [
+    `(DATABASE() <> '${DEDICATED_E2E_DB_NAME}')`,
+    `(${targets.length} - ${existingRows})`,
+    fieldMismatchRows,
+    childRows,
+  ].join(' + ');
+
+  const statements = [
+    'START TRANSACTION',
+    `CREATE TEMPORARY TABLE ${CLEANUP_GUARD_TABLE} (violations INT NOT NULL, CONSTRAINT e2e_repair_request_cleanup_must_be_zero CHECK (violations = 0))`,
+    `SELECT id, request_no, customer_account_id, equipment_model_id, error_code, fault_description, is_accepted, accepted_by_engineer_account_id FROM repair_request WHERE ${idPredicate} ORDER BY id FOR UPDATE`,
+    `SELECT CONCAT('database=', DATABASE(), ' expected_rows=${targets.length}', ' existing_rows=', ${existingRows}, ' field_mismatch_rows=', ${fieldMismatchRows}, ' child_rows=', ${childRows}, ' expected_response_rows=${expectedResponseRows}', ' missing_response_rows=', ${missingResponseRows}, ' unexpected_response_rows=', ${unexpectedResponseRows})`,
+    `INSERT INTO ${CLEANUP_GUARD_TABLE} (violations) SELECT ${guardViolations}`,
+  ];
+
+  // 先删本轮精确回复行，再删申请行：外键 ON DELETE RESTRICT 决定顺序不可颠倒，
+  // 且回复行只按本轮记录的精确 ID 删除，绝不按申请批量删回复。
+  if (expectedResponseRows > 0) {
+    statements.push(`DELETE FROM engineer_response WHERE id IN (${responseIdList})`);
+  }
+
+  statements.push(
+    `DELETE FROM repair_request WHERE ${idPredicate}`,
+    `SELECT CONCAT('residue_rows=', ${existingRows}, ' response_residue_rows=', ${responseRows})`,
+    `INSERT INTO ${CLEANUP_GUARD_TABLE} (violations) SELECT ${responseRows}`,
+    `INSERT INTO ${CLEANUP_GUARD_TABLE} (violations) SELECT ${existingRows}`,
+    'COMMIT',
+  );
+
+  return statements.join(';\n');
+}
+
+/**
+ * 执行清理脚本（单次 mysql 进程 = 同一连接）。失败时抛出携带诊断的错误：
+ * 密码只经 MYSQL_PWD 注入，既不在进程参数也不在诊断文本中；
+ * 原始错误整条作 cause 会把完整 SQL 与 CLI 输出复制进异常链，故以副本作 cause。
+ */
+function runRepairRequestCleanupSql(env: Record<string, string>, sql: string): string {
+  try {
+    return execFileSync(
+      'mysql',
+      [
+        '-h',
+        env.DB_HOST,
+        '-P',
+        env.DB_PORT,
+        `-u${env.DB_USER}`,
+        env.DB_NAME,
+        '-N',
+        '-B',
+        '-e',
+        sql,
+      ],
+      {
+        encoding: 'utf-8',
+        env: { ...process.env, MYSQL_PWD: env.DB_PASS },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+  } catch (error) {
+    const failure = error as { stderr?: string; stdout?: string };
+    const stderrLine = (failure.stderr ?? '').trim().split('\n')[0] ?? '';
+    const diagnostics = (failure.stdout ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.includes('='))
+      .join(' | ');
+    const message =
+      `维修申请物理清理事务中止（已回滚，未执行删除）：${stderrLine === '' ? '未知错误' : stderrLine}` +
+      (diagnostics === '' ? '' : `；核验诊断：${diagnostics}`);
+
+    throw new Error(message, {
+      // eslint-disable-next-line preserve-caught-error -- 原始错误含完整 SQL 与 CLI 输出，一律以副本作为 cause
+      cause: new Error(message),
+    });
+  }
+}
+
+/**
+ * 独立复查 CLI 回读的核验诊断（防御「CHECK 约束在旧版本 MySQL 上被静默忽略」的情形，
+ * 也避免把「拿不到或读不懂诊断」当成清理成功）：库名 / 期望行数 / 实际行数 / 字段不符 /
+ * 子记录 / 本轮回复条数 / 申请残留 / 回复残留任一不达标即抛错。
+ * 本轮回复条数必须与调用方声明一致：声明了回复却没有对应的核验行，说明脚本或库口径不对，
+ * 同样按失败处理（不因为「诊断缺失」而放行）。
+ */
+function assertRepairRequestCleanupDiagnostics(
+  output: string,
+  expectedRows: number,
+  expectedResponseRows: number,
+): void {
+  const diagnostics: Record<string, string> = {};
+
+  for (const match of output.matchAll(/([a-z_]+)=(\S+)/g)) {
+    diagnostics[match[1]] = match[2];
+  }
+
+  const expectedDiagnostics: Array<[string, string]> = [
+    ['database', DEDICATED_E2E_DB_NAME],
+    ['expected_rows', String(expectedRows)],
+    ['existing_rows', String(expectedRows)],
+    ['field_mismatch_rows', '0'],
+    ['child_rows', '0'],
+    ['expected_response_rows', String(expectedResponseRows)],
+    ['response_residue_rows', '0'],
+    ['residue_rows', '0'],
+  ];
+  const mismatched = expectedDiagnostics.filter(([key, value]) => diagnostics[key] !== value);
+
+  if (mismatched.length > 0) {
+    throw new Error(
+      `维修申请物理清理核验失败：${mismatched
+        .map(
+          ([key, value]) => `${key} 期望 ${value} 实际 ${JSON.stringify(diagnostics[key] ?? null)}`,
+        )
+        .join('；')}`,
+    );
+  }
+}
+
+/**
+ * 按本次运行记录的精确 ID 物理清理维修申请行（统一安全入口，创建 / 管理 / 分页夹具共用）。
+ *
+ * 安全性质（负责人最小修复计划 P1/P2，负责人单卡片计划 P3 扩展回复清理）：
+ * - 入口内独立执行「显式授权门 + 测试库命名门 + 严格 lithography_e2e 库名门」，
+ *   任一门不通过即抛错且 mysql 进程绝不启动（不依赖调用方或全局 setup 已经检查过）；
+ * - 目标 ID 与五项预期事实先过 Node 侧白名单（编号 / 客户账号 / 故障码 / 设备型号 / 故障描述），
+ *   先于任何 SQL 组装；不再有「仅凭编号格式直接 DELETE」的路径，也不按前缀/行数/猜测 ID 匹配；
+ * - 同一连接、同一事务内完成：库名核验 → FOR UPDATE 锁定并读取目标行 → 逐项核对预期字段、
+ *   客户账号、设备型号、故障描述（已接单目标再核对 is_accepted 与接单工程师归属）
+ *   → 核对子记录引用 → 全部门通过才先删本轮精确回复行、再删申请行
+ *   → 提交前核验申请残留与回复残留均为 0 → COMMIT；任一门不通过即中止回滚（删除作废）并让用例转红。
+ * - 未声明 expectedResponses 时维持既有最强守卫：申请存在任何 engineer_response 子记录即整批中止，
+ *   绝不因为「要让用例通过」而放宽。
+ * - ID 列表为空时 no-op，不启动 mysql 进程。
+ */
+export function deleteRepairRequestRowsByIds(targets: readonly RepairRequestCleanupTarget[]): void {
+  if (targets.length === 0) {
+    return;
+  }
+
+  assertRepairRequestCleanupTargets(targets);
+
+  const env = readBackendEnv();
+
+  assertPhysicalCleanupAllowed(env);
+  assertDedicatedRepairRequestCleanupDatabase(env);
+
+  const expectedResponseRows = targets.reduce(
+    (total, { expectedResponses = [] }) => total + expectedResponses.length,
+    0,
+  );
+
+  const output = runRepairRequestCleanupSql(env, buildRepairRequestCleanupSql(targets));
+
+  assertRepairRequestCleanupDiagnostics(output, targets.length, expectedResponseRows);
+}
+
+/** 客户软删自己的未接单申请（幂等成功）——真实链路用例的统一清理通道（可逆，先于物理清理） */
+const DELETE_MY_REPAIR_REQUEST_MUTATION = `
+  mutation DeleteMyRepairRequestForCleanup($id: Int!) {
+    deleteMyRepairRequest(id: $id) { id requestNo }
+  }
+`;
+
+/**
+ * 真实链路维修申请用例的统一清理入口（创建 / 管理 / 已回复工程师链路三个 spec 共用，
+ * 替代旧 deleteRepairRequestByRequestNo 的「仅凭编号格式直接 DELETE」路径）：
+ * 1. 编号先过白名单（非法编号在任何数据库访问前被拒绝）；
+ * 2. 按编号解析本次自建行的精确 ID（行已不存在则 no-op，幂等成立）；
+ * 3. 未接单申请经产品自身通道软删（可逆）：共享开发库与专用隔离库都执行，保持基线可见面干净；
+ *    已接单并含本轮回复的申请在业务上不可被客户软删（deleteMyRepairRequest 对已接单申请拒绝），
+ *    此时跳过软删并直接走受保护物理清理；
+ * 4. 仅当环境为专用隔离库 lithography_e2e 且执行者显式授权时，再按「精确 ID + 本轮预期事实
+ *    + 本轮回复精确 ID」走受保护物理清理（同一连接同一事务核验后先删回复再删申请，任一残留非零即失败）；
+ *    共享开发库保持既有软删边界，不做物理删除。
+ * 任一门不通过即抛错：清理失败必须是可观测的失败，而不是静默残留。
+ *
+ * 五项预期事实（编号 / 客户账号 / 故障码 / 设备型号 / 故障描述）全部必填：调用方必须传入
+ * 本轮测试自身掌握的事实（创建 Mutation 实际发送/返回的值），不得用从目标行反查所得的值充当预期。
+ * 已接单用例再传 acceptedEngineerAccountId（归属核对）与 expectedResponses（本轮回复精确清理目标）。
+ */
+export async function cleanupE2ERepairRequest(options: {
+  env: Record<string, string>;
+  requestNo: string;
+  customerAccountId: number;
+  errorCode: string;
+  equipmentModelId: number;
+  faultDescription: string;
+  customerLoginName?: string;
+  /** 已接单申请的接单工程师账号（可选，提供后核验 is_accepted 与接单归属） */
+  acceptedEngineerAccountId?: number;
+  /** 本轮为该申请创建的工程师回复（精确 ID + 本轮事实）；非空即表示申请已接单、不可软删 */
+  expectedResponses?: readonly RepairRequestCleanupResponseTarget[];
+}): Promise<void> {
+  assertWhitelistedRequestNo(options.requestNo);
+
+  const id = findRepairRequestByRequestNo(options.requestNo, 'id');
+
+  if (id === '') {
+    return;
+  }
+
+  const numericId = Number(id);
+
+  if (!Number.isSafeInteger(numericId) || numericId <= 0) {
+    throw new Error(`自建维修申请 ID 解析失败，拒绝清理：${JSON.stringify(id)}`);
+  }
+
+  const expectedResponses = options.expectedResponses ?? [];
+  const isAcceptedRun = expectedResponses.length > 0;
+  const physicalCleanupEnabled = isPhysicalCleanupEnabled(options.env);
+
+  if (isAcceptedRun) {
+    // 已接单/已回复申请无法经产品通道软删（业务上客户不得删除已接单申请）：
+    // 此时必须先确认物理清理可用，否则拒绝静默把本轮自建数据留在库里。
+    if (!physicalCleanupEnabled) {
+      throw new Error(
+        `自建维修申请 ${options.requestNo} 已接单并含本轮回复，无法经产品通道软删；物理清理未启用（缺 E2E_ALLOW_PHYSICAL_CLEANUP=1），拒绝静默留下本轮自建数据`,
+      );
+    }
+  } else {
+    const { body } = await realGraphqlCall(
+      options.env,
+      DELETE_MY_REPAIR_REQUEST_MUTATION,
+      { id: numericId },
+      options.customerLoginName ?? 'mock_customer_alpha',
+    );
+
+    if ((body as { errors?: unknown[] }).errors !== undefined) {
+      throw new Error(`自建维修申请 ${options.requestNo} 软删失败，拒绝声称清理完成`);
+    }
+
+    if (!physicalCleanupEnabled) {
+      return;
+    }
+  }
+
+  deleteRepairRequestRowsByIds([
+    {
+      expected: {
+        customerAccountId: options.customerAccountId,
+        equipmentModelId: options.equipmentModelId,
+        errorCode: options.errorCode,
+        faultDescription: options.faultDescription,
+        requestNo: options.requestNo,
+        ...(options.acceptedEngineerAccountId === undefined
+          ? {}
+          : { acceptedEngineerAccountId: options.acceptedEngineerAccountId }),
+      },
+      expectedResponses,
+      id: numericId,
+    },
+  ]);
 }
 
 // ---- 文件上传 / 下载 REST 链路（0909 第二轮阻塞项 1 的 e2e 支撑） ----

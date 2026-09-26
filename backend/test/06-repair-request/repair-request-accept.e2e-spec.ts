@@ -1,19 +1,31 @@
 // test/06-repair-request/repair-request-accept.e2e-spec.ts
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ApiModule } from '@src/bootstraps/api/api.module';
 import { AccountEntity } from '@src/modules/account/base/entities/account.entity';
 import { UserInfoEntity } from '@src/modules/account/base/entities/user-info.entity';
-import { ApiModule } from '@src/bootstraps/api/api.module';
-import { AudienceTypeEnum, IdentityTypeEnum } from '@app-types/models/account.types';
-import { EquipmentModelEntity } from '@src/modules/lithography/entities/equipment-model.entity';
 import { RepairRequestEntity } from '@src/modules/lithography/entities/repair-request.entity';
 import { TokenHelper } from '@src/modules/auth/token.helper';
+import { AudienceTypeEnum, IdentityTypeEnum } from '@app-types/models/account.types';
 import { CreateAccountUsecase } from '@src/usecases/account/create-account.usecase';
 import { App } from 'supertest/types';
-import { DataSource, Repository } from 'typeorm';
-import { getAccountIdByLoginName, login, postGql } from '../utils/e2e-graphql-utils';
+import { DataSource } from 'typeorm';
+import { login, postGql } from '../utils/e2e-graphql-utils';
 import { initGraphQLSchema } from '../../src/adapters/api/graphql/schema/schema.init';
-import { cleanupTestAccounts, seedTestAccounts, testAccountsConfig } from '../utils/test-accounts';
+import { assertDataSourceOnAllowedE2eDatabase } from '../utils/e2e-db-guard';
+import {
+  REPAIR_REQUEST_FIXTURE_ACCOUNTS,
+  REPAIR_REQUEST_FIXTURE_MARKERS,
+  cleanupRepairRequestFixtureByIds,
+  cleanupRepairRequestFixtureResidue,
+  createRepairRequestFixtureModel,
+  createRepairRequestFixtureOwnership,
+  createRepairRequestFixtureRequest,
+  runRepairRequestFixtureTeardown,
+  seedRepairRequestFixtureAccounts,
+  type RepairRequestFixtureOwnership,
+  type RepairRequestFixtureRequestSeed,
+} from './repair-request-fixture';
 
 const ACCEPT_MUTATION = `
   mutation AcceptRepairRequest($id: Int!) {
@@ -31,6 +43,19 @@ const ACCEPT_MUTATION = `
   }
 `;
 
+const ENGINEER_DETAIL_QUERY = `
+  query EngineerRepairRequest($id: Int!) {
+    engineerRepairRequest(id: $id) {
+      id
+      isAccepted
+      acceptedAt
+      acceptanceViewStatus
+      acceptedEngineerNickname
+      customerNickname
+    }
+  }
+`;
+
 const DELETE_MUTATION = `
   mutation DeleteMyRepairRequest($id: Int!) {
     deleteMyRepairRequest(id: $id) { id requestNo }
@@ -38,8 +63,8 @@ const DELETE_MUTATION = `
 `;
 
 const ENGINEER_LIST_QUERY = `
-  query EngineerRepairRequests($scope: String!, $pagination: PaginationArgs!) {
-    engineerRepairRequests(scope: $scope, pagination: $pagination) {
+  query EngineerRepairRequests($scope: String!, $pagination: PaginationArgs!, $filter: EngineerRepairRequestFilterInput) {
+    engineerRepairRequests(scope: $scope, pagination: $pagination, filter: $filter) {
       items { id isAccepted acceptedAt }
       total
     }
@@ -63,13 +88,13 @@ const OFFSET_PAGINATION = { mode: 'OFFSET', page: 1, pageSize: 10, withTotal: tr
  * - 错误分类：不存在/已删除 → NOT_FOUND；已接单（含本人重复接单）→ CONFLICT，文案中性
  * - 并发竞争：两名工程师抢单，以及客户删除与工程师接单竞争，数据库终态只能有一个赢家
  *
- * 造数固定主键（131~139 申请、42 型号），依赖 global-setup-e2e 的全表 TRUNCATE 保证无冲突。
+ * 数据安全：本 spec 只创建/清理**专属夹具**（专属账号 + 专属接单型号 + 专属编号申请），
+ * 主键由数据库生成并在运行期记录；工程师列表断言一律用专属 equipmentModelId 收敛，
+ * 不依赖 global-setup 的全表 TRUNCATE，也不做任何整表删除。
  */
 describe('工程师接单写链路 (e2e)', () => {
   let app: INestApplication<App>;
   let dataSource: DataSource;
-  let modelRepository: Repository<EquipmentModelEntity>;
-  let requestRepository: Repository<RepairRequestEntity>;
   let engineerToken: string;
   let otherEngineerToken: string;
   let customerToken: string;
@@ -79,7 +104,19 @@ describe('工程师接单写链路 (e2e)', () => {
   let noActiveRoleToken: string;
   let engineerAccountId: number;
   let otherEngineerAccountId: number;
+  let customerAccountId: number;
   let hybridAccountId: number;
+  let acceptModelId: number;
+  let successTargetId: number;
+  let conflictTargetId: number;
+  let deletedTargetId: number;
+  let permissionTargetId: number;
+  let hybridRejectTargetId: number;
+  let hybridSuccessTargetId: number;
+  let noActiveRoleTargetId: number;
+  const ownership: RepairRequestFixtureOwnership = createRepairRequestFixtureOwnership();
+  /** 仅当 beforeAll 在「写夹具之前」完成白名单验证才置位，afterAll 据此决定能否清理 */
+  let fixtureTargetValidated = false;
 
   const acceptMutation = (token: string | undefined, id: number) =>
     postGql({ app, query: ACCEPT_MUTATION, variables: { id }, token });
@@ -96,6 +133,50 @@ describe('工程师接单写链路 (e2e)', () => {
     expect(err.extensions.errorCode).toBe('JWT_AUTHENTICATION_FAILED');
   };
 
+  const buildRequestSeed = (params: {
+    markerIndex: number;
+    faultDescription: string;
+    errorCode: string;
+    contentMd: string;
+    createdAt: Date;
+    isAccepted?: boolean;
+    acceptedByEngineerAccountId?: number | null;
+    acceptedAt?: Date | null;
+    deprecated?: boolean;
+    deletedAt?: Date | null;
+  }): RepairRequestFixtureRequestSeed => ({
+    requestNo: REPAIR_REQUEST_FIXTURE_MARKERS.acceptRequestNos[params.markerIndex],
+    customerAccountId,
+    equipmentModelId: acceptModelId,
+    errorCode: params.errorCode,
+    faultDescription: params.faultDescription,
+    contentMd: params.contentMd,
+    createdAt: params.createdAt,
+    isAccepted: params.isAccepted ?? false,
+    acceptedByEngineerAccountId: params.acceptedByEngineerAccountId ?? null,
+    acceptedAt: params.acceptedAt ?? null,
+    deprecated: params.deprecated ?? false,
+    deletedAt: params.deletedAt ?? null,
+  });
+
+  const loginWithTemporaryHybridIdentityHint = async (
+    authenticate: () => Promise<string>,
+  ): Promise<string> => {
+    const accountRepo = dataSource.getRepository(AccountEntity);
+    await accountRepo.update(
+      { id: hybridAccountId },
+      { identityHint: IdentityTypeEnum.SUPER_ADMIN },
+    );
+    try {
+      return await authenticate();
+    } finally {
+      await accountRepo.update(
+        { id: hybridAccountId },
+        { identityHint: IdentityTypeEnum.ENGINEER },
+      );
+    }
+  };
+
   beforeAll(async () => {
     initGraphQLSchema();
 
@@ -104,71 +185,62 @@ describe('工程师接单写链路 (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    dataSource = app.get(DataSource);
-    modelRepository = dataSource.getRepository(EquipmentModelEntity);
-    requestRepository = dataSource.getRepository(RepairRequestEntity);
-
     await app.init();
+    dataSource = moduleFixture.get(DataSource);
 
-    // 清理顺序：申请 → 账号 → 型号（外键 RESTRICT 方向）
-    await requestRepository.createQueryBuilder().delete().execute();
-    await cleanupTestAccounts(dataSource);
-    await modelRepository.createQueryBuilder().delete().execute();
+    // 🔒 第一条写/删除之前复用不可跳过的目标库白名单守卫
+    await assertDataSourceOnAllowedE2eDatabase(dataSource);
+    fixtureTargetValidated = true;
+    // 先按专属标记 + 完整归属校验回收上轮崩溃残留；无残留时 no-op（连跑两遍幂等）
+    await cleanupRepairRequestFixtureResidue(dataSource);
 
-    await seedTestAccounts({
+    const accounts = await seedRepairRequestFixtureAccounts({
       dataSource,
+      ownership,
       createAccountUsecase: app.get(CreateAccountUsecase),
-      includeKeys: ['staff', 'staffSecondary', 'guestPrimary', 'admin', 'hybridStaff'],
     });
+    engineerAccountId = accounts.engineerA;
+    otherEngineerAccountId = accounts.engineerB;
+    customerAccountId = accounts.customerA;
+    hybridAccountId = accounts.hybrid;
+
     engineerToken = await login({
       app,
-      loginName: testAccountsConfig.staff.loginName,
-      loginPassword: testAccountsConfig.staff.loginPassword,
+      loginName: REPAIR_REQUEST_FIXTURE_ACCOUNTS.engineerA.loginName,
+      loginPassword: REPAIR_REQUEST_FIXTURE_ACCOUNTS.engineerA.loginPassword,
     });
     otherEngineerToken = await login({
       app,
-      loginName: testAccountsConfig.staffSecondary.loginName,
-      loginPassword: testAccountsConfig.staffSecondary.loginPassword,
+      loginName: REPAIR_REQUEST_FIXTURE_ACCOUNTS.engineerB.loginName,
+      loginPassword: REPAIR_REQUEST_FIXTURE_ACCOUNTS.engineerB.loginPassword,
     });
     customerToken = await login({
       app,
-      loginName: testAccountsConfig.guestPrimary.loginName,
-      loginPassword: testAccountsConfig.guestPrimary.loginPassword,
+      loginName: REPAIR_REQUEST_FIXTURE_ACCOUNTS.customerA.loginName,
+      loginPassword: REPAIR_REQUEST_FIXTURE_ACCOUNTS.customerA.loginPassword,
     });
     adminToken = await login({
       app,
-      loginName: testAccountsConfig.admin.loginName,
-      loginPassword: testAccountsConfig.admin.loginPassword,
+      loginName: REPAIR_REQUEST_FIXTURE_ACCOUNTS.admin.loginName,
+      loginPassword: REPAIR_REQUEST_FIXTURE_ACCOUNTS.admin.loginPassword,
     });
-    engineerAccountId = await getAccountIdByLoginName(
-      dataSource,
-      testAccountsConfig.staff.loginName,
-    );
-    otherEngineerAccountId = await getAccountIdByLoginName(
-      dataSource,
-      testAccountsConfig.staffSecondary.loginName,
-    );
 
     // 混合角色账号：先以造数 identityHint=ENGINEER 登录，得到 activeRole=ENGINEER 的 Token B；
-    // 再在测试造数阶段切换 identityHint=SUPER_ADMIN 后重新登录，
-    // 得到 activeRole=SUPER_ADMIN 的 Token A（两条 Token 都经过真实登录/JWT 签发链路）
+    // 再临时切换 identityHint=SUPER_ADMIN 后重新登录，得到 activeRole=SUPER_ADMIN 的 Token A
+    // （两条 Token 都经过真实登录/JWT 签发链路），签发完成后立即还原 identityHint=ENGINEER，
+    // 使夹具归属核验（identityHint 必须等于造数期望）保持一致。
     hybridTokenEngineer = await login({
       app,
-      loginName: testAccountsConfig.hybridStaff.loginName,
-      loginPassword: testAccountsConfig.hybridStaff.loginPassword,
+      loginName: REPAIR_REQUEST_FIXTURE_ACCOUNTS.hybrid.loginName,
+      loginPassword: REPAIR_REQUEST_FIXTURE_ACCOUNTS.hybrid.loginPassword,
     });
-    hybridAccountId = await getAccountIdByLoginName(
-      dataSource,
-      testAccountsConfig.hybridStaff.loginName,
+    hybridTokenSuperAdmin = await loginWithTemporaryHybridIdentityHint(() =>
+      login({
+        app,
+        loginName: REPAIR_REQUEST_FIXTURE_ACCOUNTS.hybrid.loginName,
+        loginPassword: REPAIR_REQUEST_FIXTURE_ACCOUNTS.hybrid.loginPassword,
+      }),
     );
-    await dataSource
-      .getRepository(AccountEntity)
-      .update({ id: hybridAccountId }, { identityHint: IdentityTypeEnum.SUPER_ADMIN });
-    hybridTokenSuperAdmin = await login({
-      app,
-      loginName: testAccountsConfig.hybridStaff.loginName,
-      loginPassword: testAccountsConfig.hybridStaff.loginPassword,
-    });
 
     // 合法签名但无 activeRole 的兼容性 Token：使用项目真实签发入口 TokenHelper，
     // 不伪造无签名 Token；当前登录链路仅在 accessGroup 非空时写入 activeRole，
@@ -180,234 +252,208 @@ describe('工程师接单写链路 (e2e)', () => {
       payload: {
         sub: hybridAccountId,
         username: hybridNickname,
-        email: testAccountsConfig.hybridStaff.loginEmail,
+        email: REPAIR_REQUEST_FIXTURE_ACCOUNTS.hybrid.loginEmail,
         accessGroup: [IdentityTypeEnum.SUPER_ADMIN, IdentityTypeEnum.ENGINEER],
       },
       audience: AudienceTypeEnum.DESKTOP,
     });
 
-    const customerAccountId = await getAccountIdByLoginName(
-      dataSource,
-      testAccountsConfig.guestPrimary.loginName,
-    );
+    acceptModelId = await createRepairRequestFixtureModel({ dataSource, ownership, key: 'accept' });
 
-    await modelRepository.save(
-      modelRepository.create({
-        id: 42,
-        modelCode: 'E2E-ACCEPT',
-        modelName: '接单型号',
-        enabled: true,
-        sortOrder: 1,
-      }),
-    );
     // 131 未接单（成功路径目标）；132 已被工程师甲接单（冲突/重复接单目标）；
     // 133 已删除未接单（NOT_FOUND 目标）；134 未接单（权限拒绝目标，全程不产生写入）；
-    // 135 未接单（并发竞争目标，测试内即时造数）
-    await requestRepository.save(
-      requestRepository.create([
-        {
-          id: 131,
-          requestNo: 'E2E-AC-131',
-          customerAccountId,
-          equipmentModelId: 42,
-          errorCode: 'E-3001',
-          faultDescription: '接单成功场景',
-          contentMd: '# E2E-131',
-          createdAt: new Date('2026-08-30T01:00:00.000Z'),
-          isAccepted: false,
-          acceptedByEngineerAccountId: null,
-          acceptedAt: null,
-          deprecated: false,
-          deletedAt: null,
-        },
-        {
-          id: 132,
-          requestNo: 'E2E-AC-132',
-          customerAccountId,
-          equipmentModelId: 42,
-          errorCode: 'E-3002',
-          faultDescription: '已被接单场景',
-          contentMd: '# E2E-132',
-          createdAt: new Date('2026-08-30T02:00:00.000Z'),
-          isAccepted: true,
-          acceptedByEngineerAccountId: engineerAccountId,
-          acceptedAt: new Date('2026-08-30T03:00:00.000Z'),
-          deprecated: false,
-          deletedAt: null,
-        },
-        {
-          id: 133,
-          requestNo: 'E2E-AC-133',
-          customerAccountId,
-          equipmentModelId: 42,
-          errorCode: 'E-3003',
-          faultDescription: '已删除场景',
-          contentMd: '# E2E-133',
-          createdAt: new Date('2026-08-30T04:00:00.000Z'),
-          isAccepted: false,
-          acceptedByEngineerAccountId: null,
-          acceptedAt: null,
-          deprecated: true,
-          deletedAt: new Date('2026-08-30T05:00:00.000Z'),
-        },
-        {
-          id: 134,
-          requestNo: 'E2E-AC-134',
-          customerAccountId,
-          equipmentModelId: 42,
-          errorCode: 'E-3004',
-          faultDescription: '权限拒绝场景',
-          contentMd: '# E2E-134',
-          createdAt: new Date('2026-08-30T06:00:00.000Z'),
-          isAccepted: false,
-          acceptedByEngineerAccountId: null,
-          acceptedAt: null,
-          deprecated: false,
-          deletedAt: null,
-        },
-        // 137 混合角色 activeRole=SUPER_ADMIN 拒绝目标（全程不产生写入）；
-        // 138 混合角色 activeRole=ENGINEER 接单成功目标；
-        // 139 无 activeRole 兼容性 Token 拒绝目标（全程不产生写入）
-        {
-          id: 137,
-          requestNo: 'E2E-AC-137',
-          customerAccountId,
-          equipmentModelId: 42,
-          errorCode: 'E-3007',
-          faultDescription: '混合角色 activeRole=SUPER_ADMIN 拒绝场景',
-          contentMd: '# E2E-137',
-          createdAt: new Date('2026-08-30T09:00:00.000Z'),
-          isAccepted: false,
-          acceptedByEngineerAccountId: null,
-          acceptedAt: null,
-          deprecated: false,
-          deletedAt: null,
-        },
-        {
-          id: 138,
-          requestNo: 'E2E-AC-138',
-          customerAccountId,
-          equipmentModelId: 42,
-          errorCode: 'E-3008',
-          faultDescription: '混合角色 activeRole=ENGINEER 接单成功场景',
-          contentMd: '# E2E-138',
-          createdAt: new Date('2026-08-30T10:00:00.000Z'),
-          isAccepted: false,
-          acceptedByEngineerAccountId: null,
-          acceptedAt: null,
-          deprecated: false,
-          deletedAt: null,
-        },
-        {
-          id: 139,
-          requestNo: 'E2E-AC-139',
-          customerAccountId,
-          equipmentModelId: 42,
-          errorCode: 'E-3009',
-          faultDescription: '无 activeRole 兼容性 Token 拒绝场景',
-          contentMd: '# E2E-139',
-          createdAt: new Date('2026-08-30T11:00:00.000Z'),
-          isAccepted: false,
-          acceptedByEngineerAccountId: null,
-          acceptedAt: null,
-          deprecated: false,
-          deletedAt: null,
-        },
-      ]),
-    );
+    // 137 混合角色 activeRole=SUPER_ADMIN 拒绝目标（全程不产生写入）；
+    // 138 混合角色 activeRole=ENGINEER 接单成功目标；
+    // 139 无 activeRole 兼容性 Token 拒绝目标（全程不产生写入）
+    successTargetId = await createRepairRequestFixtureRequest({
+      dataSource,
+      ownership,
+      seed: buildRequestSeed({
+        markerIndex: 0,
+        faultDescription: '接单成功场景',
+        errorCode: 'E-3001',
+        contentMd: '# E2E-AC-131',
+        createdAt: new Date('2026-08-30T01:00:00.000Z'),
+      }),
+    });
+    conflictTargetId = await createRepairRequestFixtureRequest({
+      dataSource,
+      ownership,
+      seed: buildRequestSeed({
+        markerIndex: 1,
+        faultDescription: '已被接单场景',
+        errorCode: 'E-3002',
+        contentMd: '# E2E-AC-132',
+        createdAt: new Date('2026-08-30T02:00:00.000Z'),
+        isAccepted: true,
+        acceptedByEngineerAccountId: engineerAccountId,
+        acceptedAt: new Date('2026-08-30T03:00:00.000Z'),
+      }),
+    });
+    deletedTargetId = await createRepairRequestFixtureRequest({
+      dataSource,
+      ownership,
+      seed: buildRequestSeed({
+        markerIndex: 2,
+        faultDescription: '已删除场景',
+        errorCode: 'E-3003',
+        contentMd: '# E2E-AC-133',
+        createdAt: new Date('2026-08-30T04:00:00.000Z'),
+        deprecated: true,
+        deletedAt: new Date('2026-08-30T05:00:00.000Z'),
+      }),
+    });
+    permissionTargetId = await createRepairRequestFixtureRequest({
+      dataSource,
+      ownership,
+      seed: buildRequestSeed({
+        markerIndex: 3,
+        faultDescription: '权限拒绝场景',
+        errorCode: 'E-3004',
+        contentMd: '# E2E-AC-134',
+        createdAt: new Date('2026-08-30T06:00:00.000Z'),
+      }),
+    });
+    hybridRejectTargetId = await createRepairRequestFixtureRequest({
+      dataSource,
+      ownership,
+      seed: buildRequestSeed({
+        markerIndex: 6,
+        faultDescription: '混合角色 activeRole=SUPER_ADMIN 拒绝场景',
+        errorCode: 'E-3007',
+        contentMd: '# E2E-AC-137',
+        createdAt: new Date('2026-08-30T09:00:00.000Z'),
+      }),
+    });
+    hybridSuccessTargetId = await createRepairRequestFixtureRequest({
+      dataSource,
+      ownership,
+      seed: buildRequestSeed({
+        markerIndex: 7,
+        faultDescription: '混合角色 activeRole=ENGINEER 接单成功场景',
+        errorCode: 'E-3008',
+        contentMd: '# E2E-AC-138',
+        createdAt: new Date('2026-08-30T10:00:00.000Z'),
+      }),
+    });
+    noActiveRoleTargetId = await createRepairRequestFixtureRequest({
+      dataSource,
+      ownership,
+      seed: buildRequestSeed({
+        markerIndex: 8,
+        faultDescription: '无 activeRole 兼容性 Token 拒绝场景',
+        errorCode: 'E-3009',
+        contentMd: '# E2E-AC-139',
+        createdAt: new Date('2026-08-30T11:00:00.000Z'),
+      }),
+    });
   }, 60000);
 
   afterAll(async () => {
-    try {
-      if (dataSource && dataSource.isInitialized) {
-        await requestRepository.createQueryBuilder().delete().execute();
-        await cleanupTestAccounts(dataSource);
-        await modelRepository.createQueryBuilder().delete().execute();
-      }
-    } catch (error) {
-      console.error('afterAll 清理失败:', error);
-    } finally {
-      if (app) {
-        try {
-          await app.close();
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        } catch (closeError) {
-          console.warn('应用关闭时出现警告:', closeError);
-        }
-      }
-    }
+    // 守卫拒绝 / 装配失败 / DataSource 未就绪 → 只关闭 app；精确清理失败仍关闭 app 且不吞错
+    await runRepairRequestFixtureTeardown({
+      app,
+      dataSource,
+      targetValidated: fixtureTargetValidated,
+      cleanup: (ds) => cleanupRepairRequestFixtureByIds(ds, ownership),
+    });
   });
 
   describe('权限矩阵', () => {
     it('CUSTOMER 调接单被守卫拒绝（写入口精确 ENGINEER）', async () => {
-      const response = await acceptMutation(customerToken, 134).expect(200);
+      const response = await acceptMutation(customerToken, permissionTargetId).expect(200);
 
       expect(response.body.errors).toHaveLength(1);
       expectForbidden(response.body.errors[0]);
 
-      const row = await requestRepository.findOneOrFail({ where: { id: 134 } });
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: permissionTargetId } });
       expect(row.isAccepted).toBe(false);
       expect(row.acceptedByEngineerAccountId).toBeNull();
       expect(row.acceptedAt).toBeNull();
     });
 
     it('SUPER_ADMIN 调接单被守卫拒绝（读权限继承不等于写权限继承）', async () => {
-      const response = await acceptMutation(adminToken, 134).expect(200);
+      const response = await acceptMutation(adminToken, permissionTargetId).expect(200);
 
       expect(response.body.errors).toHaveLength(1);
       expectForbidden(response.body.errors[0]);
 
-      const row = await requestRepository.findOneOrFail({ where: { id: 134 } });
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: permissionTargetId } });
       expect(row.isAccepted).toBe(false);
     });
 
     it('未登录调接单返回 UNAUTHENTICATED', async () => {
-      const response = await acceptMutation(undefined, 134).expect(200);
+      const response = await acceptMutation(undefined, permissionTargetId).expect(200);
 
       expect(response.body.errors).toHaveLength(1);
       expectUnauthenticated(response.body.errors[0]);
     });
   });
 
+  it('临时 identityHint 登录失败时仍恢复账号字段，夹具可继续安全收尾', async () => {
+    await expect(
+      loginWithTemporaryHybridIdentityHint(() =>
+        Promise.reject(new Error('injected login failure')),
+      ),
+    ).rejects.toThrow('injected login failure');
+
+    const account = await dataSource
+      .getRepository(AccountEntity)
+      .findOneByOrFail({ id: hybridAccountId });
+    expect(account.identityHint).toBe(IdentityTypeEnum.ENGINEER);
+  });
+
   describe('混合角色 activeRole 精确准入（accessGroup=[SUPER_ADMIN, ENGINEER]）', () => {
     it('activeRole=SUPER_ADMIN 的合法 Token 被拒绝（守卫准入不等于接单写权限）', async () => {
-      const response = await acceptMutation(hybridTokenSuperAdmin, 137).expect(200);
+      const response = await acceptMutation(hybridTokenSuperAdmin, hybridRejectTargetId).expect(
+        200,
+      );
 
       expect(response.body.errors).toHaveLength(1);
       expectForbidden(response.body.errors[0]);
 
       // 拒绝路径不启动事务，数据库三个接单字段完全未改变
-      const row = await requestRepository.findOneOrFail({ where: { id: 137 } });
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: hybridRejectTargetId } });
       expect(row.isAccepted).toBe(false);
       expect(row.acceptedByEngineerAccountId).toBeNull();
       expect(row.acceptedAt).toBeNull();
     });
 
     it('activeRole=ENGINEER 的合法 Token 接单成功：接单人等于该账号，三个接单字段一致', async () => {
-      const response = await acceptMutation(hybridTokenEngineer, 138).expect(200);
+      const response = await acceptMutation(hybridTokenEngineer, hybridSuccessTargetId).expect(200);
 
       expect(response.body.errors).toBeUndefined();
       const detail = response.body.data.acceptRepairRequest;
       expect(detail).toMatchObject({
-        id: 138,
-        requestNo: 'E2E-AC-138',
+        id: hybridSuccessTargetId,
+        requestNo: REPAIR_REQUEST_FIXTURE_MARKERS.acceptRequestNos[7],
         isAccepted: true,
       });
       expect(detail.acceptedAt).not.toBeNull();
 
-      const row = await requestRepository.findOneOrFail({ where: { id: 138 } });
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: hybridSuccessTargetId } });
       expect(row.isAccepted).toBe(true);
       expect(row.acceptedByEngineerAccountId).toBe(hybridAccountId);
       expect(row.acceptedAt).not.toBeNull();
     });
 
     it('合法签名但无 activeRole 的兼容性 Token 被拒绝（失败关闭），数据库不产生写入', async () => {
-      const response = await acceptMutation(noActiveRoleToken, 139).expect(200);
+      const response = await acceptMutation(noActiveRoleToken, noActiveRoleTargetId).expect(200);
 
       expect(response.body.errors).toHaveLength(1);
       expectForbidden(response.body.errors[0]);
 
-      const row = await requestRepository.findOneOrFail({ where: { id: 139 } });
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: noActiveRoleTargetId } });
       expect(row.isAccepted).toBe(false);
       expect(row.acceptedByEngineerAccountId).toBeNull();
       expect(row.acceptedAt).toBeNull();
@@ -427,33 +473,37 @@ describe('工程师接单写链路 (e2e)', () => {
     });
 
     it('接单已删除的申请统一返回 NOT_FOUND（防探测，不区分不存在与已删除）', async () => {
-      const response = await acceptMutation(engineerToken, 133).expect(200);
+      const response = await acceptMutation(engineerToken, deletedTargetId).expect(200);
 
       expect(response.body.errors).toHaveLength(1);
       expect(response.body.errors[0].extensions.code).toBe('NOT_FOUND');
       expect(response.body.errors[0].extensions.errorCode).toBe('REPAIR_REQUEST_NOT_FOUND');
 
       // 不产生写入：已删除申请的接单状态保持原样
-      const row = await requestRepository.findOneOrFail({ where: { id: 133 } });
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: deletedTargetId } });
       expect(row.isAccepted).toBe(false);
       expect(row.acceptedByEngineerAccountId).toBeNull();
     });
 
     it('接单已被他人接单的申请返回 CONFLICT', async () => {
-      const response = await acceptMutation(otherEngineerToken, 132).expect(200);
+      const response = await acceptMutation(otherEngineerToken, conflictTargetId).expect(200);
 
       expect(response.body.errors).toHaveLength(1);
       expect(response.body.errors[0].extensions.code).toBe('CONFLICT');
       expect(response.body.errors[0].extensions.errorCode).toBe('REPAIR_REQUEST_ALREADY_ACCEPTED');
 
       // 冲突不覆盖原接单人
-      const row = await requestRepository.findOneOrFail({ where: { id: 132 } });
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: conflictTargetId } });
       expect(row.acceptedByEngineerAccountId).toBe(engineerAccountId);
     });
 
     it('本人重复接单同样 CONFLICT，文案与他人的接单冲突中性一致', async () => {
-      const selfResponse = await acceptMutation(engineerToken, 132).expect(200);
-      const otherResponse = await acceptMutation(otherEngineerToken, 132).expect(200);
+      const selfResponse = await acceptMutation(engineerToken, conflictTargetId).expect(200);
+      const otherResponse = await acceptMutation(otherEngineerToken, conflictTargetId).expect(200);
 
       const selfError = selfResponse.body.errors[0];
       const otherError = otherResponse.body.errors[0];
@@ -462,27 +512,29 @@ describe('工程师接单写链路 (e2e)', () => {
       // 中性文案：不区分本人重复接单与他人接单，不泄漏接单工程师身份
       expect(selfError.extensions.errorMessage).toBe(otherError.extensions.errorMessage);
       // 错误 details 仅含 requestId，不含接单人与身份类字段
-      expect(selfError.extensions.details).toEqual({ requestId: 132 });
+      expect(selfError.extensions.details).toEqual({ requestId: conflictTargetId });
       expect(JSON.stringify(selfError)).not.toContain('engineerAccountId');
     });
   });
 
   describe('成功路径（AVAILABLE → MINE）', () => {
     it('接单成功：响应复用工程师详情读模型，数据库三个接单字段正确', async () => {
-      const response = await acceptMutation(engineerToken, 131).expect(200);
+      const response = await acceptMutation(engineerToken, successTargetId).expect(200);
 
       expect(response.body.errors).toBeUndefined();
       const detail = response.body.data.acceptRepairRequest;
       expect(detail).toMatchObject({
-        id: 131,
-        requestNo: 'E2E-AC-131',
+        id: successTargetId,
+        requestNo: REPAIR_REQUEST_FIXTURE_MARKERS.acceptRequestNos[0],
         isAccepted: true,
       });
       expect(detail.acceptedAt).not.toBeNull();
       // 接单成功后申请仍无回复，读模型字段齐全
       expect(detail.responses).toEqual([]);
 
-      const row = await requestRepository.findOneOrFail({ where: { id: 131 } });
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: successTargetId } });
       expect(row.isAccepted).toBe(true);
       expect(row.acceptedByEngineerAccountId).toBe(engineerAccountId);
       expect(row.acceptedAt).not.toBeNull();
@@ -492,23 +544,31 @@ describe('工程师接单写链路 (e2e)', () => {
       const available = await postGql({
         app,
         query: ENGINEER_LIST_QUERY,
-        variables: { scope: 'AVAILABLE', pagination: OFFSET_PAGINATION },
+        variables: {
+          scope: 'AVAILABLE',
+          pagination: OFFSET_PAGINATION,
+          filter: { equipmentModelId: acceptModelId },
+        },
         token: engineerToken,
       }).expect(200);
       expect(
         available.body.data.engineerRepairRequests.items.some(
-          (item: { id: number }) => item.id === 131,
+          (item: { id: number }) => item.id === successTargetId,
         ),
       ).toBe(false);
 
       const mine = await postGql({
         app,
         query: ENGINEER_LIST_QUERY,
-        variables: { scope: 'MINE', pagination: OFFSET_PAGINATION },
+        variables: {
+          scope: 'MINE',
+          pagination: OFFSET_PAGINATION,
+          filter: { equipmentModelId: acceptModelId },
+        },
         token: engineerToken,
       }).expect(200);
       const mineItem = mine.body.data.engineerRepairRequests.items.find(
-        (item: { id: number }) => item.id === 131,
+        (item: { id: number }) => item.id === successTargetId,
       );
       expect(mineItem).toBeDefined();
       expect(mineItem.isAccepted).toBe(true);
@@ -518,32 +578,22 @@ describe('工程师接单写链路 (e2e)', () => {
 
   describe('并发竞争', () => {
     it('两名工程师真实并发接单同一申请：仅一方成功，数据库最终只有一个接单人', async () => {
-      const customerAccountId = await getAccountIdByLoginName(
+      const targetId = await createRepairRequestFixtureRequest({
         dataSource,
-        testAccountsConfig.guestPrimary.loginName,
-      );
-      await requestRepository.save(
-        requestRepository.create({
-          id: 135,
-          requestNo: 'E2E-AC-135',
-          customerAccountId,
-          equipmentModelId: 42,
-          errorCode: 'E-3005',
+        ownership,
+        seed: buildRequestSeed({
+          markerIndex: 4,
           faultDescription: '并发竞争场景',
-          contentMd: '# E2E-135',
+          errorCode: 'E-3005',
+          contentMd: '# E2E-AC-135',
           createdAt: new Date('2026-08-30T07:00:00.000Z'),
-          isAccepted: false,
-          acceptedByEngineerAccountId: null,
-          acceptedAt: null,
-          deprecated: false,
-          deletedAt: null,
         }),
-      );
+      });
 
       // 同一事件循环真实并发发出两个 Mutation，不做任何先后编排
       const [first, second] = await Promise.all([
-        acceptMutation(engineerToken, 135),
-        acceptMutation(otherEngineerToken, 135),
+        acceptMutation(engineerToken, targetId),
+        acceptMutation(otherEngineerToken, targetId),
       ]);
 
       const bodies = [first.body, second.body];
@@ -561,7 +611,9 @@ describe('工程师接单写链路 (e2e)', () => {
 
       // 数据库终态：有且仅有一个接单人；接单人 ID 不在响应 DTO 中（契约防泄漏），
       // 胜负与接单人身份以数据库为准，来自会话而非客户端传入
-      const row = await requestRepository.findOneOrFail({ where: { id: 135 } });
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: targetId } });
       expect(row.isAccepted).toBe(true);
       expect([engineerAccountId, otherEngineerAccountId]).toContain(
         row.acceptedByEngineerAccountId,
@@ -570,34 +622,24 @@ describe('工程师接单写链路 (e2e)', () => {
     });
 
     it('客户删除与工程师接单真实并发同一申请：仅一方成功，数据库终态互斥', async () => {
-      const customerAccountId = await getAccountIdByLoginName(
+      const targetId = await createRepairRequestFixtureRequest({
         dataSource,
-        testAccountsConfig.guestPrimary.loginName,
-      );
-      await requestRepository.save(
-        requestRepository.create({
-          id: 136,
-          requestNo: 'E2E-AC-136',
-          customerAccountId,
-          equipmentModelId: 42,
-          errorCode: 'E-3006',
+        ownership,
+        seed: buildRequestSeed({
+          markerIndex: 5,
           faultDescription: '删除与接单并发竞争场景',
-          contentMd: '# E2E-136',
+          errorCode: 'E-3006',
+          contentMd: '# E2E-AC-136',
           createdAt: new Date('2026-08-30T08:00:00.000Z'),
-          isAccepted: false,
-          acceptedByEngineerAccountId: null,
-          acceptedAt: null,
-          deprecated: false,
-          deletedAt: null,
         }),
-      );
+      });
 
       const [acceptResponse, deleteResponse] = await Promise.all([
-        acceptMutation(engineerToken, 136),
+        acceptMutation(engineerToken, targetId),
         postGql({
           app,
           query: DELETE_MUTATION,
-          variables: { id: 136 },
+          variables: { id: targetId },
           token: customerToken,
         }),
       ]);
@@ -606,7 +648,9 @@ describe('工程师接单写链路 (e2e)', () => {
       const deleteSucceeded = Boolean(deleteResponse.body.data?.deleteMyRepairRequest);
       expect(Number(acceptSucceeded) + Number(deleteSucceeded)).toBe(1);
 
-      const row = await requestRepository.findOneOrFail({ where: { id: 136 } });
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: targetId } });
       if (acceptSucceeded) {
         expect(deleteResponse.body.errors[0].extensions.code).toBe('CONFLICT');
         expect(deleteResponse.body.errors[0].extensions.errorCode).toBe(
@@ -632,6 +676,55 @@ describe('工程师接单写链路 (e2e)', () => {
       }
 
       expect(row.isAccepted && row.deprecated).toBe(false);
+    });
+
+    it('并发接单失败方重读详情：看到真实接单工程师与接单时间（不覆盖成功方）', async () => {
+      const targetId = await createRepairRequestFixtureRequest({
+        dataSource,
+        ownership,
+        seed: buildRequestSeed({
+          markerIndex: 9,
+          faultDescription: '失败方重读场景',
+          errorCode: 'E-3010',
+          contentMd: '# E2E-AC-140',
+          createdAt: new Date('2026-08-30T12:00:00.000Z'),
+        }),
+      });
+
+      const [first, second] = await Promise.all([
+        acceptMutation(engineerToken, targetId),
+        acceptMutation(otherEngineerToken, targetId),
+      ]);
+      const loserToken = first.body.errors?.length > 0 ? engineerToken : otherEngineerToken;
+      const conflictBody = first.body.errors?.length > 0 ? first.body : second.body;
+      expect(conflictBody.errors[0].extensions.errorCode).toBe('REPAIR_REQUEST_ALREADY_ACCEPTED');
+
+      // 失败方重读真实状态：接单工程师昵称与接单时间来自后端，与数据库一致
+      const row = await dataSource
+        .getRepository(RepairRequestEntity)
+        .findOneOrFail({ where: { id: targetId } });
+      expect(row.acceptedByEngineerAccountId).not.toBeNull();
+      const winnerNickname = await dataSource
+        .getRepository(UserInfoEntity)
+        .findOneOrFail({ where: { accountId: row.acceptedByEngineerAccountId! } })
+        .then((info) => info.nickname.trim());
+      expect(winnerNickname).toBeTruthy();
+
+      const reread = await postGql({
+        app,
+        query: ENGINEER_DETAIL_QUERY,
+        variables: { id: targetId },
+        token: loserToken,
+      }).expect(200);
+
+      expect(reread.body.errors).toBeUndefined();
+      expect(reread.body.data.engineerRepairRequest).toMatchObject({
+        id: targetId,
+        isAccepted: true,
+        acceptanceViewStatus: 'TAKEN_BY_OTHER',
+        acceptedEngineerNickname: winnerNickname,
+      });
+      expect(reread.body.data.engineerRepairRequest.acceptedAt).not.toBeNull();
     });
   });
 });

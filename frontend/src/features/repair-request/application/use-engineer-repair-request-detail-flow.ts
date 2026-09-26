@@ -96,7 +96,9 @@ export function useEngineerRepairRequestDetailFlow(requestId: number | null) {
     // 不保留可继续接单的过期按钮状态；
     // accept-failed → 接单结果不确定（事务可能已提交但事务外详情读取/传输失败），
     // 只重查详情确认，不自动重发接单 Mutation；
-    // 重查确认已接单 → 反馈随展示状态同步收敛为成功，不保留矛盾的失败提示；
+    // 重查确认视角为 MINE（接单者就是当前工程师）→ 反馈随展示状态同步收敛为成功；
+    // 重查为他人已接单（TAKEN_BY_OTHER）→ 真实接单人与时间随详情展示，
+    // 不保留「已接单」反馈（不做乐观伪造）；
     // 重查仍未接单 → 保留失败反馈，允许用户手动重试；
     // 重查失败 → 进入既有加载失败/重试状态，失败反馈照常保留；
     // insufficient-permission 是确定的拒绝，申请数据未变，不刷新，仅提示。
@@ -105,9 +107,9 @@ export function useEngineerRepairRequestDetailFlow(requestId: number | null) {
     } else if (acceptResult.reason === 'accept-failed') {
       const recheck = await reload();
 
-      // 详情仍可读且已接单 ⇒ 接单者就是当前工程师：申请被他人接走后当前工程师
-      // 不再可读，重查会落入 not-accessible 而非已接单详情
-      if (recheck?.ok && recheck.detail.isAccepted) {
+      // 工程师入口现可读取任意未删除申请：他人接单后重查得到 TAKEN_BY_OTHER 详情，
+      // 只有视角为 MINE 才证明接单成功的是当前工程师，不得以 isAccepted 误判
+      if (recheck?.ok && recheck.detail.acceptanceViewStatus === 'MINE') {
         convergeToAccepted(recheck.detail);
       }
     } else if (

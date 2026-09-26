@@ -2,17 +2,20 @@
 // 维修申请公共读模型 GraphQL 输出对象（负责人 20260901 裁定契约）
 // 处理状态使用共享类型层正式枚举（裁定 4）；回复返回工程师安全昵称（裁定 3）
 
-import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
+import {
+  EngineerResolutionStatus,
+  RepairRequestAcceptanceViewStatus,
+} from '@app-types/models/repair-request.types';
 import { Field, Int, ObjectType } from '@nestjs/graphql';
 import { paginatedTypeFactory } from '@src/adapters/api/graphql/pagination.type-factory';
 import { EquipmentModelDTO } from '../../equipment-model/dto/equipment-model.dto';
 
 /**
- * 维修申请列表项输出对象
- * 客户列表、工程师待接单列表、工程师已接单列表复用同一结构；
+ * 维修申请列表项输出对象（客户列表基础结构）
+ * 工程师列表项在其上扩展展示字段（RepairRequestEngineerListItemDTO）；
  * 不返回归属类账号 ID
  */
-@ObjectType({ description: '维修申请列表项（三个列表复用同一结构）' })
+@ObjectType({ description: '维修申请列表项' })
 export class RepairRequestListItemDTO {
   @Field(() => Int, { description: '维修申请 ID' })
   id!: number;
@@ -105,7 +108,66 @@ export class RepairRequestDetailDTO {
 
   @Field(() => [EngineerResponseDTO], { description: '工程师回复（时间正序）' })
   responses!: EngineerResponseDTO[];
+
+  // ---- 工程师入口富集字段（客户入口为空；accept Mutation 成功输出复用工程师入口）----
+
+  @Field(() => String, {
+    nullable: true,
+    description: '客户当前昵称（缺失回落「客户」）；客户入口为空',
+  })
+  customerNickname?: string | null;
+
+  @Field(() => String, { nullable: true, description: '客户公司名称；客户入口为空' })
+  customerCompanyName?: string | null;
+
+  @Field(() => RepairRequestAcceptanceViewStatus, {
+    nullable: true,
+    description:
+      '接单状态视角（AVAILABLE / MINE / TAKEN_BY_OTHER）；客户入口为空；AVAILABLE 仅表示未接单事实，不代表当前会话可接单',
+  })
+  acceptanceViewStatus?: RepairRequestAcceptanceViewStatus | null;
+
+  @Field(() => String, {
+    nullable: true,
+    description: '接单工程师当前昵称（缺失回落「工程师」）；未接单或客户入口为空',
+  })
+  acceptedEngineerNickname?: string | null;
 }
+
+/**
+ * 工程师列表项输出对象：在基础列表项上补充客户/接单工程师安全展示资料
+ * 与当前会话视角状态；不返回归属类账号 ID
+ */
+@ObjectType({ description: '工程师维修申请列表项' })
+export class RepairRequestEngineerListItemDTO extends RepairRequestListItemDTO {
+  @Field(() => String, {
+    description: '客户当前昵称（缺失回落「客户」）',
+  })
+  customerNickname!: string;
+
+  @Field(() => String, { nullable: true, description: '客户公司名称' })
+  customerCompanyName?: string | null;
+
+  @Field(() => RepairRequestAcceptanceViewStatus, {
+    description:
+      '接单状态视角（AVAILABLE / MINE / TAKEN_BY_OTHER）；AVAILABLE 仅表示未接单事实，不代表当前会话可接单',
+  })
+  acceptanceViewStatus!: RepairRequestAcceptanceViewStatus;
+
+  @Field(() => String, {
+    nullable: true,
+    description: '接单工程师当前昵称（缺失回落「工程师」）；未接单为空',
+  })
+  acceptedEngineerNickname?: string | null;
+}
+
+/**
+ * 工程师列表分页输出（OFFSET：items/total/page/pageSize）
+ */
+@ObjectType({ description: '工程师维修申请分页结果' })
+export class RepairRequestEngineerPaginatedDTO extends paginatedTypeFactory(
+  RepairRequestEngineerListItemDTO,
+) {}
 
 /**
  * 维修申请列表分页输出（OFFSET：items/total/page/pageSize）

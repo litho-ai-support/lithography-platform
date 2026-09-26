@@ -1,4 +1,7 @@
-import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
+import {
+  EngineerResolutionStatus,
+  RepairRequestAcceptanceViewStatus,
+} from '@app-types/models/repair-request.types';
 
 /**
  * AI 会话共享枚举兼容出口。
@@ -123,10 +126,19 @@ export type EngineerResponseWriteSnapshot = {
 };
 
 /**
- * 工程师列表范围枚举（负责人 20260901 裁定：scope = AVAILABLE / MINE）。
+ * 工程师列表范围枚举（四态，默认 ALL）：
+ * - ALL：全部未删除申请；
+ * - AVAILABLE：未接单（待接单池）；
+ * - MINE：当前工程师已接单；
+ * - TAKEN_BY_OTHER：其他工程师已接单。
  * GraphQL 层以字符串表达，由 Usecase 校验，adapter 不导入本常量。
  */
-export const REPAIR_REQUEST_ENGINEER_LIST_SCOPES = ['AVAILABLE', 'MINE'] as const;
+export const REPAIR_REQUEST_ENGINEER_LIST_SCOPES = [
+  'ALL',
+  'AVAILABLE',
+  'MINE',
+  'TAKEN_BY_OTHER',
+] as const;
 
 export type RepairRequestEngineerListScope = (typeof REPAIR_REQUEST_ENGINEER_LIST_SCOPES)[number];
 
@@ -194,6 +206,67 @@ export type RepairRequestListPage = {
 };
 
 /**
+ * 工程师列表可选筛选（对外契约）：
+ * - equipmentModelId：设备型号等值筛选；
+ * - customerNickname：客户昵称关键词（Usecase 完成 trim 归一，空白视为未提供；
+ *   LIKE 通配符转义在账号域 QueryService 内完成）。
+ */
+export type RepairRequestEngineerListFilter = {
+  equipmentModelId?: number;
+  customerNickname?: string;
+};
+
+/**
+ * 工程师列表筛选（QueryService 内部口径）：客户昵称已由 usecase 经账号域
+ * 批量解析为客户账号 ID 集合，分页与 total 计算前即完成筛选（禁止先分页后过滤）。
+ */
+export type RepairRequestEngineerListFilterInternal = {
+  equipmentModelId?: number;
+  customerAccountIds?: number[];
+};
+
+/**
+ * 工程师列表项 QueryService 内部装配结果：含归属类账号 ID，
+ * 仅供 usecase 跨域富集客户/接单工程师展示资料使用，不对外输出。
+ */
+export type RepairRequestEngineerListItemQueryResult = RepairRequestListItemView & {
+  customerAccountId: number;
+  acceptedByEngineerAccountId: number | null;
+};
+
+/**
+ * 工程师列表项稳定读视图：在基础列表项上补充客户/接单工程师安全展示资料
+ * 与当前会话视角状态；昵称实时关联（缺失回落「客户」/「工程师」），不返回账号 ID。
+ */
+export type RepairRequestEngineerListItemView = RepairRequestListItemView & {
+  customerNickname: string;
+  customerCompanyName: string | null;
+  acceptanceViewStatus: RepairRequestAcceptanceViewStatus;
+  /** 接单工程师当前昵称；未接单为 null */
+  acceptedEngineerNickname: string | null;
+};
+
+/**
+ * 工程师列表分页结果（昵称富集后）
+ */
+export type RepairRequestEngineerListPage = {
+  items: RepairRequestEngineerListItemView[];
+  total?: number;
+  page: number;
+  pageSize: number;
+};
+
+/**
+ * 工程师列表分页 QueryService 装配结果（昵称富集前）
+ */
+export type RepairRequestEngineerListQueryPage = {
+  items: RepairRequestEngineerListItemQueryResult[];
+  total?: number;
+  page: number;
+  pageSize: number;
+};
+
+/**
  * 维修申请详情稳定读视图（客户与工程师入口共用结构，读权限由 QueryService 按身份判定）。
  * responses 按 createdAt ASC + id ASC 排序；不暴露归属类账号 ID。
  */
@@ -214,10 +287,25 @@ export type RepairRequestDetailView = {
 
 /**
  * 详情 QueryService 装配结果（昵称富集前）：回复含工程师账号 ID，
- * 由 usecase 跨域富集为工程师昵称后才对外输出。
+ * 另含归属类账号 ID，均由 usecase 跨域富集为安全展示字段后才对外输出，
+ * 不得直接流入 Adapter。
  */
 export type RepairRequestDetailQueryResult = Omit<RepairRequestDetailView, 'responses'> & {
   responses: EngineerResponseQueryResult[];
+  customerAccountId: number;
+  acceptedByEngineerAccountId: number | null;
+};
+
+/**
+ * 工程师详情稳定读视图：在共用详情上补充客户/接单工程师安全展示资料
+ * 与当前会话视角状态（TAKEN_BY_OTHER 只读，MINE 可回复，AVAILABLE 可接单）。
+ */
+export type RepairRequestEngineerDetailView = RepairRequestDetailView & {
+  customerNickname: string;
+  customerCompanyName: string | null;
+  acceptanceViewStatus: RepairRequestAcceptanceViewStatus;
+  /** 接单工程师当前昵称；未接单为 null */
+  acceptedEngineerNickname: string | null;
 };
 
 /**

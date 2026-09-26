@@ -87,7 +87,7 @@ function sessionFor(role: 'CUSTOMER' | 'ENGINEER' | 'SUPER_ADMIN') {
       accessToken: 'token',
       accountId: 1,
       role,
-      userInfo: { accessGroup: [role], nickname: `用户-${role}` },
+      userInfo: { accessGroup: [role], avatarUrl: null, nickname: `用户-${role}` },
     },
     status: 'authenticated',
   } as const;

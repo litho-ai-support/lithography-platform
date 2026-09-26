@@ -36,6 +36,7 @@ const SUPER_ADMIN_SESSION = createAuthSessionSnapshot({
   role: 'SUPER_ADMIN',
   userInfo: {
     accessGroup: ['SUPER_ADMIN'],
+    avatarUrl: 'https://example.test/avatar/admin.png',
     nickname: '系统管理员',
   },
 });
@@ -62,6 +63,24 @@ describe('auth session storage', () => {
     expect([...storage.values.values()][0]).toContain('"version":1');
     expect([...storage.values.values()][0]).not.toContain('refreshToken');
     expect([...storage.values.values()][0]).not.toContain('metaDigest');
+  });
+
+  it('restores a legacy snapshot without avatarUrl as null instead of dropping the session', () => {
+    const storage = createMemoryStorage();
+    const persistence = createAuthSessionPersistence(() => storage);
+
+    // 旧版本持久化快照没有头像字段：展示性字段缺失不得判定会话非法（否则老用户刷新即掉线）
+    storage.setItem(
+      AUTH_SESSION_STORAGE_KEY,
+      createStoredSession({
+        userInfo: { accessGroup: ['SUPER_ADMIN'], nickname: '系统管理员' },
+      }),
+    );
+
+    expect(persistence.read()).toEqual({
+      ...SUPER_ADMIN_SESSION,
+      userInfo: { accessGroup: ['SUPER_ADMIN'], avatarUrl: null, nickname: '系统管理员' },
+    });
   });
 
   it.each([

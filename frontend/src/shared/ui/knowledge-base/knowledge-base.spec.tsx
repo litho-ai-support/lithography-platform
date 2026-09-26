@@ -56,4 +56,26 @@ describe('KbSearchField / KbToolbarButton（知识库页 opt-in primitive，PR3 
     fireEvent.click(button);
     expect(onClick).toHaveBeenCalledTimes(1);
   });
+
+  it('薄包装：DOM 同时输出跨页中性基类与知识库覆盖层类', () => {
+    render(<KbSearchField onChange={vi.fn()} placeholder="按文档标题搜索" value="手册" />);
+
+    expect(screen.getByPlaceholderText('按文档标题搜索').closest('label')).toHaveClass(
+      'toolbar-search',
+      'kb-search',
+    );
+    expect(screen.getByRole('button', { name: '清除按文档标题搜索' })).toHaveClass(
+      'toolbar-search-clear',
+      'kb-search-clear',
+    );
+  });
+
+  it('薄包装：非 active 的工具按钮不输出任何 active 类', () => {
+    render(<KbToolbarButton onClick={vi.fn()}>重置</KbToolbarButton>);
+
+    const button = screen.getByRole('button', { name: '重置' });
+    expect(button).toHaveClass('toolbar-button', 'kb-toolbar-button');
+    expect(button).not.toHaveClass('toolbar-button--active');
+    expect(button).not.toHaveClass('kb-toolbar-button--active');
+  });
 });

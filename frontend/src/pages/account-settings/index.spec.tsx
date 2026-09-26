@@ -260,7 +260,7 @@ describe('AccountSettingsPage', () => {
       accessToken: 'token-900201-again',
       accountId: 900201,
       role: 'CUSTOMER',
-      userInfo: { accessGroup: ['CUSTOMER'], nickname: '用户A' },
+      userInfo: { accessGroup: ['CUSTOMER'], avatarUrl: null, nickname: '用户A' },
     });
 
     fireEvent.click(screen.getByRole('button', { name: '模拟改密发起采样' }));
@@ -293,7 +293,7 @@ describe('AccountSettingsPage', () => {
       accessToken: 'token-900202',
       accountId: 900202,
       role: 'CUSTOMER',
-      userInfo: { accessGroup: ['CUSTOMER'], nickname: '用户B' },
+      userInfo: { accessGroup: ['CUSTOMER'], avatarUrl: null, nickname: '用户B' },
     });
 
     // A 的迟到保存成功响应：携带发起者身份，store 与当前会话比对拒绝

@@ -38,6 +38,20 @@ import { UserInfoEntity } from '../base/entities/user-info.entity';
 export type VisibleDetailMode = 'BASIC' | 'FULL';
 
 /**
+ * 账号安全展示资料（昵称 + 公司名）：供其他域读模型跨域富集展示，
+ * 只读公开字段，不含登录名、邮箱、电话等敏感信息。
+ */
+export type AccountDisplayProfile = {
+  nickname: string;
+  companyName: string | null;
+};
+
+/** 昵称模糊搜索：转义 LIKE 通配符，避免用户输入 % / _ 意外扩大匹配范围 */
+function escapeLikePattern(input: string): string {
+  return input.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+/**
  * 把实体上的角色数组原值转为快照值（`AccountSessionAuthoritySnapshot` 的字段口径）。
  *
  * - 数组：显式拷贝（`[...]`），断开 ORM 实体别名，避免消费方的原地修改被 TypeORM
@@ -479,6 +493,53 @@ export class AccountQueryService {
       this.userInfoRepository.count({ where }),
     ]);
     return { accountIds: rows.map((row) => row.accountId), totalMatched };
+  }
+
+  /**
+   * 按昵称关键词批量返回匹配账号 ID（参数化 LIKE，通配符转义防逃逸）。
+   * 供其他域读模型在分页计数前完成「按昵称筛选」的账号域解析；
+   * 只返回昵称非空白的账号，匹配语义（等值/包含）由调用方传入的关键词决定。
+   */
+  async findAccountIdsByNicknameKeyword(keyword: string): Promise<number[]> {
+    const trimmed = keyword.trim();
+    if (!trimmed) {
+      return [];
+    }
+    const rows = await this.userInfoRepository.find({
+      where: {
+        nickname: Raw((alias) => `${alias} LIKE :pattern`, {
+          pattern: `%${escapeLikePattern(trimmed)}%`,
+        }),
+      },
+      select: { accountId: true },
+    });
+    return rows.map((row) => row.accountId);
+  }
+
+  /**
+   * 按账号 ID 批量读取安全展示资料（昵称 + 公司名）。
+   * 一次批量查询供调用方组装列表/详情，禁止逐行 N+1；
+   * 昵称缺失/空白的账号不进入结果，由调用方决定回落展示。
+   */
+  async findAccountDisplayProfilesByAccountIds(
+    accountIds: ReadonlyArray<number>,
+  ): Promise<Map<number, AccountDisplayProfile>> {
+    const uniqueIds = [...new Set(accountIds.filter((id) => Number.isInteger(id) && id > 0))];
+    if (uniqueIds.length === 0) {
+      return new Map();
+    }
+    const rows = await this.userInfoRepository.find({
+      where: { accountId: In(uniqueIds) },
+      select: { accountId: true, nickname: true, companyName: true },
+    });
+    const profiles = new Map<number, AccountDisplayProfile>();
+    for (const row of rows) {
+      const trimmed = row.nickname?.trim();
+      if (trimmed) {
+        profiles.set(row.accountId, { nickname: trimmed, companyName: row.companyName ?? null });
+      }
+    }
+    return profiles;
   }
 
   async pickAvailableNickname(params: {

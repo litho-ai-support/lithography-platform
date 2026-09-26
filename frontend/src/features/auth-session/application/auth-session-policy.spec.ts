@@ -293,6 +293,7 @@ describe('auth session policy', () => {
         role: 'ENGINEER',
         userInfo: {
           accessGroup: ['ENGINEER'],
+          avatarUrl: ' https://example.test/avatar/chen.png ',
           nickname: ' 陈工 ',
         },
       }),
@@ -302,9 +303,25 @@ describe('auth session policy', () => {
       role: 'ENGINEER',
       userInfo: {
         accessGroup: ['ENGINEER'],
+        avatarUrl: 'https://example.test/avatar/chen.png',
         nickname: '陈工',
       },
     });
+  });
+
+  it('normalizes a missing or blank avatarUrl to null without rejecting the session', () => {
+    expect(
+      createAuthSessionSnapshot({
+        accessToken: 'access-token',
+        accountId: 900101,
+        role: 'ENGINEER',
+        userInfo: {
+          accessGroup: ['ENGINEER'],
+          avatarUrl: '   ',
+          nickname: '陈工',
+        },
+      }).userInfo,
+    ).toEqual({ accessGroup: ['ENGINEER'], avatarUrl: null, nickname: '陈工' });
   });
 
   it('rejects invalid session invariants', () => {
@@ -324,6 +341,7 @@ describe('auth session policy', () => {
         role: 'CUSTOMER',
         userInfo: {
           accessGroup: ['ENGINEER'],
+          avatarUrl: null,
           nickname: '错误身份',
         },
       }),
