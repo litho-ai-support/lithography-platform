@@ -32,15 +32,19 @@
  *   结果不确定）用内联 Alert，结果不确定时附重新加载入口，
  *   不引入全局 toast；
  * - 统一不可访问反馈引导返回工程师列表，不泄露申请归属；
+ * - 就绪状态只渲染一个公共 DataCard（负责人单卡片计划 P1）：一笔申请收进一个面板，
+ *   申请信息、故障描述、可选的补充说明、回复时间线与接单/回复操作作为卡片内分区，
+ *   用卡片内小标题、间距与细分隔线保持层次，不改变既有字段、状态文案、权限判断、
+ *   反馈、草稿与提交逻辑；
  * - 详情就绪后始终提供「返回维修申请列表」入口（与接单状态、查看者角色无关），
- *   且固定前往列表路径，保证从地址栏直达详情页也能稳定返回；
+ *   且固定前往列表路径，保证从地址栏直达详情页也能稳定返回；该入口固定在卡片底部；
  * - 附件不属于维修申请功能：不渲染附件区域，也不渲染「暂无附件」类占位；
  * - 本仓库无 markdown 渲染依赖，contentMd 按保留换行的纯文本展示；
  * - 故障描述、补充说明、回复正文与只读/空态提示统一取应用正文基准 text-sm
  *   （裸 div 不写字号会落到浏览器默认 16px，与同页 14px 正文层级不一致）。
  */
 
-import { useEffect } from 'react';
+import { type ReactNode, useEffect } from 'react';
 import { Alert, Button, Descriptions, Form, Input, Popconfirm, Select, Timeline } from 'antd';
 import { useNavigate } from 'react-router';
 
@@ -227,6 +231,21 @@ function EngineerResponseForm({
 }
 
 /**
+ * 卡片内分区（负责人单卡片计划 P1）：细分隔线 + 小标题 + 统一间距，
+ * 让故障描述 / 补充说明 / 回复时间线 / 操作区收进同一张申请卡片后仍保留层次。
+ * 正文基准仍取应用 text-sm（与故障描述、回复正文、只读提示同口径）；
+ * 只负责视觉分区，不承载任何权限或数据判断。
+ */
+function PanelSection({ children, title }: { children: ReactNode; title: string }) {
+  return (
+    <section className="mt-5 border-t border-border pt-4">
+      <h4 className="mb-3 font-medium text-sm">{title}</h4>
+      {children}
+    </section>
+  );
+}
+
+/**
  * canHandleAsEngineer 由页面层基于会话单值业务角色判定（读权限继承不等于写权限：
  * 非精确 ENGINEER 可查看详情但不可接单/回复），面板只消费布尔结果，
  * 不自行读取会话或维护第二份角色状态。
@@ -314,70 +333,68 @@ export function EngineerRepairRequestDetailPanel({
       : null;
 
   return (
-    <>
-      <DataCard title="申请信息">
-        <Descriptions
-          bordered
-          column={{ lg: 2, md: 1, sm: 1, xs: 1 }}
-          items={[
-            { children: detail.requestNo, key: 'requestNo', label: '申请编号' },
-            {
-              children: detail.customerNickname ?? '—',
-              key: 'customerNickname',
-              label: '客户昵称',
-            },
-            {
-              children: detail.customerCompanyName ?? '—',
-              key: 'customerCompanyName',
-              label: '客户公司',
-            },
-            {
-              children: `${detail.equipmentModel.modelName}（${detail.equipmentModel.modelCode}）`,
-              key: 'equipmentModel',
-              label: '设备型号',
-            },
-            { children: detail.errorCode, key: 'errorCode', label: '错误码' },
-            {
-              children: formatDateTimeText(detail.createdAt),
-              key: 'createdAt',
-              label: '提交时间',
-            },
-            {
-              children: <AcceptanceViewStatusTag viewStatus={viewStatus} />,
-              key: 'acceptanceViewStatus',
-              label: '接单状态',
-            },
-            {
-              children: detail.acceptedEngineerNickname ?? '—',
-              key: 'acceptedEngineerNickname',
-              label: '接单工程师',
-            },
-            {
-              children: detail.acceptedAt ? formatDateTimeText(detail.acceptedAt) : '—',
-              key: 'acceptedAt',
-              label: '接单时间',
-            },
-            {
-              children: <ResolutionTag status={detail.latestResolutionStatus} />,
-              key: 'latestResolutionStatus',
-              label: '最新处理状态',
-            },
-          ]}
-          size="small"
-        />
-      </DataCard>
+    <DataCard title="申请信息">
+      <Descriptions
+        bordered
+        column={{ lg: 2, md: 1, sm: 1, xs: 1 }}
+        items={[
+          { children: detail.requestNo, key: 'requestNo', label: '申请编号' },
+          {
+            children: detail.customerNickname ?? '—',
+            key: 'customerNickname',
+            label: '客户昵称',
+          },
+          {
+            children: detail.customerCompanyName ?? '—',
+            key: 'customerCompanyName',
+            label: '客户公司',
+          },
+          {
+            children: `${detail.equipmentModel.modelName}（${detail.equipmentModel.modelCode}）`,
+            key: 'equipmentModel',
+            label: '设备型号',
+          },
+          { children: detail.errorCode, key: 'errorCode', label: '错误码' },
+          {
+            children: formatDateTimeText(detail.createdAt),
+            key: 'createdAt',
+            label: '提交时间',
+          },
+          {
+            children: <AcceptanceViewStatusTag viewStatus={viewStatus} />,
+            key: 'acceptanceViewStatus',
+            label: '接单状态',
+          },
+          {
+            children: detail.acceptedEngineerNickname ?? '—',
+            key: 'acceptedEngineerNickname',
+            label: '接单工程师',
+          },
+          {
+            children: detail.acceptedAt ? formatDateTimeText(detail.acceptedAt) : '—',
+            key: 'acceptedAt',
+            label: '接单时间',
+          },
+          {
+            children: <ResolutionTag status={detail.latestResolutionStatus} />,
+            key: 'latestResolutionStatus',
+            label: '最新处理状态',
+          },
+        ]}
+        size="small"
+      />
 
-      <DataCard title="故障描述">
+      <PanelSection title="故障描述">
         <div className="text-sm whitespace-pre-wrap">{detail.faultDescription}</div>
-      </DataCard>
+      </PanelSection>
 
       {detail.contentMd ? (
-        <DataCard title="补充说明">
+        <PanelSection title="补充说明">
           <div className="text-sm whitespace-pre-wrap">{detail.contentMd}</div>
-        </DataCard>
+        </PanelSection>
       ) : null}
 
-      <DataCard title="工程师回复">
+      <PanelSection title="工程师回复">
         {detail.responses.length > 0 ? (
           <Timeline
             items={detail.responses.map((response) => ({
@@ -399,10 +416,10 @@ export function EngineerRepairRequestDetailPanel({
         ) : (
           <div className="text-sm text-text-secondary">暂无工程师回复。</div>
         )}
-      </DataCard>
+      </PanelSection>
 
       {/* 操作区：接单 / 回复 / 只读提示共用一块，反馈紧邻对应入口 */}
-      <DataCard title="接单与回复">
+      <PanelSection title="接单与回复">
         <div className="flex flex-col gap-4">
           <AcceptFeedbackAlert result={lastAcceptResult} />
 
@@ -444,17 +461,17 @@ export function EngineerRepairRequestDetailPanel({
            */}
           {readOnlyHint ? <div className="text-sm text-text-secondary">{readOnlyHint}</div> : null}
         </div>
-      </DataCard>
+      </PanelSection>
 
       {/*
-       * 底部常驻返回入口：不依赖接单状态与查看者角色，
+       * 卡片底部常驻返回入口：不依赖接单状态与查看者角色，
        * 固定前往列表路径（不用 navigate(-1)），从地址栏直达详情页也能稳定返回。
        */}
-      <div className="flex justify-start">
+      <div className="mt-5 border-t border-border pt-4">
         <Button onClick={() => navigate(ENGINEER_REPAIR_REQUEST_LIST_PATH)}>
           返回维修申请列表
         </Button>
       </div>
-    </>
+    </DataCard>
   );
 }

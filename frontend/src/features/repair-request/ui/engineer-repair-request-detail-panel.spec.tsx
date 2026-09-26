@@ -575,3 +575,159 @@ describe('工程师详情面板的回复区域', () => {
     expect(confirmMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * 单卡片合并（负责人单卡片计划 P1/P2）：就绪态只渲染一张公共业务卡片
+ * （DataCard → section.data-card），申请信息、故障描述、可选的补充说明、
+ * 回复时间线与操作区都是这张卡片内部的分区，返回列表入口固定在卡片底部。
+ * 断言用「内容必须落在同一张卡片内」而非仅数量，卡片被拆散时包含断言即失败。
+ */
+describe('工程师详情面板的单卡片结构', () => {
+  beforeEach(() => {
+    flowMock.mockReset();
+    navigateMock.mockReset();
+  });
+
+  /** 页面内全部公共业务卡片容器 */
+  function businessCards(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>('section.data-card'));
+  }
+
+  const ACCEPTED_DETAIL: EngineerRepairRequestDetail = {
+    ...READY_DETAIL,
+    isAccepted: true,
+    acceptedAt: '2026-09-02T09:00:00.000Z',
+    acceptanceViewStatus: 'MINE',
+    acceptedEngineerNickname: '陈工',
+  };
+
+  const HISTORY_RESPONSE: EngineerRepairRequestResponseItem = {
+    id: 61,
+    engineerNickname: '陈工',
+    resolutionStatus: 'PENDING',
+    responseText: '已初步处理，等待备件',
+    createdAt: '2026-09-02T10:00:00.000Z',
+  };
+
+  it('精确 ENGINEER + 未接单：唯一卡片内含申请明细、分区标题与接单入口', () => {
+    setFlow({ detail: READY_DETAIL, requestSeq: 1, status: 'ready' }, null);
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={true} requestId={123} />);
+
+    const cards = businessCards();
+
+    expect(cards).toHaveLength(1);
+    const [card] = cards;
+
+    expect(card.contains(screen.getByText('林客户'))).toBe(true);
+    expect(card.contains(screen.getByText('光刻机对准模块异常。'))).toBe(true);
+    // 卡片内小标题保留原分区语义（不新增第二张卡片承载它们）
+    expect(card.contains(screen.getByText('故障描述'))).toBe(true);
+    expect(card.contains(screen.getByText('工程师回复'))).toBe(true);
+    expect(card.contains(screen.getByText('接单与回复'))).toBe(true);
+    expect(card.contains(screen.getByRole('button', { name: /接\s*单/ }))).toBe(true);
+    // 返回列表入口固定在卡片底部（仍在卡片内）
+    expect(card.contains(screen.getByRole('button', { name: '返回维修申请列表' }))).toBe(true);
+    // 未接单不提供回复表单
+    expect(screen.queryByLabelText('回复正文')).toBeNull();
+  });
+
+  it('精确 ENGINEER + 本人已接单：唯一卡片内含回复表单与历史时间线', () => {
+    setFlow(
+      {
+        detail: { ...ACCEPTED_DETAIL, responses: [HISTORY_RESPONSE] },
+        requestSeq: 1,
+        status: 'ready',
+      },
+      null,
+    );
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={true} requestId={123} />);
+
+    const cards = businessCards();
+
+    expect(cards).toHaveLength(1);
+    const [card] = cards;
+
+    expect(card.contains(screen.getByLabelText('回复正文'))).toBe(true);
+    expect(card.contains(screen.getByText(HISTORY_RESPONSE.responseText))).toBe(true);
+    expect(card.contains(screen.getByRole('button', { name: /提交回复/ }))).toBe(true);
+    expect(screen.queryByRole('button', { name: /接\s*单/ })).toBeNull();
+  });
+
+  it('精确 ENGINEER + 他人已接单：唯一卡片只读，无任何写入口', () => {
+    setFlow(
+      {
+        detail: {
+          ...ACCEPTED_DETAIL,
+          acceptanceViewStatus: 'TAKEN_BY_OTHER',
+          acceptedEngineerNickname: '赵工',
+        },
+        requestSeq: 1,
+        status: 'ready',
+      },
+      null,
+    );
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={true} requestId={123} />);
+
+    const cards = businessCards();
+
+    expect(cards).toHaveLength(1);
+    const [card] = cards;
+
+    expect(card.contains(screen.getByText('该申请已由其他工程师接单跟进，当前为只读查看。'))).toBe(
+      true,
+    );
+    expect(card.contains(screen.getByText('赵工'))).toBe(true);
+    expect(screen.queryByLabelText('回复正文')).toBeNull();
+    expect(screen.queryByRole('button', { name: /接\s*单/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /提交回复/ })).toBeNull();
+  });
+
+  it('管理员视角 + 已接单：唯一卡片只读，提示使用工程师账号', () => {
+    setFlow({ detail: ACCEPTED_DETAIL, requestSeq: 1, status: 'ready' }, null);
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={false} requestId={123} />);
+
+    const cards = businessCards();
+
+    expect(cards).toHaveLength(1);
+    const [card] = cards;
+
+    expect(
+      card.contains(screen.getByText('当前账号仅可查看详情，接单与回复需使用工程师账号。')),
+    ).toBe(true);
+    expect(screen.queryByLabelText('回复正文')).toBeNull();
+    expect(screen.queryByRole('button', { name: /接\s*单/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /提交回复/ })).toBeNull();
+    expect(card.contains(screen.getByRole('button', { name: '返回维修申请列表' }))).toBe(true);
+  });
+
+  it.each([
+    ['contentMd 有值', '客户补充：已重启设备。', true],
+    ['contentMd 为空', '', false],
+  ])('补充说明分区随 %s 出现或消失，仍是同一张卡片', (_label, contentMd, visible) => {
+    setFlow({ detail: { ...READY_DETAIL, contentMd }, requestSeq: 1, status: 'ready' }, null);
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={true} requestId={123} />);
+
+    expect(businessCards()).toHaveLength(1);
+    expect(screen.queryByText('补充说明') === null).toBe(!visible);
+  });
+
+  it('接单成功后仍是唯一卡片：成功反馈、回复入口与返回入口都在卡片内', () => {
+    setFlow(
+      { detail: ACCEPTED_DETAIL, requestSeq: 1, status: 'ready' },
+      {
+        detail: ACCEPTED_DETAIL,
+        ok: true,
+      },
+    );
+    render(<EngineerRepairRequestDetailPanel canHandleAsEngineer={true} requestId={123} />);
+
+    const cards = businessCards();
+
+    expect(cards).toHaveLength(1);
+    const [card] = cards;
+
+    expect(card.contains(screen.getByText('你已接单该维修申请，后续请跟进处理。'))).toBe(true);
+    expect(card.contains(screen.getByLabelText('回复正文'))).toBe(true);
+    expect(card.contains(screen.getByRole('button', { name: '返回维修申请列表' }))).toBe(true);
+  });
+});

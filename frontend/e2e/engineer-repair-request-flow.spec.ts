@@ -348,6 +348,57 @@ async function openDetailFromList(page: Page) {
   await expect(page).toHaveURL(/\/engineer\/repair-requests\/8802$/);
 }
 
+/* ------------------------------------------------------------------ */
+/* 负责人单卡片计划 P2：详情就绪只应命中一张业务卡片                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 详情页业务卡片容器：公共 DataCard 渲染 section.data-card，
+ * 页面 PageHeader 不是 data-card，因此详情就绪时该选择器命中数必须恰为 1。
+ * 所有内容与操作断言都限定在这张卡片内，才能证明它们没有被拆成多张卡片。
+ */
+function detailCardOf(page: Page) {
+  return page.locator('section.data-card');
+}
+
+/** 1440×900 下主要内容不需要横向滚动（页面级与卡片级同时成立） */
+async function expectDetailCardFitsViewport(page: Page) {
+  const fit = await detailCardOf(page).evaluate((card) => {
+    const rect = card.getBoundingClientRect();
+    return {
+      cardClientWidth: card.clientWidth,
+      cardRight: Math.ceil(rect.right),
+      cardScrollWidth: card.scrollWidth,
+      documentClientWidth: document.documentElement.clientWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+
+  expect(fit.documentScrollWidth).toBeLessThanOrEqual(fit.documentClientWidth);
+  expect(fit.cardScrollWidth).toBeLessThanOrEqual(fit.cardClientWidth);
+  expect(fit.cardRight).toBeLessThanOrEqual(fit.documentClientWidth);
+}
+
+/**
+ * 他人已接单详情（TAKEN_BY_OTHER 事实 + 他人接单工程师）：
+ * 用于验证只读视角下仍是同一张卡片，且卡片内不出现任何写入口。
+ */
+function fulfillTakenByOtherDetail(route: Route, id: number, responses: MockResponseItem[] = []) {
+  return route.fulfill({
+    body: JSON.stringify({
+      data: {
+        engineerRepairRequest: {
+          ...buildDetailDTO(id, true, responses),
+          acceptedEngineerNickname: '赵工',
+          acceptanceViewStatus: 'TAKEN_BY_OTHER',
+        },
+      },
+    }),
+    contentType: 'application/json',
+    status: 200,
+  });
+}
+
 // ---------- 前端浏览器流程测试（GraphQL Mock）：覆盖工程师列表查看与接单闭环 ----------
 
 test('engineer discovers the list from the home entry and opens the detail', async ({ page }) => {
@@ -359,6 +410,63 @@ test('engineer discovers the list from the home entry and opens the detail', asy
   await expect(page.getByText('RR20260902000000AC8802')).toBeVisible();
   await expect(page.getByText('曝光平台漂移，需现场检修')).toBeVisible();
   await expect(page.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toBeVisible();
+});
+
+test('ready detail is exactly one business card holding every section, with no sideways scroll', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await seedAuthSession(page, 'ENGINEER');
+  await routeEngineerGraphQL(page, {
+    onDetail: (route) => fulfillDetail(route, REQUEST_ID, false),
+  });
+
+  await openResponseDetail(page);
+
+  // 就绪状态只有一张业务卡片：申请信息、故障描述、补充说明、回复时间线、
+  // 接单入口与返回入口全部落在其中，没有被拆成独立卡片
+  await expect(detailCardOf(page)).toHaveCount(1);
+  const card = detailCardOf(page);
+  await expect(card).toContainText('申请信息');
+  await expect(card).toContainText(`RR20260902000000AC${REQUEST_ID}`);
+  await expect(card).toContainText('林客户');
+  await expect(card).toContainText('故障描述');
+  await expect(card).toContainText('曝光平台漂移，需现场检修');
+  await expect(card).toContainText('补充说明');
+  await expect(card).toContainText('工程师回复');
+  await expect(card).toContainText('暂无工程师回复。');
+  await expect(card).toContainText('接单与回复');
+  // 未接单：卡片内只有接单入口，没有回复表单
+  await expect(card.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toBeVisible();
+  await expect(card.getByLabel('回复正文')).toHaveCount(0);
+  await expect(card.getByRole('button', { name: '返回维修申请列表' })).toBeVisible();
+
+  // 1440×900 下主要内容无需横向滚动
+  await expectDetailCardFitsViewport(page);
+});
+
+test('a request taken by another engineer is one read-only card without any write entry', async ({
+  page,
+}) => {
+  await seedAuthSession(page, 'ENGINEER');
+  await routeEngineerGraphQL(page, {
+    onDetail: (route) => fulfillTakenByOtherDetail(route, REQUEST_ID, [MOCK_EXISTING_RESPONSE]),
+  });
+
+  await openResponseDetail(page);
+
+  // 他人已接单仍是同一张卡片，可读申请信息与历史回复，但没有任何写入口
+  await expect(detailCardOf(page)).toHaveCount(1);
+  const card = detailCardOf(page);
+  await expect(card).toContainText('他人已接单');
+  await expect(card).toContainText('赵工');
+  await expect(card.locator('.ant-timeline')).toContainText(MOCK_EXISTING_RESPONSE.responseText);
+  await expect(card).toContainText('该申请已由其他工程师接单跟进，当前为只读查看。');
+  await expect(card.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toHaveCount(0);
+  await expect(card.getByLabel('回复正文')).toHaveCount(0);
+  await expect(card.getByRole('button', { name: /^(loading\s+)?提交回复$/ })).toHaveCount(0);
+  await expect(card.getByText('追加处理回复')).toHaveCount(0);
+  await expect(card.getByRole('button', { name: '返回维修申请列表' })).toBeVisible();
 });
 
 test('engineer accepts with confirm: exactly one mutation and the panel turns accepted', async ({
@@ -384,6 +492,16 @@ test('engineer accepts with confirm: exactly one mutation and the panel turns ac
   // 只发送一次 Mutation，详情来自 Mutation 返回值，不重查详情。
   // 列表失效宣告的刷新语义由 application 层单测覆盖（详情页无列表订阅者，不在本用例断言范围）
   expect(getAcceptRequests()).toBe(1);
+
+  // 接单成功后仍是同一张卡片：成功反馈、回复入口与返回入口都在卡片内，
+  // 接单入口消失后没有产生第二张卡片
+  await expect(detailCardOf(page)).toHaveCount(1);
+  const card = detailCardOf(page);
+  await expect(card).toContainText('你已接单该维修申请，后续请跟进处理。');
+  await expect(card.getByText('追加处理回复')).toBeVisible();
+  await expect(card.getByLabel('回复正文')).toBeVisible();
+  await expect(card.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: '返回维修申请列表' })).toBeVisible();
 });
 
 test('uncertain accept result re-verifies the detail without resending the mutation', async ({
@@ -469,6 +587,14 @@ test('super admin can read the detail but never sees the accept action', async (
   await expect(page.getByText('RR20260902000000AC8802')).toBeVisible();
   await expect(page.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toHaveCount(0);
   await expect(page.getByText('当前账号仅可查看详情，接单与回复需使用工程师账号。')).toBeVisible();
+
+  // 管理员视角同样是单张只读卡片：只读提示在卡片内，卡片内没有任何写入口
+  await expect(detailCardOf(page)).toHaveCount(1);
+  const card = detailCardOf(page);
+  await expect(card).toContainText('当前账号仅可查看详情，接单与回复需使用工程师账号。');
+  await expect(card.getByLabel('回复正文')).toHaveCount(0);
+  await expect(card.getByRole('button', { name: /^(loading\s+)?提交回复$/ })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: '返回维修申请列表' })).toBeVisible();
 });
 
 test('empty available scope shows the scoped empty state', async ({ page }) => {
@@ -595,6 +721,17 @@ test('engineer sees the response form on an accepted request and no accept entry
   await expect(timelineOf(page)).toContainText(MOCK_EXISTING_RESPONSE.responseText);
   // 已接单后不再提供接单入口
   await expect(page.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toHaveCount(0);
+
+  // 本人已接单：唯一卡片的操作分区里是可写回复表单，历史回复也在同一张卡片内
+  await expect(detailCardOf(page)).toHaveCount(1);
+  const card = detailCardOf(page);
+  await expect(card).toContainText('我的接单');
+  await expect(card.locator('.ant-timeline')).toContainText(MOCK_EXISTING_RESPONSE.responseText);
+  await expect(card.getByText('追加处理回复')).toBeVisible();
+  await expect(card.getByLabel('回复正文')).toBeVisible();
+  await expect(card.getByRole('button', { name: /^(loading\s+)?提交回复$/ })).toBeVisible();
+  await expect(card.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: '返回维修申请列表' })).toBeVisible();
 });
 
 test('unaccepted request exposes no response form and prompts to accept first', async ({
@@ -610,6 +747,13 @@ test('unaccepted request exposes no response form and prompts to accept first', 
   await expect(page.getByText('请先接单后才能回复该申请。')).toBeVisible();
   await expect(page.getByLabel('回复正文')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^(loading\s+)?提交回复$/ })).toHaveCount(0);
+
+  // 未接单：唯一卡片的操作分区只放接单入口与提示，不出现回复表单
+  await expect(detailCardOf(page)).toHaveCount(1);
+  const card = detailCardOf(page);
+  await expect(card.getByRole('button', { name: /^(loading\s+)?接\s*单$/ })).toBeVisible();
+  await expect(card).toContainText('请先接单后才能回复该申请。');
+  await expect(card.getByLabel('回复正文')).toHaveCount(0);
 });
 
 test('super admin reads the accepted detail without any response entry', async ({ page }) => {
@@ -625,6 +769,13 @@ test('super admin reads the accepted detail without any response entry', async (
   await expect(page.getByText('当前账号仅可查看详情，接单与回复需使用工程师账号。')).toBeVisible();
   await expect(page.getByLabel('回复正文')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^(loading\s+)?提交回复$/ })).toHaveCount(0);
+
+  // 已接单的管理员视角：历史回复与只读提示都在同一张卡片内，卡片外没有第二张卡片
+  await expect(detailCardOf(page)).toHaveCount(1);
+  const card = detailCardOf(page);
+  await expect(card.locator('.ant-timeline')).toContainText(MOCK_EXISTING_RESPONSE.responseText);
+  await expect(card).toContainText('当前账号仅可查看详情，接单与回复需使用工程师账号。');
+  await expect(card.getByRole('button', { name: '返回维修申请列表' })).toBeVisible();
 });
 
 test('engineer submits a response: one mutation, exact variables, atomic timeline', async ({
@@ -680,6 +831,19 @@ test('engineer submits a response: one mutation, exact variables, atomic timelin
   // 成功后表单重置：正文清空，处理状态回到初始 PENDING
   await expect(page.getByLabel('回复正文')).toHaveValue('');
   await expect(statusSelectOf(page)).toContainText('处理中');
+
+  // 回复成功后仍保持单卡片：成功反馈、历史回复、新回复与最新状态都在卡片内，
+  // 卡片内可以直接继续追加回复，全程没有第二张业务卡片
+  await expect(detailCardOf(page)).toHaveCount(1);
+  const card = detailCardOf(page);
+  await expect(card).toContainText('回复已提交。');
+  await expect(card.locator('.ant-timeline')).toContainText(MOCK_EXISTING_RESPONSE.responseText);
+  await expect(card.locator('.ant-timeline')).toContainText(RESPONSE_DRAFT);
+  await expect(
+    card.locator('.ant-descriptions-row').filter({ hasText: '最新处理状态' }),
+  ).toContainText('已解决');
+  await expect(card.getByLabel('回复正文')).toBeVisible();
+  await expect(card.getByRole('button', { name: '返回维修申请列表' })).toBeVisible();
 });
 
 test('rapid repeat clicks while submitting send exactly one mutation', async ({ page }) => {

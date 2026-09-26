@@ -17,6 +17,7 @@ import {
   hasFrontendGraphQLEndpoint,
   mysqlQuery,
   readBackendEnv,
+  type RepairRequestCleanupResponseTarget,
   type RepairRequestCleanupTarget,
 } from './real-backend';
 
@@ -218,10 +219,12 @@ describe('real-backend 维修申请按精确 ID 物理清理（本轮收口新�
   function cleanupDiagnostics(overrides: Record<string, string> = {}, expectedRows = 1): string {
     const fields: Record<string, string> = {
       database: 'lithography_e2e',
+      expected_response_rows: '0',
       expected_rows: String(expectedRows),
       existing_rows: String(expectedRows),
       field_mismatch_rows: '0',
       child_rows: '0',
+      response_residue_rows: '0',
       residue_rows: '0',
       ...overrides,
     };
@@ -503,6 +506,271 @@ describe('real-backend 维修申请按精确 ID 物理清理（本轮收口新�
   });
 });
 
+describe('real-backend 已回复维修申请的精确清理（负责人单卡片计划 P3）', () => {
+  const OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
+  const originalOptIn = process.env[OPT_IN_ENV];
+  const TEST_DB_ENV =
+    'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=lithography_e2e\n';
+  const REQUEST_NO = 'RR20260902000002AB12CD';
+  const FAULT_DESCRIPTION = '工程师回复链路真实 e2e 用例';
+  const RESPONSE_TEXT = '已更换备件，待观察';
+
+  // 已接单申请的本轮事实：五项既有事实 + 接单工程师归属
+  const ACCEPTED_EXPECTED: RepairRequestCleanupTarget['expected'] = {
+    acceptedEngineerAccountId: 9201,
+    customerAccountId: 9001,
+    equipmentModelId: 8101,
+    errorCode: 'E2E-REAL',
+    faultDescription: FAULT_DESCRIPTION,
+    requestNo: REQUEST_NO,
+  };
+  const RESPONSE_TARGET: RepairRequestCleanupResponseTarget = {
+    expected: {
+      customerAccountId: 9001,
+      engineerAccountId: 9201,
+      requestId: 920006,
+      resolutionStatus: 'RESOLVED',
+      responseText: RESPONSE_TEXT,
+    },
+    id: 930001,
+  };
+
+  function diagnostics(overrides: Record<string, string> = {}): string {
+    const fields: Record<string, string> = {
+      database: 'lithography_e2e',
+      expected_response_rows: '0',
+      expected_rows: '1',
+      existing_rows: '1',
+      field_mismatch_rows: '0',
+      child_rows: '0',
+      response_residue_rows: '0',
+      residue_rows: '0',
+      ...overrides,
+    };
+
+    return Object.entries(fields)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(' ');
+  }
+
+  function acceptedTarget(
+    overrides: Partial<RepairRequestCleanupTarget> = {},
+  ): RepairRequestCleanupTarget {
+    return { expected: ACCEPTED_EXPECTED, id: 920006, ...overrides };
+  }
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset().mockReturnValue('');
+    readFileSyncMock.mockReset().mockReturnValue(TEST_DB_ENV);
+    delete process.env[OPT_IN_ENV];
+  });
+
+  afterAll(() => {
+    if (originalOptIn === undefined) {
+      delete process.env[OPT_IN_ENV];
+    } else {
+      process.env[OPT_IN_ENV] = originalOptIn;
+    }
+  });
+
+  it('缺省 expectedResponses 时脚本里没有任何回复删除语句：零子记录守卫不被放宽', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue(diagnostics());
+
+    expect(() => deleteRepairRequestRowsByIds([acceptedTarget()])).not.toThrow();
+
+    const sql = executedSqls()[0] as string;
+
+    // 既有守卫：该申请下「任意回复子记录数 - 0」必须为零，出现任何回复即整批中止；
+    // GREATEST 兜底保证该违例项恒为非负，不会抵消其他正向违例
+    expect(sql).toContain(
+      'GREATEST((SELECT COUNT(*) FROM engineer_response WHERE request_id IN (920006)) - 0, 0)',
+    );
+    expect(sql).not.toContain('DELETE FROM engineer_response');
+    // 已接单目标追加归属核对（is_accepted + 接单工程师账号）
+    expect(sql).toContain('is_accepted = 1');
+    expect(sql).toContain('accepted_by_engineer_account_id = 9201');
+  });
+
+  it('声明本轮回复时：先删本轮精确回复行、再删申请行，且回复行只按本轮 ID 删除', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue(diagnostics({ expected_response_rows: '1' }));
+
+    expect(() =>
+      deleteRepairRequestRowsByIds([acceptedTarget({ expectedResponses: [RESPONSE_TARGET] })]),
+    ).not.toThrow();
+
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+
+    const sql = executedSqls()[0] as string;
+    const responseDeleteIndex = sql.indexOf('DELETE FROM engineer_response WHERE id IN (930001)');
+    const requestDeleteIndex = sql.indexOf('DELETE FROM repair_request WHERE id IN (920006)');
+
+    // 本项目 engineer_response 外键为 ON DELETE RESTRICT：顺序不可颠倒
+    expect(responseDeleteIndex).toBeGreaterThan(-1);
+    expect(requestDeleteIndex).toBeGreaterThan(responseDeleteIndex);
+    // 回复行只按本轮记录的精确 ID 删除，绝不按申请批量删回复，也不删未记录的回复 ID
+    expect(sql).not.toContain('DELETE FROM engineer_response WHERE request_id');
+    expect(sql).not.toContain('930002');
+    // 回复事实逐项绑定在核验门中（归属 / 工程师 / 客户 / 状态 / 正文）
+    expect(sql).toContain(
+      `id = 930001 AND request_id = 920006 AND engineer_account_id = 9201 AND customer_account_id = 9001 AND resolution_status = 'RESOLVED' AND response_text = '${RESPONSE_TEXT}'`,
+    );
+    // 多余回复子记录 = GREATEST(该申请下回复行数 - 本轮预期条数, 0)，必须为零且恒为非负
+    expect(sql).toContain(
+      'GREATEST((SELECT COUNT(*) FROM engineer_response WHERE request_id IN (920006)) - 1, 0)',
+    );
+    // 提交前同时核验申请残留与回复残留
+    expect(sql).toContain("SELECT CONCAT('residue_rows='");
+    expect(sql).toContain('response_residue_rows=');
+    expect(sql.match(/\bCOMMIT\b/g)).toHaveLength(1);
+  });
+
+  it('回复核验的数量违例恒为非负：缺失项独立成项，多余项被 GREATEST 兜底，child_rows 纳入四项', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue(diagnostics({ expected_response_rows: '1' }));
+
+    expect(() =>
+      deleteRepairRequestRowsByIds([acceptedTarget({ expectedResponses: [RESPONSE_TARGET] })]),
+    ).not.toThrow();
+
+    const sql = executedSqls()[0] as string;
+
+    // 预期回复 ID 缺失独立成项（预期条数 - 实际命中条数），实际命中恒不超过预期条数，故非负
+    expect(sql).toContain('(1 - (SELECT COUNT(*) FROM engineer_response WHERE id IN (930001)))');
+    // 旧实现里可为负的裸减法（实际回复数 - 预期回复数）不再作为违例项出现
+    expect(sql).not.toContain('WHERE request_id IN (920006)) - 1)');
+
+    // child_rows 为该四项之和：缺失 + 多余 + 字段不符 + 其他子表引用
+    const childRowsExpression = sql
+      .split("' child_rows=', ")[1]
+      ?.split(", ' expected_response_rows")[0];
+
+    expect(childRowsExpression).toContain(
+      '(1 - (SELECT COUNT(*) FROM engineer_response WHERE id IN (930001)))',
+    );
+    expect(childRowsExpression).toContain(
+      'GREATEST((SELECT COUNT(*) FROM engineer_response WHERE request_id IN (920006)) - 1, 0)',
+    );
+    expect(childRowsExpression).toContain('AND NOT (');
+    expect(childRowsExpression).toContain('FROM ai_conversation WHERE request_id IN (920006)');
+    expect(childRowsExpression).toContain('FROM ai_report WHERE request_id IN (920006)');
+  });
+
+  it.each<[string, Partial<RepairRequestCleanupResponseTarget['expected']>, string]>([
+    [
+      '回复归属申请与目标不一致',
+      { ...RESPONSE_TARGET.expected, requestId: 920007 },
+      '物理清理回复归属申请与清理目标不一致',
+    ],
+    [
+      '回复工程师账号非正整数',
+      { ...RESPONSE_TARGET.expected, engineerAccountId: 0 },
+      '预期回复工程师账号未通过正整数校验',
+    ],
+    [
+      '回复客户账号非正整数',
+      { ...RESPONSE_TARGET.expected, customerAccountId: -1 },
+      '预期回复客户账号未通过正整数校验',
+    ],
+    [
+      '处理状态不在枚举值域内',
+      { ...RESPONSE_TARGET.expected, resolutionStatus: 'DONE' as 'RESOLVED' },
+      '预期处理状态不在枚举值域内',
+    ],
+    [
+      '回复正文注入引号',
+      { ...RESPONSE_TARGET.expected, responseText: "回复'; DROP TABLE engineer_response;--" },
+      '预期回复正文未通过白名单校验',
+    ],
+    [
+      '回复正文含反斜杠（MySQL 转义符）',
+      { ...RESPONSE_TARGET.expected, responseText: '回复\\1' },
+      '预期回复正文未通过白名单校验',
+    ],
+    [
+      '回复正文超长',
+      { ...RESPONSE_TARGET.expected, responseText: 'x'.repeat(256) },
+      '预期回复正文未通过白名单校验',
+    ],
+  ])('回复事实非法（%s）在任何 SQL 组装之前被拒绝', (_label, broken, message) => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() =>
+      deleteRepairRequestRowsByIds([
+        acceptedTarget({
+          expectedResponses: [{ expected: broken, id: 930001 }],
+        }),
+      ]),
+    ).toThrow(message);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('回复 ID 非正整数时在任何 SQL 组装之前被拒绝', () => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() =>
+      deleteRepairRequestRowsByIds([
+        acceptedTarget({ expectedResponses: [{ ...RESPONSE_TARGET, id: 0 }] }),
+      ]),
+    ).toThrow('物理清理回复 ID 未通过正整数校验');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      '接单工程师账号非正整数',
+      { expected: { ...ACCEPTED_EXPECTED, acceptedEngineerAccountId: 0 } },
+      '预期接单工程师账号未通过正整数校验',
+    ],
+  ])('目标结构非法（%s）在任何 SQL 组装之前被拒绝', (_label, overrides, message) => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() =>
+      deleteRepairRequestRowsByIds([
+        acceptedTarget({
+          ...(overrides as Partial<RepairRequestCleanupTarget>),
+          expectedResponses: [RESPONSE_TARGET],
+        }),
+      ]),
+    ).toThrow(message);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('同一条回复 ID 重复出现时整批拒绝，不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() =>
+      deleteRepairRequestRowsByIds([
+        acceptedTarget({ expectedResponses: [RESPONSE_TARGET, RESPONSE_TARGET] }),
+      ]),
+    ).toThrow('物理清理回复 ID 重复');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['本轮回复条数与脚本核验不符', { expected_response_rows: '0' }, 'expected_response_rows'],
+    ['删除后仍残留回复行', { response_residue_rows: '1' }, 'response_residue_rows'],
+    ['仍有本轮之外的回复子记录', { child_rows: '1' }, 'child_rows'],
+  ])('核验诊断不达标（%s）即抛错，不把未知或残留当成功', (_label, overrides, key) => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue(diagnostics(overrides));
+
+    expect(() =>
+      deleteRepairRequestRowsByIds([acceptedTarget({ expectedResponses: [RESPONSE_TARGET] })]),
+    ).toThrow(key);
+  });
+
+  it('回复核验诊断缺失（CLI 无输出）时失败关闭，不声称清理成功', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue('');
+
+    expect(() =>
+      deleteRepairRequestRowsByIds([acceptedTarget({ expectedResponses: [RESPONSE_TARGET] })]),
+    ).toThrow('维修申请物理清理核验失败');
+  });
+});
+
 describe('real-backend 统一清理入口 cleanupE2ERepairRequest（创建 / 管理 spec 共用）', () => {
   const OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
   const originalOptIn = process.env[OPT_IN_ENV];
@@ -642,7 +910,7 @@ describe('real-backend 统一清理入口 cleanupE2ERepairRequest（创建 / 管
       .mockReset()
       .mockReturnValueOnce('920006')
       .mockReturnValue(
-        'database=lithography_e2e expected_rows=1 existing_rows=1 field_mismatch_rows=0 child_rows=0 residue_rows=0',
+        'database=lithography_e2e expected_response_rows=0 expected_rows=1 existing_rows=1 field_mismatch_rows=0 child_rows=0 response_residue_rows=0 residue_rows=0',
       );
     stubGraphqlFetch(SOFT_DELETE_OK);
 
@@ -659,12 +927,82 @@ describe('real-backend 统一清理入口 cleanupE2ERepairRequest（创建 / 管
     expect(sqls[1]).toContain('DELETE FROM repair_request WHERE id IN (920006)');
     expect(sqls[1]).toContain("(DATABASE() <> 'lithography_e2e')");
   });
+
+  it('已接单并含本轮回复：条件软删不可行，跳过软删直接走受保护物理清理（先删回复再删申请）', async () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock
+      .mockReset()
+      .mockReturnValueOnce('920006')
+      .mockReturnValue(
+        'database=lithography_e2e expected_response_rows=1 expected_rows=1 existing_rows=1 field_mismatch_rows=0 child_rows=0 response_residue_rows=0 residue_rows=0',
+      );
+
+    await expect(
+      cleanupE2ERepairRequest({
+        ...cleanupOptions,
+        acceptedEngineerAccountId: 9201,
+        env: DEDICATED_ENV,
+        expectedResponses: [
+          {
+            expected: {
+              customerAccountId: 9001,
+              engineerAccountId: 9201,
+              requestId: 920006,
+              resolutionStatus: 'RESOLVED',
+              responseText: '已更换备件，待观察',
+            },
+            id: 930001,
+          },
+        ],
+      }),
+    ).resolves.toBeUndefined();
+
+    // 已接单申请在业务上不可被客户软删：绝不发起登录与软删请求
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const sqls = executedSqls();
+
+    expect(sqls).toHaveLength(2);
+    expect(sqls[1]).toContain('DELETE FROM engineer_response WHERE id IN (930001)');
+    expect(sqls[1]).toContain('DELETE FROM repair_request WHERE id IN (920006)');
+    expect(sqls[1].indexOf('DELETE FROM engineer_response')).toBeLessThan(
+      sqls[1].indexOf('DELETE FROM repair_request'),
+    );
+  });
+
+  it('已接单并含本轮回复但未显式授权：拒绝清理（既不软删也不物理删除，不静默留下自建数据）', async () => {
+    execFileSyncMock.mockReturnValue('920006');
+
+    await expect(
+      cleanupE2ERepairRequest({
+        ...cleanupOptions,
+        acceptedEngineerAccountId: 9201,
+        env: DEDICATED_ENV,
+        expectedResponses: [
+          {
+            expected: {
+              customerAccountId: 9001,
+              engineerAccountId: 9201,
+              requestId: 920006,
+              resolutionStatus: 'RESOLVED',
+              responseText: '已更换备件，待观察',
+            },
+            id: 930001,
+          },
+        ],
+      }),
+    ).rejects.toThrow('物理清理未启用');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(executedSqls().join('\n')).not.toContain('DELETE');
+  });
 });
 
 describe('真实 E2E 清理路径统一收口（不再有仅凭编号的直接删除入口）', () => {
   const CLEANUP_CALL_SITES = [
     'repair-request-create.spec.ts',
     'repair-request-manage-real.spec.ts',
+    'engineer-repair-request-real.spec.ts',
   ] as const;
 
   // 本文件 mock 了 node:fs，读仓库源码必须取真实实现
