@@ -68,7 +68,9 @@ export default defineConfig({
     {
       command: 'npx vite --host 127.0.0.1 --port 4174 --strictPort',
       env: {
-        DEV_API_PROXY_TARGET: DEDICATED_BACKEND_ORIGIN,
+        // 故障验收可显式指向不可达的本地端口；仅改变代理，不改变专用数据库或清理门禁。
+        DEV_API_PROXY_TARGET:
+          process.env.E2E_REAL_FRONTEND_PROXY_TARGET || DEDICATED_BACKEND_ORIGIN,
         VITE_GRAPHQL_ENDPOINT: '',
       },
       reuseExistingServer: false,

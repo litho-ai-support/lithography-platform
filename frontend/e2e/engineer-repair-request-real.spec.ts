@@ -13,22 +13,22 @@
 //   因此必须走扩展后的精确物理清理：同一事务内核验库名 / 授权 / 归属 / 记录字段，
 //   确认无其他子记录后先删本轮回复、再删申请，提交前断言零残留；
 //   物理清理未显式授权时入口直接抛错，拒绝静默把本轮自建数据留在库里。
-// 前提不满足（无本地后端 / 无 env）时用例自动跳过，不会以失败阻塞。
+// 专用入口的配置、授权、健康或真实登录前提不满足时直接失败，不得跳过验收。
 //
 // 本文件含两组用例：①业务链路（客户创建 → 工程师接单/回复 → 客户查看回复，走浏览器）；
 // ②清理事务安全回归（在 lithography_e2e 上验证「字段不符 + 缺少预期回复」组合下事务真实回滚）。
 
 import { expect, type Page, test } from '@playwright/test';
 
+import { DEDICATED_E2E_DB_NAME } from '../e2e-real/dedicated-e2e-environment';
+
 import {
+  assertPhysicalCleanupAllowed,
+  BACKEND_HEALTH,
   cleanupE2ERepairRequest,
   deleteRepairRequestRowsByIds,
   findRepairRequestByRequestNo,
-  hasFrontendGraphQLEndpoint,
-  isPhysicalCleanupEnabled,
-  isRealBackendAvailable,
   readBackendEnv,
-  readBackendEnvOrNull,
   realGraphqlCall,
   realLoginAccountId,
   REQUEST_NO_PATTERN,
@@ -109,33 +109,100 @@ async function selectResolutionStatus(page: Page, label: '处理中' | '已解�
 }
 
 /**
- * 专用真实通道的四道前置门（两组用例共用）：任一不满足即跳过。
+ * 专用真实通道前置检查（两组用例共用）：任一不满足即报错。
  * 本用例创建的是会被工程师接单并回复的申请，业务上客户无法删除已接单申请
  *（deleteMyRepairRequest 拒绝），只能在专用隔离库 lithography_e2e 上走显式授权的精确物理清理。
- * 前置不满足时跳过：绝不连接其他库创建无法清理的数据。
+ * 在创建夹具前确认隔离库、清理授权与客户/工程师的直连及代理登录。
+ * 错误仅包含阶段及安全诊断，不透传可能带有秘密的底层异常或 cause。
  */
-async function skipWithoutDedicatedRealChannel(): Promise<void> {
-  const env = readBackendEnvOrNull();
-  test.skip(
-    env === null,
-    'backend/env/.env.development 缺失（本地文件，不入库），跳过真实后端用例',
-  );
-  test.skip(
-    !hasFrontendGraphQLEndpoint(),
-    'frontend/env/.env.development.local 未配置 VITE_GRAPHQL_ENDPOINT，真实通道不可达，跳过真实后端用例',
-  );
-  test.skip(
-    !(await isRealBackendAvailable(env as Record<string, string>)),
-    '本地后端不可用或不可登录，跳过真实后端用例',
-  );
-  test.skip(
-    !isPhysicalCleanupEnabled(env as Record<string, string>),
-    '本用例要求专用隔离库 lithography_e2e 且显式授权 E2E_ALLOW_PHYSICAL_CLEANUP=1，跳过',
-  );
+async function assertDedicatedRealChannel(): Promise<Record<string, string>> {
+  let env: Record<string, string>;
+  try {
+    env = readBackendEnv();
+  } catch {
+    throw new Error('[preflight:backend-env] 无法读取 backend/env/.env.development 专用配置');
+  }
+  if (env.DB_NAME !== DEDICATED_E2E_DB_NAME) {
+    throw new Error(
+      `[preflight:database] DB_NAME 必须为 ${DEDICATED_E2E_DB_NAME}，实际为 ${JSON.stringify(env.DB_NAME ?? '')}`,
+    );
+  }
+  try {
+    assertPhysicalCleanupAllowed(env);
+  } catch {
+    throw new Error(
+      '[preflight:cleanup-authorization] 专用库物理清理需要 E2E_ALLOW_PHYSICAL_CLEANUP=1',
+    );
+  }
+  let health: Response;
+  try {
+    health = await fetch(BACKEND_HEALTH, { signal: AbortSignal.timeout(10_000) });
+  } catch {
+    throw new Error('[preflight:backend-health] 无法访问专用后端健康端点');
+  }
+  if (!health.ok) throw new Error(`[preflight:backend-health] HTTP ${health.status}`);
+  // 故障注入只作用于本 spec 的只读登录探针，不改变 Seed 或共享登录 helper。
+  const loginEnv = {
+    ...env,
+    MOCK_SEED_PASSWORD: process.env.E2E_REAL_LOGIN_PASSWORD || env.MOCK_SEED_PASSWORD,
+  };
+  for (const loginName of [CUSTOMER_LOGIN_NAME, ENGINEER_LOGIN_NAME]) {
+    try {
+      await realLoginAccountId(loginEnv, loginName);
+    } catch {
+      throw new Error(`[preflight:backend-login] 登录失败（账号=${loginName}）`);
+    }
+  }
+  for (const [loginName, role] of [
+    [CUSTOMER_LOGIN_NAME, 'CUSTOMER'],
+    [ENGINEER_LOGIN_NAME, 'ENGINEER'],
+  ]) {
+    const proxyResponse = await fetch('http://127.0.0.1:4174/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify({
+        query:
+          'mutation LoginWithPassword($input: AuthLoginInput!) { login(input: $input) { accessToken accountId role } }',
+        variables: {
+          input: {
+            audience: 'SSTSWEB',
+            loginName,
+            loginPassword: loginEnv.MOCK_SEED_PASSWORD,
+            type: 'PASSWORD',
+          },
+        },
+      }),
+    }).catch(() => {
+      throw new Error('[preflight:frontend-proxy] 无法访问 4174 /graphql 代理');
+    });
+    if (!proxyResponse.ok)
+      throw new Error(`[preflight:frontend-proxy] HTTP ${proxyResponse.status}`);
+    const proxyBody = (await proxyResponse.json().catch(() => {
+      throw new Error('[preflight:frontend-proxy] 登录响应不是合法 JSON');
+    })) as {
+      errors?: unknown[];
+      data?: { login?: { accountId?: number; accessToken?: string; role?: string } };
+    };
+    const login = proxyBody.data?.login;
+    if (
+      proxyBody.errors?.length ||
+      !Number.isSafeInteger(login?.accountId) ||
+      (login?.accountId ?? 0) <= 0 ||
+      typeof login?.accessToken !== 'string' ||
+      !login.accessToken ||
+      login.role !== role
+    ) {
+      throw new Error(`[preflight:frontend-proxy] 登录结果无效（账号=${loginName}）`);
+    }
+  }
+  return env;
 }
 
 test.describe('real backend engineer accept and respond flow', () => {
-  test.beforeEach(skipWithoutDedicatedRealChannel);
+  test.beforeEach(async () => {
+    await assertDedicatedRealChannel();
+  });
 
   test('customer creates, the engineer accepts and replies in the browser, the customer reads the reply', async ({
     page,
@@ -325,7 +392,9 @@ test.describe('real backend engineer accept and respond flow', () => {
  * 事务必须中止，且被核验拦下的申请必须仍然在库中。
  */
 test.describe('real backend repair request cleanup transaction guard', () => {
-  test.beforeEach(skipWithoutDedicatedRealChannel);
+  test.beforeEach(async () => {
+    await assertDedicatedRealChannel();
+  });
 
   test('a mismatched request combined with a missing expected response aborts the transaction and keeps the row', async () => {
     test.setTimeout(120_000);
