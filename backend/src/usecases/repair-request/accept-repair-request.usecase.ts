@@ -4,7 +4,7 @@ import { UsecaseSession } from '@app-types/auth/session.types';
 import type { PersistenceTransactionContext } from '@app-types/common/transaction.types';
 import { DomainError, REPAIR_REQUEST_ERROR } from '@core/common/errors/domain-error';
 import { Inject, Injectable } from '@nestjs/common';
-import { RepairRequestDetailView } from '@src/modules/lithography/lithography.types';
+import { RepairRequestEngineerDetailView } from '@src/modules/lithography/lithography.types';
 import { RepairRequestService } from '@src/modules/lithography/repair-request.service';
 import {
   TRANSACTION_RUNNER,
@@ -27,7 +27,7 @@ import { assertEngineerWritePermission } from './engineer-write-permission';
  * 3. 未命中（affected = 0）时按最小状态读取裁决错误类别：
  *    不存在/已删除 → NOT_FOUND；已接单 → CONFLICT
  * 4. 接单成功后复用现有工程师详情读链路返回更新后的详情
- *    （读权限判定与昵称富集不重复实现）
+ *    （读权限判定、视角状态与客户/接单工程师昵称富集不重复实现）
  *
  * 接单人（engineerAccountId）仅取自后端 Session，接单时间（acceptedAt）
  * 仅取后端系统事件时间，两者均不接受客户端传入
@@ -45,12 +45,13 @@ export class AcceptRepairRequestUsecase {
    * 执行接单流程
    *
    * @param params requestId 与当前会话身份快照
-   * @returns 接单成功后的工程师详情视图（与工程师详情 Query 同一稳定读模型）
+   * @returns 接单成功后的工程师详情视图（与工程师详情 Query 同一稳定读模型，
+   *   视角状态为 MINE，客户/接单工程师展示资料已富集）
    */
   async execute(params: {
     requestId: number;
     session: UsecaseSession;
-  }): Promise<RepairRequestDetailView> {
+  }): Promise<RepairRequestEngineerDetailView> {
     // 工程师精确写权限与 ID 结构校验为接单/回复等写用例共用断言（单一实现）
     assertEngineerWritePermission(params.session, '接单');
     assertRepairRequestId(params.requestId);

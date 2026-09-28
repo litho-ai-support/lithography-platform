@@ -21,8 +21,24 @@ import type {
 /** 工程师回复处理状态（后端正式 GraphQL enum，值域一致） */
 export type EngineerResolutionStatusValue = EngineerResolutionStatus;
 
-/** 工程师列表范围，与后端 REPAIR_REQUEST_ENGINEER_LIST_SCOPES 取值严格一致，不创建第三套状态值 */
-export type EngineerRepairListScope = 'AVAILABLE' | 'MINE';
+/**
+ * 工程师列表范围，与后端 REPAIR_REQUEST_ENGINEER_LIST_SCOPES 取值严格一致
+ * （ALL / AVAILABLE / MINE / TAKEN_BY_OTHER，缺省 ALL），不创建第三套状态值
+ */
+export type EngineerRepairListScope = 'ALL' | 'AVAILABLE' | 'MINE' | 'TAKEN_BY_OTHER';
+
+/**
+ * 接单状态视角，与后端 RepairRequestAcceptanceViewStatus 枚举取值严格一致。
+ * AVAILABLE 仅表示「未接单」事实，不代表当前会话可接单；
+ * 可接单/可回复能力由页面按会话单值业务角色（精确 ENGINEER）另行判定。
+ */
+export type EngineerRepairAcceptanceViewStatus = 'AVAILABLE' | 'MINE' | 'TAKEN_BY_OTHER';
+
+/** 列表筛选（feature 内部干净模型，null 表示不筛选；由后端在分页计数前完成过滤） */
+export type EngineerRepairListFilter = {
+  equipmentModelId: number | null;
+  customerNickname: string | null;
+};
 
 /* ------------------------------------------------------------------ */
 /* 原始 GraphQL DTO（infrastructure 专用，不对外导出消费）             */
@@ -34,6 +50,11 @@ export type EquipmentModelDTO = {
   modelName: string;
 };
 
+/**
+ * 工程师维修申请列表项 DTO（与后端 RepairRequestEngineerListItemDTO 对齐）：
+ * 在公共列表项上补充客户 / 接单工程师安全展示资料与当前会话视角状态；
+ * 后端不返回归属类账号 ID，前端契约同样不引入
+ */
 export type RepairRequestListItemDTO = {
   id: number;
   requestNo: string;
@@ -44,6 +65,10 @@ export type RepairRequestListItemDTO = {
   isAccepted: boolean;
   acceptedAt?: string | null;
   latestResolutionStatus?: EngineerResolutionStatusValue | null;
+  customerNickname: string;
+  customerCompanyName?: string | null;
+  acceptanceViewStatus: EngineerRepairAcceptanceViewStatus;
+  acceptedEngineerNickname?: string | null;
 };
 
 export type EngineerResponseDTO = {
@@ -68,6 +93,11 @@ export type RepairRequestDetailDTO = {
   acceptedAt?: string | null;
   latestResolutionStatus?: EngineerResolutionStatusValue | null;
   responses: EngineerResponseDTO[];
+  /** 以下为工程师入口富集字段（后端约定客户入口为空；本切片只消费工程师入口） */
+  customerNickname?: string | null;
+  customerCompanyName?: string | null;
+  acceptanceViewStatus?: EngineerRepairAcceptanceViewStatus | null;
+  acceptedEngineerNickname?: string | null;
 };
 
 export type RepairRequestPaginatedDTO = {
@@ -95,20 +125,38 @@ export type RepairRequestPaginationVariables = {
  */
 export type EngineerRepairRequestEquipmentModel = RepairRequestEquipmentModel;
 
-/** 列表查询参数（scope 与 GraphQL 参数一一对应，分页为 OFFSET 页码口径） */
-export type EngineerRepairListQuery = {
-  scope: EngineerRepairListScope;
-  page: number;
-  pageSize: number;
+/**
+ * 工程师列表项内部模型：公共列表项 + 后端富集的安全展示字段（DTO 显式映射而来）。
+ * 客户昵称/视角状态由后端保证非空；可空展示字段收拢为 null。
+ */
+export type EngineerRepairRequestListItem = RepairRequestListItem & {
+  customerNickname: string;
+  customerCompanyName: string | null;
+  acceptanceViewStatus: EngineerRepairAcceptanceViewStatus;
+  acceptedEngineerNickname: string | null;
 };
 
-export type EngineerRepairRequestListItem = RepairRequestListItem;
+/** 工程师详情内部模型：公共详情 + 工程师入口富集字段（可空字段收拢为 null） */
+export type EngineerRepairRequestDetail = RepairRequestDetail & {
+  customerNickname: string | null;
+  customerCompanyName: string | null;
+  acceptanceViewStatus: EngineerRepairAcceptanceViewStatus | null;
+  acceptedEngineerNickname: string | null;
+};
 
-export type EngineerRepairRequestPage = RepairRequestListPage;
+export type EngineerRepairRequestPage = Omit<RepairRequestListPage, 'items'> & {
+  items: EngineerRepairRequestListItem[];
+};
 
 export type EngineerRepairRequestResponseItem = EngineerResponse;
 
-export type EngineerRepairRequestDetail = RepairRequestDetail;
+/** 列表查询参数（scope/filter 与 GraphQL 参数一一对应，分页为 OFFSET 页码口径） */
+export type EngineerRepairListQuery = {
+  scope: EngineerRepairListScope;
+  filter: EngineerRepairListFilter;
+  page: number;
+  pageSize: number;
+};
 
 /**
  * 详情读取的显式失败原因（业务拒绝，非 transport）：

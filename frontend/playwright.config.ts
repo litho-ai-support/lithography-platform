@@ -11,7 +11,8 @@ export default defineConfig({
   retries: 0,
   testDir: './e2e',
   // helpers 目录是 e2e 共享工具（含 vitest 单测，如 real-backend 白名单 helper），不是 Playwright 用例
-  testIgnore: '**/helpers/**',
+  // 工程师真实链路要求专用隔离配置；普通入口不收集，避免把未执行计为跳过验收。
+  testIgnore: ['**/helpers/**', '**/engineer-repair-request-real.spec.ts'],
   timeout: 20_000,
   use: {
     baseURL: 'http://127.0.0.1:4173',

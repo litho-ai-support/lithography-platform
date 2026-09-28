@@ -32,6 +32,8 @@ function normalizeUserSummary(
 
   const nickname = value.nickname.trim();
   const accessGroup = value.accessGroup;
+  // 头像 URL 是展示性字段，不参与会话合法性判定：缺失/空白回落 null
+  const avatarUrl = typeof value.avatarUrl === 'string' ? value.avatarUrl.trim() : '';
 
   if (
     !nickname ||
@@ -45,6 +47,7 @@ function normalizeUserSummary(
 
   return {
     accessGroup: [...accessGroup],
+    avatarUrl: avatarUrl === '' ? null : avatarUrl,
     nickname,
   };
 }

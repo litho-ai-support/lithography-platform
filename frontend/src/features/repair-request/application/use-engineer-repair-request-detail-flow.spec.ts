@@ -57,6 +57,10 @@ function buildDetail(id: number, isAccepted: boolean): EngineerRepairRequestDeta
     isAccepted,
     acceptedAt: isAccepted ? '2026-09-02T08:30:00.000Z' : null,
     latestResolutionStatus: null,
+    customerNickname: '林客户',
+    customerCompanyName: '林氏精密制造',
+    acceptanceViewStatus: isAccepted ? 'MINE' : 'AVAILABLE',
+    acceptedEngineerNickname: isAccepted ? '陈工' : null,
     responses: [],
   };
 }
@@ -150,7 +154,7 @@ describe('useEngineerRepairRequestDetailFlow', () => {
     expect(acceptResult).toEqual(CONFLICT_RESULT);
     await waitFor(() => expect(fetchDetailMock).toHaveBeenCalledTimes(2));
     expect(fetchDetailMock).toHaveBeenLastCalledWith(21);
-    // 重查后展示最新接单状态，接单按钮随 isAccepted 消失
+    // 重查后展示最新视角状态（MINE），接单按钮随视角变化消失
     expect(result.current.state).toMatchObject({ status: 'ready', detail: buildDetail(21, true) });
     expect(invalidation.calls).toHaveLength(1);
     invalidation.unsubscribe();
@@ -236,7 +240,7 @@ describe('useEngineerRepairRequestDetailFlow', () => {
       message: '接单失败，请稍后重试。',
     };
 
-    it('触发一次详情重查，重查发现已接单时最终展示已接单状态', async () => {
+    it('触发一次详情重查，重查确认视角为 MINE 时失败反馈收敛为成功', async () => {
       acceptMock.mockResolvedValue(ACCEPT_FAILED_RESULT);
       fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, false) });
       fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, true) });
@@ -249,17 +253,52 @@ describe('useEngineerRepairRequestDetailFlow', () => {
 
       await waitFor(() => expect(fetchDetailMock).toHaveBeenCalledTimes(2));
       expect(fetchDetailMock).toHaveBeenLastCalledWith(21);
-      // 重查收敛为已接单状态，接单按钮随 isAccepted 消失
+      // 重查收敛为 MINE 视角，接单按钮随视角变化消失
       expect(result.current.state).toMatchObject({
         status: 'ready',
         detail: buildDetail(21, true),
       });
-      // 重查确认已接单：失败反馈收敛为成功，不再保留矛盾的“接单失败”提示
+      // 重查确认视角为 MINE：失败反馈收敛为成功，不再保留矛盾的“接单失败”提示
       expect(result.current.lastAcceptResult).toEqual({ ok: true, detail: buildDetail(21, true) });
       // 结果不确定只重查确认，不自动重发接单 Mutation
       expect(acceptMock).toHaveBeenCalledTimes(1);
       // 列表失效仅由接单 command 宣告一次，编排不重复宣告
       expect(invalidation.calls).toHaveLength(1);
+      invalidation.unsubscribe();
+      unmount();
+    });
+
+    it('重查发现视角为 TAKEN_BY_OTHER 时保留失败反馈，展示真实接单人不做乐观伪造', async () => {
+      // 竞争失败：接单被他人完成，Mutation 结果不确定，重查发现视角为 TAKEN_BY_OTHER
+      const takenByOtherDetail: EngineerRepairRequestDetail = {
+        ...buildDetail(21, true),
+        isAccepted: true,
+        acceptedAt: '2026-09-02T08:35:00.000Z',
+        customerNickname: '林客户',
+        customerCompanyName: '林氏精密制造',
+        acceptanceViewStatus: 'TAKEN_BY_OTHER',
+        acceptedEngineerNickname: '赵工',
+      };
+      acceptMock.mockResolvedValue(ACCEPT_FAILED_RESULT);
+      fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: buildDetail(21, false) });
+      fetchDetailMock.mockResolvedValueOnce({ ok: true, detail: takenByOtherDetail });
+      const invalidation = trackListInvalidation();
+      const { result, unmount } = await renderReadyFlow();
+
+      await act(async () => {
+        await result.current.accept();
+      });
+
+      await waitFor(() => expect(fetchDetailMock).toHaveBeenCalledTimes(2));
+      // 详情原子更新为重查结果：展示真实接单人（赵工）与接单时间，不伪造“我接单成功”
+      expect(result.current.state).toMatchObject({
+        status: 'ready',
+        detail: takenByOtherDetail,
+      });
+      // 视角不是 MINE：失败反馈不收敛为成功，保留供 UI 展示
+      expect(result.current.lastAcceptResult).toEqual(ACCEPT_FAILED_RESULT);
+      // 只重查确认，不自动重发接单 Mutation
+      expect(acceptMock).toHaveBeenCalledTimes(1);
       invalidation.unsubscribe();
       unmount();
     });

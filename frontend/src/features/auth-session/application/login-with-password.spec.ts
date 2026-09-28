@@ -11,6 +11,7 @@ const ENGINEER_SESSION: AuthSessionSnapshot = {
   role: 'ENGINEER',
   userInfo: {
     accessGroup: ['ENGINEER'],
+    avatarUrl: 'https://example.test/avatar/chen.png',
     nickname: '陈工',
   },
 };

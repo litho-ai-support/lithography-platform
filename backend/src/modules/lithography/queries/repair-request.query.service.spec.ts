@@ -1,7 +1,7 @@
 /// <reference types="jest" />
 import { PERMISSION_ERROR } from '@core/common/errors/domain-error';
 import { EngineerResolutionStatus } from '@app-types/models/repair-request.types';
-import { In, type Repository } from 'typeorm';
+import { In, Not, type Repository } from 'typeorm';
 import { EngineerResponseEntity } from '../entities/engineer-response.entity';
 import { EquipmentModelEntity } from '../entities/equipment-model.entity';
 import { RepairRequestEntity } from '../entities/repair-request.entity';
@@ -154,13 +154,29 @@ describe('RepairRequestQueryService', () => {
     });
   });
 
-  describe('listByEngineer', () => {
+  describe('listByEngineer 四态', () => {
+    it('ALL 范围仅约束未删除（默认全部）', async () => {
+      requestRepository.find.mockResolvedValue([]);
+
+      await service.listByEngineer({
+        engineerAccountId: 20,
+        scope: 'ALL',
+        filter: {},
+        pagination: { page: 1, pageSize: 10, withTotal: false },
+      });
+
+      expect(requestRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { deprecated: false } }),
+      );
+    });
+
     it('AVAILABLE 范围仅查询未删除且未接单的申请', async () => {
       requestRepository.find.mockResolvedValue([]);
 
       await service.listByEngineer({
         engineerAccountId: 20,
         scope: 'AVAILABLE',
+        filter: {},
         pagination: { page: 1, pageSize: 10, withTotal: false },
       });
 
@@ -169,18 +185,104 @@ describe('RepairRequestQueryService', () => {
       );
     });
 
-    it('MINE 范围仅查询本人已接单的申请', async () => {
+    it('MINE 范围查询未删除且本人已接单的申请', async () => {
       requestRepository.find.mockResolvedValue([]);
 
       await service.listByEngineer({
         engineerAccountId: 20,
         scope: 'MINE',
+        filter: {},
         pagination: { page: 1, pageSize: 10, withTotal: false },
       });
 
       expect(requestRepository.find).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { acceptedByEngineerAccountId: 20 } }),
+        expect.objectContaining({
+          where: { deprecated: false, acceptedByEngineerAccountId: 20 },
+        }),
       );
+    });
+
+    it('TAKEN_BY_OTHER 范围查询未删除且他人已接单的申请', async () => {
+      requestRepository.find.mockResolvedValue([]);
+
+      await service.listByEngineer({
+        engineerAccountId: 20,
+        scope: 'TAKEN_BY_OTHER',
+        filter: {},
+        pagination: { page: 1, pageSize: 10, withTotal: false },
+      });
+
+      expect(requestRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            deprecated: false,
+            isAccepted: true,
+            acceptedByEngineerAccountId: Not(20),
+          },
+        }),
+      );
+    });
+
+    it('设备型号与客户账号筛选进入 where，先筛选后分页计数', async () => {
+      requestRepository.find.mockResolvedValue([]);
+      requestRepository.count.mockResolvedValue(2);
+
+      await service.listByEngineer({
+        engineerAccountId: 20,
+        scope: 'ALL',
+        filter: { equipmentModelId: 5, customerAccountIds: [10, 11] },
+        pagination: { page: 2, pageSize: 5, withTotal: true },
+      });
+
+      expect(requestRepository.find).toHaveBeenCalledWith({
+        where: {
+          deprecated: false,
+          equipmentModelId: 5,
+          customerAccountId: In([10, 11]),
+        },
+        order: { createdAt: 'DESC', id: 'DESC' },
+        skip: 5,
+        take: 5,
+      });
+      expect(requestRepository.count).toHaveBeenCalledWith({
+        where: {
+          deprecated: false,
+          equipmentModelId: 5,
+          customerAccountId: In([10, 11]),
+        },
+      });
+    });
+
+    it('列表项批量装配机型/末条状态并携带归属账号 ID（供 usecase 富集，不直接对外）', async () => {
+      requestRepository.find.mockResolvedValue([
+        makeRequest({ id: 1 }),
+        makeRequest({
+          id: 2,
+          isAccepted: true,
+          acceptedByEngineerAccountId: 21,
+          acceptedAt: new Date('2026-08-31T00:00:00.000Z'),
+        }),
+      ]);
+      equipmentModelRepository.find.mockResolvedValue([makeModel()]);
+
+      const result = await service.listByEngineer({
+        engineerAccountId: 20,
+        scope: 'ALL',
+        filter: {},
+        pagination: { page: 1, pageSize: 10, withTotal: false },
+      });
+
+      expect(result.items[0]).toMatchObject({
+        id: 1,
+        equipmentModel: { id: 5, modelCode: 'LITHO-9000', modelName: '光刻机 9000' },
+        customerAccountId: 10,
+        acceptedByEngineerAccountId: null,
+      });
+      expect(result.items[1]).toMatchObject({
+        id: 2,
+        customerAccountId: 10,
+        acceptedByEngineerAccountId: 21,
+      });
     });
   });
 
@@ -211,7 +313,6 @@ describe('RepairRequestQueryService', () => {
         latestResolutionStatus: null,
         responses: [],
       });
-      expect(result).not.toHaveProperty('customerAccountId');
     });
 
     it('CUSTOMER 他人申请拒绝', async () => {
@@ -276,7 +377,7 @@ describe('RepairRequestQueryService', () => {
       ).resolves.toMatchObject({ isAccepted: true, acceptedAt: expect.any(Date) });
     });
 
-    it('ENGINEER 本人已接单的申请即使标记删除仍可读（对接方案权限矩阵：已接单分支不受软删除约束；写契约保证已接单不可删除，此例防口径漂移）', async () => {
+    it('ENGINEER 已删除申请统一不可读（含已接单场景；写契约保证已接单不可删除，此例防口径漂移）', async () => {
       requestRepository.findOne.mockResolvedValue(
         makeRequest({
           isAccepted: true,
@@ -285,22 +386,31 @@ describe('RepairRequestQueryService', () => {
           deletedAt: new Date(),
         }),
       );
-      equipmentModelRepository.findOne.mockResolvedValue(makeModel());
-      responseRepository.find.mockResolvedValue([]);
-
-      await expect(
-        service.findDetail({ requestId: 1, session: engineerSession, scope: 'ENGINEER' }),
-      ).resolves.toMatchObject({ id: 1, isAccepted: true });
-    });
-
-    it('ENGINEER 他人已接单的申请拒绝', async () => {
-      requestRepository.findOne.mockResolvedValue(
-        makeRequest({ isAccepted: true, acceptedByEngineerAccountId: 21 }),
-      );
 
       await expect(
         service.findDetail({ requestId: 1, session: engineerSession, scope: 'ENGINEER' }),
       ).rejects.toMatchObject({ code: PERMISSION_ERROR.ACCESS_DENIED });
+    });
+
+    it('ENGINEER 他人已接单的申请可读（只读视角，写权限由写用例独立拒绝）', async () => {
+      requestRepository.findOne.mockResolvedValue(
+        makeRequest({ isAccepted: true, acceptedByEngineerAccountId: 21 }),
+      );
+      equipmentModelRepository.findOne.mockResolvedValue(makeModel());
+      responseRepository.find.mockResolvedValue([]);
+
+      const result = await service.findDetail({
+        requestId: 1,
+        session: engineerSession,
+        scope: 'ENGINEER',
+      });
+
+      expect(result).toMatchObject({
+        id: 1,
+        isAccepted: true,
+        customerAccountId: 10,
+        acceptedByEngineerAccountId: 21,
+      });
     });
 
     it('SUPER_ADMIN 按角色继承可读未接单申请（负责人裁定 2：工程师入口）', async () => {
@@ -313,14 +423,16 @@ describe('RepairRequestQueryService', () => {
       ).resolves.toMatchObject({ id: 1 });
     });
 
-    it('SUPER_ADMIN 继承工程师身份仍不可读他人已接单申请', async () => {
+    it('SUPER_ADMIN 继承工程师身份可读他人已接单申请（读继承；写仍拒绝）', async () => {
       requestRepository.findOne.mockResolvedValue(
         makeRequest({ isAccepted: true, acceptedByEngineerAccountId: 21 }),
       );
+      equipmentModelRepository.findOne.mockResolvedValue(makeModel());
+      responseRepository.find.mockResolvedValue([]);
 
       await expect(
         service.findDetail({ requestId: 1, session: superAdminSession, scope: 'ENGINEER' }),
-      ).rejects.toMatchObject({ code: PERMISSION_ERROR.ACCESS_DENIED });
+      ).resolves.toMatchObject({ id: 1, isAccepted: true });
     });
 
     it('SUPER_ADMIN 客户入口仅见本人名下申请（超管无客户申请时不可见他人申请）', async () => {

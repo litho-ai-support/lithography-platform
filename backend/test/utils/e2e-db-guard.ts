@@ -10,6 +10,28 @@
  */
 import type { DataSource } from 'typeorm';
 
+/**
+ * 物理删除的显式清理许可开关名。
+ * 必须由执行者在启动前显式设置为 1：代码中不提供默认值，也不写入任何 npm script。
+ */
+export const E2E_PHYSICAL_CLEANUP_CONSENT_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
+
+/**
+ * 第二道独立门禁（纯校验）：物理删除前必须存在显式清理许可。
+ *
+ * 与库名白名单相互独立：本函数刻意不读取库名，`assertAllowedE2eDatabase` 也刻意不读取
+ * 本开关。两道门禁任一缺失都必须失败关闭，任何开关都不能替代或绕过另一道门禁。
+ */
+export const assertPhysicalCleanupConsent = (): void => {
+  if (process.env[E2E_PHYSICAL_CLEANUP_CONSENT_ENV] !== '1') {
+    throw new Error(
+      `拒绝执行物理删除：缺少显式清理许可 ${E2E_PHYSICAL_CLEANUP_CONSENT_ENV}=1。` +
+        `该开关必须由执行者在启动前显式设置为 1（不提供默认值，也不写入 npm script）；` +
+        `它与 E2E 库名白名单是两道互相独立的门禁，任一门禁缺失都必须在第一条删除语句前失败关闭。`,
+    );
+  }
+};
+
 /** 允许被 E2E 操作的库名白名单（逗号分隔，大小写不敏感；默认仅隔离测试库）。 */
 export const resolveAllowedE2eDatabases = (): string[] => {
   const raw = process.env.E2E_ALLOWED_DB_NAMES || 'lithography_e2e';

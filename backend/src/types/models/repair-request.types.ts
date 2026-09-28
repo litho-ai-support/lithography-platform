@@ -11,3 +11,17 @@ export enum EngineerResolutionStatus {
   PENDING = 'PENDING',
   RESOLVED = 'RESOLVED',
 }
+
+/**
+ * 接单状态视角（当前会话观看单条申请的事实分类，非数据库枚举）：
+ * - AVAILABLE：未接单（仅表示未接单事实，不代表当前会话可接单——
+ *   接单能力由写用例按精确 ENGINEER 身份独立裁决，SUPER_ADMIN 无接单写权限）；
+ * - MINE：接单工程师为当前会话账号；
+ * - TAKEN_BY_OTHER：已被其他账号接单（SUPER_ADMIN 视角下已接单一律归此类）。
+ * 由 usecase 依据会话账号与申请事实计算，客户端不可传入。
+ */
+export enum RepairRequestAcceptanceViewStatus {
+  AVAILABLE = 'AVAILABLE',
+  MINE = 'MINE',
+  TAKEN_BY_OTHER = 'TAKEN_BY_OTHER',
+}

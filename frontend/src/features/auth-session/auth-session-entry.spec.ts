@@ -32,7 +32,7 @@ describe('auth session entry', () => {
       accessToken: 'entry-access-token',
       accountId: 900201,
       role: 'CUSTOMER',
-      userInfo: { accessGroup: ['CUSTOMER'], nickname: '测试会话' },
+      userInfo: { accessGroup: ['CUSTOMER'], avatarUrl: null, nickname: '测试会话' },
     });
 
     expect(hasCurrentAuthSession()).toBe(true);

@@ -36,6 +36,7 @@ describe('AuthSessionPanel', () => {
       role: 'ENGINEER',
       userInfo: {
         accessGroup: ['ENGINEER'],
+        avatarUrl: null,
         nickname: '陈工',
       },
     });

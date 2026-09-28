@@ -46,6 +46,8 @@ function decodeUserSummary(value: unknown): AuthSessionUserSummary | null | unde
 
   return {
     accessGroup,
+    // 展示性字段，宽容解码：非字符串或缺失一律回落 null，绝不因此拒绝整份会话
+    avatarUrl: typeof value.avatarUrl === 'string' ? value.avatarUrl : null,
     nickname: value.nickname,
   };
 }

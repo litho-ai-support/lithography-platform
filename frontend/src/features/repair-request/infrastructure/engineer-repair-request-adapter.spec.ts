@@ -49,6 +49,10 @@ const DETAIL_DTO: RepairRequestDetailDTO = {
   isAccepted: true,
   acceptedAt: '2026-09-02T08:30:00.000Z',
   latestResolutionStatus: 'PENDING',
+  customerNickname: '林客户',
+  customerCompanyName: '林氏精密制造',
+  acceptanceViewStatus: 'MINE',
+  acceptedEngineerNickname: '陈工',
   responses: [
     {
       id: 51,
@@ -72,6 +76,10 @@ const DETAIL_MODEL = {
   isAccepted: true,
   acceptedAt: '2026-09-02T08:30:00.000Z',
   latestResolutionStatus: 'PENDING',
+  customerNickname: '林客户',
+  customerCompanyName: '林氏精密制造',
+  acceptanceViewStatus: 'MINE',
+  acceptedEngineerNickname: '陈工',
   responses: [
     {
       id: 51,
@@ -107,25 +115,82 @@ beforeEach(() => {
   executeGraphQLMock.mockReset();
 });
 
+const NO_FILTER = { equipmentModelId: null, customerNickname: null };
+
 describe('fetchEngineerRepairRequests', () => {
   it.each<[EngineerRepairListScope, number]>([
+    ['ALL', 1],
     ['AVAILABLE', 1],
     ['MINE', 3],
-  ])('scope=%s 时按该范围与页码发送 OFFSET 分页参数', async (scope, page) => {
+    ['TAKEN_BY_OTHER', 2],
+  ])('scope=%s 时按该范围与页码发送 OFFSET 分页参数，无筛选时 filter 缺省', async (scope, page) => {
     executeGraphQLMock.mockResolvedValue({
       engineerRepairRequests: { items: [], total: 0, page, pageSize: 10 },
     });
 
-    await fetchEngineerRepairRequests({ scope, page, pageSize: 10 });
+    await fetchEngineerRepairRequests({ scope, filter: NO_FILTER, page, pageSize: 10 });
 
     expect(executeGraphQLMock).toHaveBeenCalledTimes(1);
-    expect(executeGraphQLMock).toHaveBeenCalledWith(
-      expect.stringContaining('engineerRepairRequests(scope: $scope, pagination: $pagination)'),
-      {
-        scope,
-        pagination: { mode: 'OFFSET', page, pageSize: 10, withTotal: true },
-      },
+    const [document, variables] = executeGraphQLMock.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(document).toContain(
+      'engineerRepairRequests(scope: $scope, pagination: $pagination, filter: $filter)',
     );
+    expect(variables.scope).toBe(scope);
+    expect(variables.pagination).toEqual({ mode: 'OFFSET', page, pageSize: 10, withTotal: true });
+    // 无筛选时不携带 filter 键位值（undefined 键在 wire 序列化时整体缺省）
+    expect(variables.filter).toBeUndefined();
+  });
+
+  it('单项筛选只携带对应键位：设备型号等值筛选', async () => {
+    executeGraphQLMock.mockResolvedValue({
+      engineerRepairRequests: { items: [], total: 0, page: 1, pageSize: 10 },
+    });
+
+    await fetchEngineerRepairRequests({
+      scope: 'ALL',
+      filter: { equipmentModelId: 7, customerNickname: null },
+      page: 1,
+      pageSize: 10,
+    });
+
+    const [, variables] = executeGraphQLMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(variables.filter).toEqual({ equipmentModelId: 7 });
+  });
+
+  it('单项筛选只携带对应键位：客户昵称关键词筛选', async () => {
+    executeGraphQLMock.mockResolvedValue({
+      engineerRepairRequests: { items: [], total: 0, page: 1, pageSize: 10 },
+    });
+
+    await fetchEngineerRepairRequests({
+      scope: 'MINE',
+      filter: { equipmentModelId: null, customerNickname: '林客户' },
+      page: 1,
+      pageSize: 10,
+    });
+
+    const [, variables] = executeGraphQLMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(variables.filter).toEqual({ customerNickname: '林客户' });
+  });
+
+  it('组合筛选同时携带两项；空白昵称视为未筛选（归一在 UI 层完成后传入）', async () => {
+    executeGraphQLMock.mockResolvedValue({
+      engineerRepairRequests: { items: [], total: 0, page: 1, pageSize: 10 },
+    });
+
+    await fetchEngineerRepairRequests({
+      scope: 'ALL',
+      filter: { equipmentModelId: 7, customerNickname: '  林  ' },
+      page: 1,
+      pageSize: 10,
+    });
+
+    const [, variables] = executeGraphQLMock.mock.calls[0] as [string, Record<string, unknown>];
+    // adapter 只透传，不做二次清洗（与后端输入口径一致：空白语义由后端收敛）
+    expect(variables.filter).toEqual({ equipmentModelId: 7, customerNickname: '  林  ' });
   });
 
   it('列表 DTO 映射为内部模型，可空字段归一为 null', async () => {
@@ -141,6 +206,10 @@ describe('fetchEngineerRepairRequests', () => {
             isAccepted: true,
             acceptedAt: '2026-09-02T08:30:00.000Z',
             latestResolutionStatus: 'RESOLVED',
+            customerNickname: '林客户',
+            customerCompanyName: '林氏精密制造',
+            acceptanceViewStatus: 'MINE',
+            acceptedEngineerNickname: '陈工',
           },
           {
             // 待接单：后端返回 null / 字段缺省两种形态都必须归一为 null
@@ -151,6 +220,9 @@ describe('fetchEngineerRepairRequests', () => {
             createdAt: '2026-09-02T08:10:00.000Z',
             isAccepted: false,
             acceptedAt: null,
+            customerNickname: '赵客户',
+            customerCompanyName: null,
+            acceptanceViewStatus: 'AVAILABLE',
           },
         ],
         total: 2,
@@ -160,7 +232,12 @@ describe('fetchEngineerRepairRequests', () => {
     });
 
     await expect(
-      fetchEngineerRepairRequests({ scope: 'AVAILABLE', page: 1, pageSize: 10 }),
+      fetchEngineerRepairRequests({
+        scope: 'AVAILABLE',
+        filter: NO_FILTER,
+        page: 1,
+        pageSize: 10,
+      }),
     ).resolves.toEqual({
       items: [
         {
@@ -172,6 +249,10 @@ describe('fetchEngineerRepairRequests', () => {
           isAccepted: true,
           acceptedAt: '2026-09-02T08:30:00.000Z',
           latestResolutionStatus: 'RESOLVED',
+          customerNickname: '林客户',
+          customerCompanyName: '林氏精密制造',
+          acceptanceViewStatus: 'MINE',
+          acceptedEngineerNickname: '陈工',
         },
         {
           id: 22,
@@ -182,6 +263,10 @@ describe('fetchEngineerRepairRequests', () => {
           isAccepted: false,
           acceptedAt: null,
           latestResolutionStatus: null,
+          customerNickname: '赵客户',
+          customerCompanyName: null,
+          acceptanceViewStatus: 'AVAILABLE',
+          acceptedEngineerNickname: null,
         },
       ],
       total: 2,
@@ -194,7 +279,12 @@ describe('fetchEngineerRepairRequests', () => {
     executeGraphQLMock.mockResolvedValue({ engineerRepairRequests: {} });
 
     await expect(
-      fetchEngineerRepairRequests({ scope: 'MINE', page: 2, pageSize: 20 }),
+      fetchEngineerRepairRequests({
+        scope: 'MINE',
+        filter: NO_FILTER,
+        page: 2,
+        pageSize: 20,
+      }),
     ).resolves.toEqual({ items: [], total: 0, page: 2, pageSize: 20 });
   });
 });
@@ -213,19 +303,30 @@ describe('fetchEngineerRepairRequestDetail', () => {
     );
   });
 
-  it('可空字段与缺省 responses 归一（null / 空时间线）', async () => {
+  it('可空字段与缺省 responses 归一（null / 空时间线 / 富集字段缺失）', async () => {
     executeGraphQLMock.mockResolvedValue({
       engineerRepairRequest: {
         ...DETAIL_DTO,
         acceptedAt: null,
         latestResolutionStatus: null,
+        customerNickname: null,
+        customerCompanyName: null,
+        acceptanceViewStatus: null,
+        acceptedEngineerNickname: null,
       },
     });
 
     const result = await fetchEngineerRepairRequestDetail(21);
     expect(result).toMatchObject({
       ok: true,
-      detail: { acceptedAt: null, latestResolutionStatus: null },
+      detail: {
+        acceptedAt: null,
+        latestResolutionStatus: null,
+        customerNickname: null,
+        customerCompanyName: null,
+        acceptanceViewStatus: null,
+        acceptedEngineerNickname: null,
+      },
     });
 
     executeGraphQLMock.mockResolvedValue({

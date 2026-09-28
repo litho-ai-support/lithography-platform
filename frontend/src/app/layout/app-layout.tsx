@@ -242,8 +242,12 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
           {session ? (
             <div className="app-user-card">
               {!isNavCollapsed ? (
-                /* 头像取真实会话昵称首字符（装饰性，aria-hidden）；无假身份信息 */
-                <span aria-hidden="true" className="app-user-card-avatar">
+                /* 头像取真实会话昵称首字符（装饰性，aria-hidden）；无假身份信息。
+                   视觉配方来自公共 .user-avatar（基准表 2.2/2.4），尺寸档 --md = 38×38 */
+                <span
+                  aria-hidden="true"
+                  className="app-user-card-avatar user-avatar user-avatar--md"
+                >
                   {(session.userInfo?.nickname ?? '用户').trim().charAt(0).toUpperCase()}
                 </span>
               ) : null}

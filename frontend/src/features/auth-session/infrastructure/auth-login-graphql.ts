@@ -16,6 +16,7 @@ const LOGIN_WITH_PASSWORD_MUTATION = [
   '    userInfo {',
   '      nickname',
   '      accessGroup',
+  '      avatarUrl',
   '    }',
   '  }',
   '}',

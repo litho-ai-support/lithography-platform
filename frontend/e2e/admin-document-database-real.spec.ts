@@ -6,9 +6,10 @@
 // 940006~940011，SYSTEM/USER/ASSISTANT/TOOL 三轮完整覆盖）、AI 报告
 // 950001~950002、参考资料 970001~970003（970002 含下载入口）。
 // 分页用例以本次运行唯一故障码（RUN_ID）自建 12 行跑满两页，try 从首笔写入前
-// 开始、逐笔记录精确 ID，finally 经 deleteMyRepairRequest 逐 ID 幂等软删（清理失败
-// 归并进 primaryError 让测试转红），共享开发库不做物理删除（与
-// reference-document-real.spec 同一安全边界）。
+// 开始、逐笔记录创建响应的精确 ID 与编号（连同本轮输入事实形成目标记录），finally 经
+// deleteMyRepairRequest 逐 ID 幂等软删（清理失败归并进 primaryError 让测试转红）；
+// 共享开发库不做物理删除（与 reference-document-real.spec 同一安全边界），仅当目标库严格为
+// lithography_e2e 且显式授权物理清理时，才按同一批精确 ID 物理删除，避免残留污染官方 Mock Seed。
 // 前提不满足（无本地后端 / 无 env / 无前端真实通道）时用例自动跳过，不阻塞。
 //
 // 断言作用域注意：Tabs 非激活面板保持挂载（仅隐藏），因此所有标签内
@@ -18,11 +19,15 @@
 import { expect, type Page, test } from '@playwright/test';
 
 import {
+  deleteRepairRequestRowsByIds,
   hasFrontendGraphQLEndpoint,
+  isPhysicalCleanupEnabled,
   isRealBackendAvailable,
   readBackendEnv,
   readBackendEnvOrNull,
   realGraphqlCall,
+  realLoginAccountId,
+  REQUEST_NO_PATTERN,
 } from './helpers/real-backend';
 
 const PAGE_PATH = '/admin/document-database';
@@ -48,6 +53,21 @@ const SEED_INTERIM_REPORT_TITLE = '扫描台位置误差阶段性分析'; // 950
 const RUN_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 const RUN_ERROR_CODE = `E2EADM-${RUN_ID}`;
 const RUN_REQUEST_COUNT = 12; // pageSize 10 → 第 1 页 10 行 + 第 2 页 2 行
+
+/** 第 index 笔自建行的故障描述：本轮输入事实，一并与创建响应记录形成清理目标 */
+function runFaultDescription(index: number): string {
+  return `PR3 S4 分页夹具 #${index + 1}`;
+}
+
+/**
+ * 本次运行自建行的清理目标记录：id / requestNo 取创建响应，faultDescription 取本轮输入。
+ * 物理清理的预期事实一律来自这里，不回读目标行（否则核验退化为自证）。
+ */
+type CreatedRunRequest = {
+  id: number;
+  requestNo: string;
+  faultDescription: string;
+};
 
 // ---- GraphQL（Node 侧夹具准备 / 清理 / 对照） ----
 
@@ -114,8 +134,10 @@ async function loginAs(
   await expect(page).toHaveURL(landingPath);
 }
 
-/** 按唯一故障码反查本次运行自建行的精确 ID 列表（管理员视角） */
-async function listRunRequestIds(env: Record<string, string>): Promise<number[]> {
+/** 按唯一故障码反查本次运行自建行的精确 ID 与编号（管理员视角）——归属核实的依据 */
+async function listRunRequests(
+  env: Record<string, string>,
+): Promise<Array<{ id: number; requestNo: string }>> {
   const { body } = await realGraphqlCall(
     env,
     ADMIN_REPAIR_LIST_QUERY,
@@ -125,29 +147,49 @@ async function listRunRequestIds(env: Record<string, string>): Promise<number[]>
     },
     'mock_super_admin',
   );
-  const items = (body as { data?: { adminRepairRequests?: { items?: Array<{ id: number }> } } })
-    .data?.adminRepairRequests?.items;
+  const items = (
+    body as {
+      data?: { adminRepairRequests?: { items?: Array<{ id: number; requestNo: string }> } };
+    }
+  ).data?.adminRepairRequests?.items;
 
-  return (items ?? []).map((item) => item.id);
+  return (items ?? []).map((item) => ({ id: item.id, requestNo: item.requestNo }));
 }
 
 /**
- * 分页夹具清理（S4-01）：删除目标取「本次记录的精确 ID」∩「按运行唯一故障码反查的
- * 可见行」的并集——反查作为安全网，兜住创建中途抛错、ID 尚未记录但行已落库的情况。
- * 逐条幂等软删（deleteMyRepairRequest）后再反查确认可见行为零。任一环节失败即
- * 抛出，由用例 finally 归并到 primaryError——主断言通过而清理失败时让测试转红，
- * 主断言已失败时保留原始失败原因不被掩盖。共享开发库只软删不物理删除
- * （与 reference-document-real.spec 同边界）。
+ * 分页夹具清理（S4-01）：软删目标取「本次记录的精确 ID」∪「按运行唯一故障码反查的可见行」，
+ * 反查作为安全网兜住创建中途抛错、ID 尚未记录但行已落库的情况。逐条幂等软删
+ * （deleteMyRepairRequest）后再反查确认可见行为零。任一环节失败即抛出，由用例 finally
+ * 归并到 primaryError——主断言通过而清理失败时让测试转红，主断言已失败时保留原始失败原因不被掩盖。
+ *
+ * 物理清理边界（负责人最小修复计划 P2）：
+ * - 预期事实一律取创建响应与本轮输入记录（编号 / 客户账号 / 故障码 / 设备型号 / 故障描述），
+ *   绝不回填反查所得编号（否则核验退化为自证，编号与创建记录不符也永远不会被发现）；
+ *   反查只保留为「发现遗漏残留」的辅助步骤与软删安全网；
+ * - 创建响应未记录的行（创建中途抛错）不进物理删除目标，只走反查软删兜底，避免用猜测事实删行；
+ * - 共享开发库只软删不物理删除（与 reference-document-real.spec 同边界）；仅当目标库严格为
+ *   lithography_e2e 且执行者显式授权（E2E_ALLOW_PHYSICAL_CLEANUP=1）时才物理删除，
+ *   保证不残留影响官方 Mock Seed 计数校验。绝不按编号前缀/行数/猜测 ID 删除。
+ * - 受保护 helper 在同一连接同一事务内 FOR UPDATE 核验目标行的五项事实与子记录引用、
+ *   删除后再核验残留为零，任一不达标即回滚报错（编号与创建记录不符同样命中 field_mismatch_rows，
+ *   事务在 DELETE 之前中止，不提交删除）。
  */
 async function cleanupRunRequests(
   env: Record<string, string>,
-  createdIds: readonly number[],
+  createdRows: readonly CreatedRunRequest[],
+  expected: { customerAccountId: number; equipmentModelId: number },
 ): Promise<void> {
   const failures: string[] = [];
-  const reverseFound = await listRunRequestIds(env);
-  const targets = Array.from(new Set([...createdIds, ...reverseFound]));
+  // 反查必须在软删前完成：软删后这些行对该筛选不可见，遗漏残留无从发现。
+  // 反查边界是本次运行唯一故障码（RUN_ERROR_CODE），仅用于软删安全网与残留发现。
+  const discovered = await listRunRequests(env);
 
-  for (const id of targets) {
+  // 软删（可逆）沿用既有边界：记录 ID ∪ 反查 ID
+  const softDeleteTargets = Array.from(
+    new Set([...createdRows.map((row) => row.id), ...discovered.map((item) => item.id)]),
+  );
+
+  for (const id of softDeleteTargets) {
     try {
       const response = await realGraphqlCall(
         env,
@@ -164,10 +206,31 @@ async function cleanupRunRequests(
     }
   }
 
-  const remaining = await listRunRequestIds(env);
+  const remaining = await listRunRequests(env);
 
   if (remaining.length > 0) {
-    failures.push(`清理后仍可见自建行：${remaining.join(',')}`);
+    failures.push(`清理后仍可见自建行：${remaining.map((item) => item.id).join(',')}`);
+  }
+
+  // 物理删除（不可逆）只针对创建时已记录精确事实的行，预期值全部来自创建响应与本轮输入
+  const physicalTargets = createdRows.map((row) => ({
+    id: row.id,
+    expected: {
+      requestNo: row.requestNo,
+      customerAccountId: expected.customerAccountId,
+      errorCode: RUN_ERROR_CODE,
+      equipmentModelId: expected.equipmentModelId,
+      faultDescription: row.faultDescription,
+    },
+  }));
+
+  if (isPhysicalCleanupEnabled(env)) {
+    try {
+      // 受安全门保护的 helper（内部复查授权 + 库名门 + 事务内核验与残留核验），失败即抛错
+      deleteRepairRequestRowsByIds(physicalTargets);
+    } catch (error) {
+      failures.push(`自建申请物理清理失败：${(error as Error).message}`);
+    }
   }
 
   if (failures.length > 0) {
@@ -343,7 +406,8 @@ test.describe('real backend admin document database', () => {
   });
 
   // 计划表 S4.5 分页：共享库 seed 行数不足一页，用运行唯一故障码自建 12 行
-  // 跑满两页断言翻页与真实 total；finally 按 API 反查的精确 ID 幂等软删清理
+  // 跑满两页断言翻页与真实 total；finally 按创建响应记录的精确 ID 幂等软删清理，
+  // 反查仅作发现遗漏残留的辅助步骤
   test('分页：运行唯一故障码自建 12 行跑满两页（清理后筛选归零）', async ({ page }) => {
     test.setTimeout(120_000);
     const env = readBackendEnv();
@@ -360,12 +424,17 @@ test.describe('real backend admin document database', () => {
     const modelId = models?.[0]?.id;
     expect(modelId).toBeDefined();
 
-    const createdIds: number[] = [];
+    // 物理清理的预期事实之一：客户甲账号 ID（JWT 口径，本轮测试自身掌握）。留在 try 外，
+    // 让清理兜底不依赖网络调用。
+    const customerAccountId = await realLoginAccountId(env);
+
+    const createdRows: CreatedRunRequest[] = [];
     let primaryError: unknown = null;
 
     // S4-01：try 覆盖「首笔写入 → 页面断言」全程，任何一步失败都进入统一 finally 清理
     try {
       for (let index = 0; index < RUN_REQUEST_COUNT; index += 1) {
+        const faultDescription = runFaultDescription(index);
         const created = await realGraphqlCall(
           env,
           CREATE_REQUEST_MUTATION,
@@ -373,17 +442,26 @@ test.describe('real backend admin document database', () => {
             input: {
               equipmentModelId: modelId,
               errorCode: RUN_ERROR_CODE,
-              faultDescription: `PR3 S4 分页夹具 #${index + 1}`,
+              faultDescription,
             },
           },
           'mock_customer_alpha',
         );
         expect((created.body as { errors?: unknown[] }).errors).toBeUndefined();
-        const createdId = (created.body as { data?: { createRepairRequest?: { id: number } } }).data
-          ?.createRepairRequest?.id;
-        // 创建成功即记录精确 ID（Playwright expect 无 toBeTypeOf，用 toBeGreaterThan 断正整数）
-        expect(createdId).toBeGreaterThan(0);
-        createdIds.push(createdId as number);
+        const createdRecord = (
+          created.body as {
+            data?: { createRepairRequest?: { id: number; requestNo: string } };
+          }
+        ).data?.createRepairRequest;
+        // 创建成功即记录精确 ID 与本次创建事实（Playwright expect 无 toBeTypeOf，用 toBeGreaterThan 断正整数）；
+        // 编号取创建响应而非事后反查，物理清理的预期值由此而来。
+        expect(createdRecord?.id).toBeGreaterThan(0);
+        expect(createdRecord?.requestNo).toMatch(REQUEST_NO_PATTERN);
+        createdRows.push({
+          id: createdRecord?.id as number,
+          requestNo: createdRecord?.requestNo as string,
+          faultDescription,
+        });
       }
 
       await loginAs(page, env, 'mock_super_admin', /\/admin$/);
@@ -407,7 +485,10 @@ test.describe('real backend admin document database', () => {
       primaryError = error;
     } finally {
       try {
-        await cleanupRunRequests(env, createdIds);
+        await cleanupRunRequests(env, createdRows, {
+          customerAccountId,
+          equipmentModelId: modelId as number,
+        });
       } catch (cleanupError) {
         // 主断言已通过时清理失败才让测试转红；否则保留原始失败原因不被掩盖
         if (primaryError === null) {

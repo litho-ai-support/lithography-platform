@@ -18,7 +18,20 @@ test('anonymous engineer visit completes the public login flow and returns to th
       };
     };
 
-    expect(payload.query).toContain('mutation LoginWithPassword');
+    // 登录成功后目标页（工程师首页）会发出首页工作台查询（PR4 真实数据化）；
+    // handler 按 operation 分派：仅登录 Mutation 执行登录断言与响应，
+    // 其余查询返回空列表 mock，避免业务请求挤进登录断言
+    if (!payload.query?.includes('mutation LoginWithPassword')) {
+      await route.fulfill({
+        body: JSON.stringify({
+          data: { engineerRepairRequests: { items: [], total: 0, page: 1, pageSize: 10 } },
+        }),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
     expect(payload.variables?.input).toMatchObject({
       audience: 'SSTSWEB',
       loginName: 'mock_engineer_chen',

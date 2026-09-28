@@ -31,6 +31,7 @@ const ENGINEER_SESSION: AuthSessionSnapshot = {
   role: 'ENGINEER',
   userInfo: {
     accessGroup: ['ENGINEER'],
+    avatarUrl: 'https://example.test/avatar/chen.png',
     nickname: '陈工',
   },
 };
@@ -125,6 +126,7 @@ describe('auth session store', () => {
       expect(session?.accountId).toBe(ENGINEER_SESSION.accountId);
       expect(session?.role).toBe(ENGINEER_SESSION.role);
       expect(session?.userInfo?.accessGroup).toEqual(ENGINEER_SESSION.userInfo?.accessGroup);
+      expect(session?.userInfo?.avatarUrl).toBe(ENGINEER_SESSION.userInfo?.avatarUrl);
       expect(session?.userInfo?.nickname).toBe('同步后的昵称');
       expect(getStoredSession()).toEqual(session);
     });

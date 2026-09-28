@@ -23,6 +23,7 @@ import type {
   CreateEngineerResponseFailureReason,
   CreateEngineerResponseInput,
   CreateEngineerResponseResult,
+  EngineerRepairListFilter,
   EngineerRepairListQuery,
   EngineerRepairRequestDetail,
   EngineerRepairRequestDetailFailureReason,
@@ -40,8 +41,8 @@ import type {
 } from './engineer-repair-request.types';
 
 const ENGINEER_REPAIR_REQUESTS_QUERY = `
-  query EngineerRepairRequests($scope: String!, $pagination: PaginationArgs!) {
-    engineerRepairRequests(scope: $scope, pagination: $pagination) {
+  query EngineerRepairRequests($scope: String!, $pagination: PaginationArgs!, $filter: EngineerRepairRequestFilterInput) {
+    engineerRepairRequests(scope: $scope, pagination: $pagination, filter: $filter) {
       items {
         id
         requestNo
@@ -51,6 +52,10 @@ const ENGINEER_REPAIR_REQUESTS_QUERY = `
         isAccepted
         acceptedAt
         latestResolutionStatus
+        customerNickname
+        customerCompanyName
+        acceptanceViewStatus
+        acceptedEngineerNickname
       }
       total
       page
@@ -72,6 +77,10 @@ const ENGINEER_REPAIR_REQUEST_DETAIL_QUERY = `
       isAccepted
       acceptedAt
       latestResolutionStatus
+      customerNickname
+      customerCompanyName
+      acceptanceViewStatus
+      acceptedEngineerNickname
       responses {
         id
         engineerNickname
@@ -96,6 +105,10 @@ const ACCEPT_REPAIR_REQUEST_MUTATION = `
       isAccepted
       acceptedAt
       latestResolutionStatus
+      customerNickname
+      customerCompanyName
+      acceptanceViewStatus
+      acceptedEngineerNickname
       responses {
         id
         engineerNickname
@@ -253,6 +266,11 @@ function mapListItemDTO(dto: RepairRequestListItemDTO): EngineerRepairRequestLis
     isAccepted: dto.isAccepted,
     acceptedAt: dto.acceptedAt ?? null,
     latestResolutionStatus: dto.latestResolutionStatus ?? null,
+    // 工程师入口富集字段：昵称/公司可空收拢为 null，视角状态由后端保证非空
+    customerNickname: dto.customerNickname,
+    customerCompanyName: dto.customerCompanyName ?? null,
+    acceptanceViewStatus: dto.acceptanceViewStatus,
+    acceptedEngineerNickname: dto.acceptedEngineerNickname ?? null,
   };
 }
 
@@ -270,13 +288,38 @@ function mapDetailDTO(dto: RepairRequestDetailDTO): EngineerRepairRequestDetail 
     latestResolutionStatus: dto.latestResolutionStatus ?? null,
     // 防腐兜底：可空/缺省字段归一，不假设后端字段必达（infrastructure-rules.md）
     responses: (dto.responses ?? []).map(mapResponseDTO),
+    // 工程师入口富集字段：缺失时收拢为 null，UI 按只读失败关闭处理
+    customerNickname: dto.customerNickname ?? null,
+    customerCompanyName: dto.customerCompanyName ?? null,
+    acceptanceViewStatus: dto.acceptanceViewStatus ?? null,
+    acceptedEngineerNickname: dto.acceptedEngineerNickname ?? null,
   };
 }
 
 /* ------------------------------ 查询 ------------------------------ */
 
 /**
- * 查询工程师维修申请列表（scope = AVAILABLE 待接单 / MINE 我的接单）。
+ * 构造 GraphQL filter 变量：两项都未筛选时整体缺省，
+ * 部分筛选时只携带非空键（不向下游传显式 null 键位）
+ */
+function toFilterVariables(filter: EngineerRepairListFilter): {
+  equipmentModelId?: number;
+  customerNickname?: string;
+} {
+  const variables: { equipmentModelId?: number; customerNickname?: string } = {};
+
+  if (filter.equipmentModelId !== null) {
+    variables.equipmentModelId = filter.equipmentModelId;
+  }
+  if (filter.customerNickname !== null) {
+    variables.customerNickname = filter.customerNickname;
+  }
+
+  return variables;
+}
+
+/**
+ * 查询工程师维修申请列表（scope 四态 + 可选设备型号/客户昵称筛选，后端分页前过滤）。
  * transport / auth 失败上抛 GraphQLIngressError，由 application 转用户提示或交全局链路。
  */
 export async function fetchEngineerRepairRequests(
@@ -288,10 +331,19 @@ export async function fetchEngineerRepairRequests(
     pageSize: query.pageSize,
     withTotal: true,
   };
+  const filterVariables = toFilterVariables(query.filter);
   const data = await executeGraphQL<
     EngineerRepairRequestsData,
-    { scope: string; pagination: RepairRequestPaginationVariables }
-  >(ENGINEER_REPAIR_REQUESTS_QUERY, { scope: query.scope, pagination });
+    {
+      scope: string;
+      pagination: RepairRequestPaginationVariables;
+      filter?: { equipmentModelId?: number; customerNickname?: string };
+    }
+  >(ENGINEER_REPAIR_REQUESTS_QUERY, {
+    scope: query.scope,
+    pagination,
+    filter: Object.keys(filterVariables).length > 0 ? filterVariables : undefined,
+  });
   const page = data.engineerRepairRequests;
 
   // 防腐兜底：分页字段缺省时回落查询参数，不向 application 泄出 undefined

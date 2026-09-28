@@ -42,6 +42,10 @@ const ACCEPTED_DETAIL: EngineerRepairRequestDetail = {
   isAccepted: true,
   acceptedAt: '2026-09-02T08:30:00.000Z',
   latestResolutionStatus: null,
+  customerNickname: '林客户',
+  customerCompanyName: '林氏精密制造',
+  acceptanceViewStatus: 'MINE',
+  acceptedEngineerNickname: '陈工',
   responses: [],
 };
 

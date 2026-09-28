@@ -32,6 +32,7 @@ function serializeAuthSession(session: AuthSessionSnapshot): string {
     userInfo: session.userInfo
       ? {
           accessGroup: [...session.userInfo.accessGroup],
+          avatarUrl: session.userInfo.avatarUrl,
           nickname: session.userInfo.nickname,
         }
       : null,

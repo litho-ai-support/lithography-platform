@@ -81,6 +81,18 @@
   --empty-bg: #f8fafc;
   --empty-border: #cbd5e1;
   --empty-text: #94a3b8;
+  /* 工程师工作台条目交互色（PR4 收口；原型 gkj .activity-request，取值见基准表 2.4 节）：
+     常态 / 悬停 / 选中三态；快捷入口原型无对应卡片，按同一组交互色沿用 */
+  --activity-item-bg: #f8fafc;
+  --activity-item-hover-bg: #eff6ff;
+  --activity-item-hover-border: #bfdbfe;
+  --activity-item-active-bg: #eaf2ff;
+  --activity-item-active-border: #93c5fd;
+  --activity-item-active-ring: 0 0 0 2px rgba(59, 130, 246, 0.08);
+  /* 跨页共享中性工具控件（工程师维修申请列表 + 知识库页同一外观）的文字色：
+     同值既有 token 只有 muted / strong 两档，故新增这两档 */
+  --control-text-body: #334155;
+  --control-text-tool: #475569;
   /* 按钮半径规则（原型 rounded-lg/rounded-md/rounded-full 实测，第三轮 Review S2 定 rules）：
      组件按语义消费变量，禁止散落魔法数或依赖 AntD 默认值；AntD 侧镜像见 src/app/theme/index.ts
      （borderRadius=--radius-action、borderRadiusSM=--radius-control，两处必须同步修改） */
@@ -426,8 +438,11 @@ body {
   min-width: 0;
 }
 
-/* 用户卡头像：真实会话昵称首字符，渐变蓝底与主色描边对齐基准身份块 */
-.app-user-card-avatar {
+/* 用户头像公共视觉配方（基准表 2.2 / 2.4）：渐变蓝底 + 1px --avatar-border 描边 +
+   12px 圆角 + 主色 active 首字符。导航栏用户卡与工程师信息条共用本配方，
+   尺寸由 --md（导航 38×38）/ --lg（工程师信息条 40×40）档位决定；
+   有真实 avatarUrl 时同一元素渲染 <img>，object-fit: cover 复用本配方几何。 */
+.user-avatar {
   align-items: center;
   background: var(--avatar-gradient);
   border: 1px solid var(--avatar-border);
@@ -437,9 +452,18 @@ body {
   flex: 0 0 auto;
   font-size: 0.75rem;
   font-weight: 800;
-  height: 38px;
   justify-content: center;
+  object-fit: cover;
+}
+
+.user-avatar--md {
+  height: 38px;
   width: 38px;
+}
+
+.user-avatar--lg {
+  height: 40px;
+  width: 40px;
 }
 
 .app-user-card-info {
@@ -568,6 +592,117 @@ body {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+/* ===== 跨页共享的中性工具控件（PR4 收口）=====
+   工程师维修申请列表与知识库页共用同一外观：中性基座承载取值，.kb-* 变体保留
+   为管理员页覆盖层。两处当前渲染结果相同；若日后分叉，必须同步更新基准表，
+   不得只改一边。本区规则必须位于知识库区段之前（同为单类选择器，后者胜出）。 */
+.toolbar-search {
+  align-items: center;
+  background: var(--filter-bar-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-control);
+  display: flex;
+  flex: 1;
+  height: 2.25rem;
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.toolbar-search svg {
+  color: var(--empty-text);
+  flex-shrink: 0;
+  height: 1rem;
+  margin-right: 8px;
+  width: 1rem;
+}
+
+.toolbar-search input {
+  background: transparent;
+  border: 0;
+  color: var(--control-text-body);
+  flex: 1;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  min-width: 0;
+  outline: none;
+  padding: 0;
+}
+
+.toolbar-search input::placeholder {
+  color: var(--empty-text);
+}
+
+.toolbar-button {
+  background: var(--ant-color-bg-container);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-control);
+  color: var(--control-text-tool);
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  height: 2.25rem;
+  padding: 0 12px;
+}
+
+/* 有生效筛选时：文字与边框转主蓝（原型无此态，属业务扩展） */
+.toolbar-button--active {
+  border-color: var(--ant-color-primary);
+  color: var(--ant-color-primary);
+}
+
+/* 主搜索框清除按钮（有输入时出现；原型无清除，属可用性保留） */
+.toolbar-search-clear {
+  background: transparent;
+  border: 0;
+  color: var(--empty-text);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 0.875rem;
+  line-height: 1;
+  margin-left: 8px;
+  padding: 0;
+}
+
+.toolbar-search-clear:hover {
+  color: var(--control-text-tool);
+}
+
+/* ===== 工程师工作台条目交互（PR4）=====
+   待接单条目三态由 aria-current 表达；快捷入口与条目共用同一组交互色，
+   两者键盘焦点共用同一焦点环。取值集中登记在基准表第 2.4 节。 */
+.activity-item,
+.quick-entry {
+  background: var(--activity-item-bg);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.activity-item:hover,
+.quick-entry:hover {
+  background: var(--activity-item-hover-bg);
+  border-color: var(--activity-item-hover-border);
+}
+
+.activity-item[aria-current='true'] {
+  background: var(--activity-item-active-bg);
+  border-color: var(--activity-item-active-border);
+  box-shadow: var(--activity-item-active-ring);
+}
+
+.activity-item:focus-visible,
+.quick-entry:focus-visible {
+  outline: 2px solid var(--ant-color-primary);
+  outline-offset: 2px;
+}
+
+/* 申请编号：原型 .request-code 用主色 active 档，非 --ant-color-primary */
+.activity-item-code {
+  color: var(--ant-color-primary-active);
 }
 
 /* ===== 知识库页 opt-in 变体（PR3 R7；仅 /admin/document-database 消费）=====

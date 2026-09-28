@@ -276,13 +276,19 @@ E2E_ALLOW_DB_CLEANUP=1
 
 此外，全局清理**永不清空 Migration 执行记录表**（`migrations`），保证 schema 版本可追溯；`DB_SYNCHRONIZE` 必须保持 `false`。用例内部清理只按本用例创建的主键精确回收，不整表删除业务数据。
 
+**用例级物理删除的第二道独立门禁**（`test/utils/e2e-db-guard.ts` 的 `assertPhysicalCleanupConsent`）：维修申请等会调用夹具物理清理入口的 spec，除了库名白名单外，还必须在启动前**由执行者显式**设置 `E2E_ALLOW_PHYSICAL_CLEANUP=1`。该开关：
+
+- 只接受字面量 `1`，缺失或取其它值（`true`/`0`/`yes`/…）一律在任何删除语句之前失败关闭；
+- 与库名白名单是两道**互相独立、互不替代**的门禁——许可函数不读取库名，库名函数也不读取许可，任一缺失都不能放行，任何开关也不能绕过另一道；
+- 不写入任何 npm script，也**不放进 `env/.env.e2e` 模板**，必须由执行者在每次运行前显式导出（例如 `$env:E2E_ALLOW_PHYSICAL_CLEANUP=1` / `E2E_ALLOW_PHYSICAL_CLEANUP=1 npm run …`），以免被环境文件自动带上而失去“显式同意”的含义。
+
 ### 10.5 执行
 
 ```powershell
-# 全量 core 组
-npm run test:e2e:core
+# 全量 core 组（core 组内的维修申请 spec 会做夹具物理清理，须显式携带清理许可）
+$env:E2E_ALLOW_PHYSICAL_CLEANUP=1; npm run test:e2e:core
 # 或单个文件
-npm run test:e2e:file -- test/10-admin-document-database/admin-document-database.e2e-spec.ts
+$env:E2E_ALLOW_PHYSICAL_CLEANUP=1; npm run test:e2e:file -- test/10-admin-document-database/admin-document-database.e2e-spec.ts
 ```
 
 ## 11. 常见问题

@@ -6,7 +6,7 @@ import { hasRole } from '@core/account/policy/role-access.policy';
 import { DomainError, PERMISSION_ERROR } from '@core/common/errors/domain-error';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, In, Repository } from 'typeorm';
+import { FindOptionsWhere, In, Not, Repository } from 'typeorm';
 import { EngineerResponseEntity } from '../entities/engineer-response.entity';
 import { EquipmentModelEntity } from '../entities/equipment-model.entity';
 import { RepairRequestEntity } from '../entities/repair-request.entity';
@@ -15,6 +15,9 @@ import {
   EquipmentModelView,
   RepairRequestDetailQueryResult,
   RepairRequestDetailReadScope,
+  RepairRequestEngineerListFilterInternal,
+  RepairRequestEngineerListItemQueryResult,
+  RepairRequestEngineerListQueryPage,
   RepairRequestEngineerListScope,
   RepairRequestListItemView,
   RepairRequestListPage,
@@ -24,12 +27,18 @@ import {
 /** 列表固定排序：创建时间倒序，次级主键倒序（对接方案第二节） */
 const LIST_ORDER = { createdAt: 'DESC', id: 'DESC' } as const;
 
+/** 列表装配批量读取上下文：机型映射 + 申请维度最新处理状态（一次批量读取） */
+type ListItemAssembleContext = {
+  modelById: Map<number, EquipmentModelEntity>;
+  latestStatusByRequestId: Map<number, EngineerResponseEntity['resolutionStatus']>;
+};
+
 /**
  * 维修申请读侧查询服务
  *
  * 职责范围：
  * - 客户维度有效申请列表（仅本人、未删除）
- * - 工程师两范围列表（待接单 / 本人已接单）
+ * - 工程师四态列表（ALL / AVAILABLE / MINE / TAKEN_BY_OTHER，含设备与客户账号筛选）
  * - 客户与工程师详情（含回复时间线、机型、最新处理状态；按入口 scope 限定有效身份）
  * - 细粒度读权限判定（对接方案第三节权限矩阵 + 负责人 20260901 裁定）
  *
@@ -58,24 +67,49 @@ export class RepairRequestQueryService {
     pagination: RepairRequestListPagination;
   }): Promise<RepairRequestListPage> {
     const where = { customerAccountId: params.customerAccountId, deprecated: false };
-    return this.listPage(where, params.pagination);
+    return this.listPage(where, params.pagination, (entities) => this.toListItemViews(entities));
   }
 
   /**
-   * 工程师维度列表：
-   * - AVAILABLE：未删除且未接单（待接单池）
-   * - MINE：本人已接单
+   * 工程师维度列表（四态，数据库侧完成全部筛选后再分页计数）：
+   * - ALL：全部未删除申请；
+   * - AVAILABLE：未删除且未接单（待接单池）；
+   * - MINE：本人已接单；
+   * - TAKEN_BY_OTHER：其他账号已接单。
+   * 客户昵称筛选已由 usecase 解析为客户账号 ID 集合，在本方法内以 IN 条件
+   * 参与分页与 total 计算；列表项为富集前装配结果（含归属类账号 ID，不对外输出）。
    */
   async listByEngineer(params: {
     engineerAccountId: number;
     scope: RepairRequestEngineerListScope;
+    filter: RepairRequestEngineerListFilterInternal;
     pagination: RepairRequestListPagination;
-  }): Promise<RepairRequestListPage> {
-    const where =
-      params.scope === 'AVAILABLE'
-        ? { deprecated: false, isAccepted: false }
-        : { acceptedByEngineerAccountId: params.engineerAccountId };
-    return this.listPage(where, params.pagination);
+  }): Promise<RepairRequestEngineerListQueryPage> {
+    const where: FindOptionsWhere<RepairRequestEntity> = { deprecated: false };
+    switch (params.scope) {
+      case 'AVAILABLE':
+        where.isAccepted = false;
+        break;
+      case 'MINE':
+        where.acceptedByEngineerAccountId = params.engineerAccountId;
+        break;
+      case 'TAKEN_BY_OTHER':
+        // 不变式：isAccepted=true ⇒ 接单账号非空（写契约保证），Not 等值安全
+        where.isAccepted = true;
+        where.acceptedByEngineerAccountId = Not(params.engineerAccountId);
+        break;
+      default:
+        break;
+    }
+    if (params.filter.equipmentModelId !== undefined) {
+      where.equipmentModelId = params.filter.equipmentModelId;
+    }
+    if (params.filter.customerAccountIds) {
+      where.customerAccountId = In(params.filter.customerAccountIds);
+    }
+    return this.listPage(where, params.pagination, (entities) =>
+      this.toEngineerListItemQueryResults(entities),
+    );
   }
 
   /**
@@ -83,7 +117,8 @@ export class RepairRequestQueryService {
    *
    * 权限口径（对接方案第三节 + 负责人 20260901 裁定 2）：
    * - scope=CUSTOMER：仅本人申请；已删除视为不可访问
-   * - scope=ENGINEER：未接单且未删除的申请，或本人已接单的申请
+   * - scope=ENGINEER：任意未删除申请可读（AVAILABLE / MINE / TAKEN_BY_OTHER），
+   *   写权限仍由各写用例独立失败关闭，读放宽不等于写放宽
    * - SUPER_ADMIN 按角色继承规则展开为 ENGINEER + CUSTOMER（roleHierarchy）
    *
    * 不存在、已删除与越权统一拒绝，不区分对外表述，防止资源存在性探测。
@@ -124,6 +159,9 @@ export class RepairRequestQueryService {
       latestResolutionStatus:
         responses.length > 0 ? responses[responses.length - 1].resolutionStatus : null,
       responses: responses.map((response) => this.toResponseQueryResult(response)),
+      // 内部富集输入：仅供 usecase 关联客户/接单工程师安全展示资料，不进入对外视图
+      customerAccountId: entity.customerAccountId,
+      acceptedByEngineerAccountId: entity.acceptedByEngineerAccountId,
     };
   }
 
@@ -145,19 +183,16 @@ export class RepairRequestQueryService {
       return entity.customerAccountId === session.accountId && !entity.deprecated;
     }
     if (!hasRole(session.roles, IdentityTypeEnum.ENGINEER)) return false;
-    // 工程师：待接单（未删除且未接单）或本人已接单；
-    // 已接单分支不受软删除约束（对接方案第三节权限矩阵），
-    // 写契约保证已接单申请不可删除，此处为口径自洽而非遗漏
-    if (!entity.isAccepted) {
-      return !entity.deprecated;
-    }
-    return entity.acceptedByEngineerAccountId === session.accountId;
+    // 工程师：任意未删除申请可读（AVAILABLE / MINE / TAKEN_BY_OTHER 视角由 usecase 计算）；
+    // 写侧（接单/回复）仍按精确身份失败关闭，读权限继承不等于写权限继承
+    return !entity.deprecated;
   }
 
-  private async listPage(
+  private async listPage<T>(
     where: FindOptionsWhere<RepairRequestEntity>,
     pagination: RepairRequestListPagination,
-  ): Promise<RepairRequestListPage> {
+    assemble: (entities: RepairRequestEntity[]) => Promise<T[]>,
+  ): Promise<Omit<RepairRequestListPage, 'items'> & { items: T[] }> {
     const page = Math.max(pagination.page, 1);
     const pageSize = Math.max(pagination.pageSize, 1);
     const [entities, total] = await Promise.all([
@@ -170,7 +205,7 @@ export class RepairRequestQueryService {
       pagination.withTotal ? this.requestRepository.count({ where }) : Promise.resolve(undefined),
     ]);
     return {
-      items: await this.toListItemViews(entities),
+      items: await assemble(entities),
       total,
       page,
       pageSize,
@@ -178,7 +213,44 @@ export class RepairRequestQueryService {
   }
 
   /**
-   * 批量装配列表项视图：机型一次批量读取；最新处理状态按申请维度批量取末条，避免逐行查询
+   * 列表装配批量读取上下文：机型一次批量读取；最新处理状态按申请维度批量取末条，避免逐行查询
+   */
+  private async loadListItemAssembleContext(
+    entities: RepairRequestEntity[],
+  ): Promise<ListItemAssembleContext> {
+    const modelIds = [...new Set(entities.map((entity) => entity.equipmentModelId))];
+    const requestIds = entities.map((entity) => entity.id);
+    const [models, latestStatusByRequestId] = await Promise.all([
+      this.equipmentModelRepository.find({ where: { id: In(modelIds) } }),
+      this.findLatestResolutionStatusByRequestIds(requestIds),
+    ]);
+    return {
+      modelById: new Map(models.map((model) => [model.id, model])),
+      latestStatusByRequestId,
+    };
+  }
+
+  /**
+   * 单实体装配基础列表项视图（纯映射；输出顺序由调用方按实体顺序 map 决定）
+   */
+  private toListItemView(
+    entity: RepairRequestEntity,
+    context: ListItemAssembleContext,
+  ): RepairRequestListItemView {
+    return {
+      id: entity.id,
+      requestNo: entity.requestNo,
+      equipmentModel: this.toModelView(context.modelById.get(entity.equipmentModelId)),
+      errorCode: entity.errorCode,
+      createdAt: entity.createdAt,
+      isAccepted: entity.isAccepted,
+      acceptedAt: entity.acceptedAt,
+      latestResolutionStatus: context.latestStatusByRequestId.get(entity.id) ?? null,
+    };
+  }
+
+  /**
+   * 基础列表项批量装配：机型与最新处理状态一次批量读取，按实体顺序逐条映射
    */
   private async toListItemViews(
     entities: RepairRequestEntity[],
@@ -186,22 +258,25 @@ export class RepairRequestQueryService {
     if (entities.length === 0) {
       return [];
     }
-    const modelIds = [...new Set(entities.map((entity) => entity.equipmentModelId))];
-    const requestIds = entities.map((entity) => entity.id);
-    const [models, latestStatusByRequestId] = await Promise.all([
-      this.equipmentModelRepository.find({ where: { id: In(modelIds) } }),
-      this.findLatestResolutionStatusByRequestIds(requestIds),
-    ]);
-    const modelById = new Map(models.map((model) => [model.id, model]));
+    const context = await this.loadListItemAssembleContext(entities);
+    return entities.map((entity) => this.toListItemView(entity, context));
+  }
+
+  /**
+   * 工程师列表批量装配：按实体逐条装配基础视图并显式追加归属类账号 ID
+   * （不依赖兄弟方法返回顺序；批量账号查询由 usecase 富集完成，禁止逐行 N+1）
+   */
+  private async toEngineerListItemQueryResults(
+    entities: RepairRequestEntity[],
+  ): Promise<RepairRequestEngineerListItemQueryResult[]> {
+    if (entities.length === 0) {
+      return [];
+    }
+    const context = await this.loadListItemAssembleContext(entities);
     return entities.map((entity) => ({
-      id: entity.id,
-      requestNo: entity.requestNo,
-      equipmentModel: this.toModelView(modelById.get(entity.equipmentModelId)),
-      errorCode: entity.errorCode,
-      createdAt: entity.createdAt,
-      isAccepted: entity.isAccepted,
-      acceptedAt: entity.acceptedAt,
-      latestResolutionStatus: latestStatusByRequestId.get(entity.id) ?? null,
+      ...this.toListItemView(entity, context),
+      customerAccountId: entity.customerAccountId,
+      acceptedByEngineerAccountId: entity.acceptedByEngineerAccountId,
     }));
   }
 
