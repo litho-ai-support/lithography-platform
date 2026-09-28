@@ -9,9 +9,12 @@
 // 验收内容（PR5 计划表 S3-1 / S3-5 / S3-6，数值源 frontend/docs/gkj-visual-baseline.md §6.3）：
 // - 保持通用工作区与默认 PageHeader：五类整页 kb modifier（与 PR3 回归探针 kbVariantNodes
 //   同一集合）为 0，且不出现 .kb-card / .kb-table-scope —— 知识库整页变体不扩到该路由；
-// - 工具区：搜索框 36px / 6px 圆角，同排筛选控件 36px / 6px 圆角；
-// - P1-1（S3 评审修复轮）：卡内「工具区—筛选区—表格—卡底分页」四段连续贴合，
-//   工具区/筛选区各带 12px padding + 1px 底线，段间相对间距为 0（原型 gkj.html L1043-1072）；
+// - 卡壳（PR5 R1）：与 .kb-card 同一套 token——白底 / 1px #e5e7eb / 10px 圆角 /
+//   0 1px 3px rgba(15,23,42,.05) / overflow hidden；卡内 AntD Table 顶角归零（由外卡裁切）；
+// - 工具区：搜索框 36px / 6px 圆角，同排「筛选」按钮 36px / 6px 圆角（与原型工具栏同构）；
+// - 筛选区（PR5 R2）：默认收起（占 0px）、点「筛选」展开；展开时卡内「工具区—筛选区—表格—
+//   卡底分页」四段连续贴合，工具区/筛选区各带 12px padding + 1px 底线，段间相对间距为 0
+//   （原型 gkj.html L1043-1072）；默认态表格 top − 卡 top = 62px、展开态 = 123px（1440）；
 // - P1-2（S3 评审修复轮）：输入非空后出现的清除按钮必须与知识库变体同源（透明底、无边框、
 //   padding 0、浅灰 #94a3b8、cursor pointer），不得退化为浏览器默认按钮；
 // - 紧凑表格：表头 35.5px / 10px，正文行 38.5px / 11px，行线 1px；
@@ -103,7 +106,7 @@ test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密
 
     await expect(page.getByText('光源模块维护指南')).toBeVisible();
 
-    // 工具区：36px 搜索框 + 同排 36px 筛选控件（同一套 --radius-control）
+    // 工具区：36px 搜索框 + 同排 36px「筛选」按钮（同一套 --radius-control；与原型工具栏同构）
     const search = page.locator('.reference-library-search');
     await expect(search).toHaveCount(1);
     expect(await search.evaluate((el) => getComputedStyle(el).height)).toBe(SEARCH_HEIGHT);
@@ -114,14 +117,182 @@ test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密
     );
     expect(await searchIcon.evaluate((el) => getComputedStyle(el).marginRight)).toBe('8px');
 
-    // 筛选控件与搜索框同排等高（AntD v6 的 Select 视觉盒是 .ant-select 根元素，无 .ant-select-selector）
-    const filterSelects = page.locator('.reference-library-filter-panel .ant-select');
+    // 卡壳（PR5 R1）：独立资料页卡与 .kb-card 用同一套 token（基准 §6.1 / §6.5）——
+    // 白底 / 1px #e5e7eb / 10px 圆角 / 0 1px 3px rgba(15,23,42,.05) / overflow hidden
+    const card = page.locator('.reference-library-card .ant-card');
+    await expect(card).toHaveCount(1);
+    const cardStyles = await card.evaluate((el) => {
+      const style = getComputedStyle(el);
+
+      return {
+        backgroundColor: style.backgroundColor,
+        borderColor: style.borderColor,
+        borderTopWidth: style.borderTopWidth,
+        borderRadius: style.borderRadius,
+        boxShadow: style.boxShadow,
+        overflow: style.overflow,
+      };
+    });
+    expect(cardStyles, '独立资料页卡壳必须与 .kb-card 同一套 token').toEqual({
+      backgroundColor: 'rgb(255, 255, 255)',
+      borderColor: 'rgb(229, 231, 235)',
+      borderTopWidth: '1px',
+      borderRadius: '10px',
+      boxShadow: 'rgba(15, 23, 42, 0.05) 0px 1px 3px 0px',
+      overflow: 'hidden',
+    });
+
+    // 卡内 AntD Table 顶角归零：顶角由外卡 10px 裁切（原型 .kb-table 无自身圆角）
+    expect(
+      await page
+        .locator('.reference-library-table-scope .ant-table')
+        .evaluate((el) => getComputedStyle(el).borderRadius),
+      '表格自身圆角必须归零（由外卡 10px 裁切）',
+    ).toBe('0px');
+    expect(
+      await page
+        .locator('.reference-library-table-scope .ant-table-thead th')
+        .first()
+        .evaluate((el) => getComputedStyle(el).borderTopLeftRadius),
+      '表头首个单元格顶角必须归零',
+    ).toBe('0px');
+
+    // 工具区几何：12px padding + 1px 底线；「筛选」按钮 36px / 6px
+    const toolbar = page.locator('.reference-library-toolbar');
+    expect(await toolbar.evaluate((el) => getComputedStyle(el).padding)).toBe('12px');
+    expect(
+      await toolbar.evaluate((el) => getComputedStyle(el).borderBottomWidth),
+      '工具区 1px 底线',
+    ).toBe('1px');
+
+    const filterButton = page.locator('.reference-library-toolbar-button');
+    await expect(filterButton).toHaveCount(1);
+    await expect(filterButton).toHaveAttribute('aria-expanded', 'false');
+    expect(await filterButton.evaluate((el) => getComputedStyle(el).height)).toBe(SEARCH_HEIGHT);
+    expect(await filterButton.evaluate((el) => getComputedStyle(el).borderRadius)).toBe(
+      SEARCH_RADIUS,
+    );
+
+    // 默认态（PR5 R2）：筛选区不渲染、占 0px；表格 top − 卡 top = 62±0.5px
+    // 复检轮 O1：不渲染 Card 卡头（列表标题由页面 PageHeader 承载），卡体不带内边距。
+    await expect(page.locator('.reference-library-filter-panel')).toHaveCount(0);
+    expect(
+      await page.locator('.reference-library-card .ant-card-head').count(),
+      '独立资料页不应渲染 Card 卡头（与原型 .kb-card 同构）',
+    ).toBe(0);
+    const cardBody = page.locator('.reference-library-card .ant-card-body');
+    expect(
+      await cardBody.evaluate((el) => getComputedStyle(el).paddingTop),
+      '卡体不再自带内边距（由工具区 12px 承担）',
+    ).toBe('0px');
+
+    const defaultPositions = await page.evaluate(() => {
+      const box = (selector: string) => {
+        const el = document.querySelector(selector);
+
+        if (!el) {
+          throw new Error(`缺少段节点：${selector}`);
+        }
+
+        const rect = el.getBoundingClientRect();
+
+        return { bottom: rect.bottom, top: rect.top };
+      };
+
+      return {
+        card: box('.reference-library-card .ant-card'),
+        table: box('.reference-library-table-scope'),
+        toolbar: box('.reference-library-toolbar'),
+      };
+    });
+    const defaultTableOffset = defaultPositions.table.top - defaultPositions.card.top;
+    expect(
+      Math.abs(defaultTableOffset - 62),
+      `默认态表格 top − 卡 top 应为 62px（实测 ${defaultTableOffset}px）`,
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      Math.abs(defaultPositions.toolbar.top - (defaultPositions.card.top + 1)),
+      '工具区应紧贴卡上边框内侧（无卡头时才成立）',
+    ).toBeLessThanOrEqual(0.5);
+
+    const fileName = buildEvidenceFileName({
+      area: 'reference-library-list',
+      capturedAt,
+      role: ROLE,
+      viewportLabel: viewport.label,
+    });
+    const pngPath = path.join(evidenceDir, fileName);
+    await page.screenshot({ path: pngPath });
+    const png = readPngDimensions(pngPath);
+    expect(png).toEqual({ height: viewport.height, width: viewport.width });
+
+    // 展开态（PR5 R2）：点「筛选」后筛选区渲染（12px padding + 1px 底线），
+    // Select 与搜索框同高同圆角（AntD v6 的 Select 视觉盒是 .ant-select 根元素）；
+    // 1440 下表格 top − 卡 top = 123±0.5px（工具区 62px + 筛选区 61px）
+    await filterButton.click();
+    await expect(filterButton).toHaveAttribute('aria-expanded', 'true');
+    const filterPanel = page.locator('.reference-library-filter-panel');
+    await expect(filterPanel).toHaveCount(1);
+    expect(await filterPanel.evaluate((el) => getComputedStyle(el).padding)).toBe('12px');
+    expect(
+      await filterPanel.evaluate((el) => getComputedStyle(el).borderBottomWidth),
+      '筛选区 1px 底线',
+    ).toBe('1px');
+
+    const filterSelects = filterPanel.locator('.ant-select');
     await expect(filterSelects).toHaveCount(2);
     const filterSelect = filterSelects.first();
     expect(await filterSelect.evaluate((el) => getComputedStyle(el).height)).toBe(SEARCH_HEIGHT);
     expect(await filterSelect.evaluate((el) => getComputedStyle(el).borderRadius)).toBe(
       SEARCH_RADIUS,
     );
+
+    const expandedPositions = await page.evaluate(() => {
+      const box = (selector: string) => {
+        const el = document.querySelector(selector);
+
+        if (!el) {
+          throw new Error(`缺少段节点：${selector}`);
+        }
+
+        const rect = el.getBoundingClientRect();
+
+        return { bottom: rect.bottom, top: rect.top };
+      };
+
+      return {
+        card: box('.reference-library-card .ant-card'),
+        filter: box('.reference-library-filter-panel'),
+        footer: box('.reference-library-card-footer'),
+        table: box('.reference-library-table-scope'),
+        toolbar: box('.reference-library-toolbar'),
+      };
+    });
+    const expandedTableOffset = expandedPositions.table.top - expandedPositions.card.top;
+
+    // 375 下筛选区因两个 Select 换行而更高，只锚定 1440 基准视口
+    if (viewport.label === '1440x900') {
+      expect(
+        Math.abs(expandedTableOffset - 123),
+        `展开态表格 top − 卡 top 应为 123px（实测 ${expandedTableOffset}px）`,
+      ).toBeLessThanOrEqual(0.5);
+    }
+
+    const gapAfterToolbar = expandedPositions.filter.top - expandedPositions.toolbar.bottom;
+    const gapAfterFilter = expandedPositions.table.top - expandedPositions.filter.bottom;
+    const gapAfterTable = expandedPositions.footer.top - expandedPositions.table.bottom;
+    expect(
+      Math.abs(gapAfterToolbar),
+      `工具区与筛选区之间不应有额外间距（实测 ${gapAfterToolbar}px）`,
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      Math.abs(gapAfterFilter),
+      `筛选区与表格之间不应有额外间距（实测 ${gapAfterFilter}px）`,
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      Math.abs(gapAfterTable),
+      `表格与卡底分页之间不应有额外间距（实测 ${gapAfterTable}px）`,
+    ).toBeLessThanOrEqual(0.5);
 
     // 紧凑表格密度（基准 §6.3）
     const scope = page.locator('.reference-library-table-scope');
@@ -146,93 +317,18 @@ test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密
     expect(await footer.evaluate((el) => getComputedStyle(el).fontSize)).toBe(FOOTER_FONT_SIZE);
     await expect(footer.locator('.ant-pagination')).toBeVisible();
 
-    // P1-1（S3 评审修复轮）：卡内四段连续贴合，与原型 .kb-card 结构同构
-    //（工具区 p-3 border-b → 表格 → 卡底 px-4 py-3，段间无额外间距）
-    const cardBody = page.locator('.reference-library-card .ant-card-body');
-    expect(
-      await cardBody.evaluate((el) => getComputedStyle(el).paddingTop),
-      '卡体不再自带内边距（由工具区 12px 承担）',
-    ).toBe('0px');
-
-    const toolbar = page.locator('.reference-library-toolbar');
-    expect(await toolbar.evaluate((el) => getComputedStyle(el).padding)).toBe('12px');
-    expect(
-      await toolbar.evaluate((el) => getComputedStyle(el).borderBottomWidth),
-      '工具区 1px 底线',
-    ).toBe('1px');
-
-    // 复检轮 O1：独立资料页不渲染 Card 卡头，与原型 .kb-card（工具区→表格→卡底）严格同构；
-    // 列表标题由页面 PageHeader 承载（AntD Card 在无 title/extra 时不生成 .ant-card-head）。
-    expect(
-      await page.locator('.reference-library-card .ant-card-head').count(),
-      '独立资料页不应渲染 Card 卡头（与原型 .kb-card 同构）',
-    ).toBe(0);
-    const cardTop = (await cardBody.boundingBox())?.y ?? Number.NaN;
-    const toolbarTop = (await toolbar.boundingBox())?.y ?? Number.NaN;
-    expect(
-      Math.abs(toolbarTop - cardTop),
-      `工具区应紧贴卡体顶部（无卡头时才成立，实测偏移 ${toolbarTop - cardTop}px）`,
-    ).toBeLessThanOrEqual(0.5);
-
-    const filterPanel = page.locator('.reference-library-filter-panel');
-    expect(await filterPanel.evaluate((el) => getComputedStyle(el).padding)).toBe('12px');
-    expect(
-      await filterPanel.evaluate((el) => getComputedStyle(el).borderBottomWidth),
-      '筛选区 1px 底线',
-    ).toBe('1px');
-
-    const segmentOffsets = await page.evaluate(() => {
-      const box = (selector: string) => {
-        const el = document.querySelector(selector);
-
-        if (!el) {
-          throw new Error(`缺少段节点：${selector}`);
-        }
-
-        const rect = el.getBoundingClientRect();
-
-        return { bottom: rect.bottom, top: rect.top };
-      };
-
-      return {
-        filter: box('.reference-library-filter-panel'),
-        footer: box('.reference-library-card-footer'),
-        table: box('.reference-library-table-scope'),
-        toolbar: box('.reference-library-toolbar'),
-      };
-    });
-    const gapAfterToolbar = segmentOffsets.filter.top - segmentOffsets.toolbar.bottom;
-    const gapAfterFilter = segmentOffsets.table.top - segmentOffsets.filter.bottom;
-    const gapAfterTable = segmentOffsets.footer.top - segmentOffsets.table.bottom;
-    expect(
-      Math.abs(gapAfterToolbar),
-      `工具区与筛选区之间不应有额外间距（实测 ${gapAfterToolbar}px）`,
-    ).toBeLessThanOrEqual(0.5);
-    expect(
-      Math.abs(gapAfterFilter),
-      `筛选区与表格之间不应有额外间距（实测 ${gapAfterFilter}px）`,
-    ).toBeLessThanOrEqual(0.5);
-    expect(
-      Math.abs(gapAfterTable),
-      `表格与卡底分页之间不应有额外间距（实测 ${gapAfterTable}px）`,
-    ).toBeLessThanOrEqual(0.5);
-
     // 横滚只允许发生在表格内部（基准 §6.4.4）
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
     expect(overflow, `${viewport.label} 不应出现整页横向滚动`).toBeLessThanOrEqual(0);
 
-    const fileName = buildEvidenceFileName({
-      area: 'reference-library-list',
-      capturedAt,
-      role: ROLE,
-      viewportLabel: viewport.label,
-    });
-    const pngPath = path.join(evidenceDir, fileName);
-    await page.screenshot({ path: pngPath });
-    const png = readPngDimensions(pngPath);
-    expect(png).toEqual({ height: viewport.height, width: viewport.width });
+    // 展开态整页证据（与默认态分开留档，供 R4 并排比对）
+    const expandedPngPath = path.join(
+      evidenceDir,
+      `reference-library-filter-expanded-${viewport.label}.png`,
+    );
+    await page.screenshot({ path: expandedPngPath });
 
     // P1-2（S3 评审修复轮）：清除按钮是「输入非空后才渲染」的 DOM，必须与 .kb-search-clear 同源。
     // 放在默认态截图之后执行，避免防抖重载影响前面的 ready 断言与截图内容。
@@ -267,8 +363,13 @@ test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密
     await search.screenshot({ path: filledSearchPng });
 
     evidence[viewport.label] = {
+      cardStyles,
       clearStyles,
-      fileName,
+      defaultFileName: fileName,
+      defaultPng: png,
+      defaultTableOffset,
+      expandedPng: path.basename(expandedPngPath),
+      expandedTableOffset,
       filledSearchPng: path.basename(filledSearchPng),
       gaps: {
         afterFilter: gapAfterFilter,
@@ -276,7 +377,6 @@ test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密
         afterToolbar: gapAfterToolbar,
       },
       overflow,
-      png,
     };
   }
 

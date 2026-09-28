@@ -860,8 +860,11 @@ body {
   color: var(--kb-text-faint);
 }
 
-/* 工具按钮：36px 高 / 6px 圆角（--radius-control）/ 白底 + 描边 / 12px tool 文字色 */
-.kb-toolbar-button {
+/* 工具按钮：36px 高 / 6px 圆角（--radius-control）/ 白底 + 描边 / 12px tool 文字色。
+   PR5 R2 起独立资料页复用同一条定义（.reference-library-toolbar-button）：只换作用域类名，
+   不复制几何数值，也不把 .kb-* 壳类扩散到通用工作区。 */
+.kb-toolbar-button,
+.reference-library-toolbar-button {
   background: var(--kb-card-bg);
   border: 1px solid var(--kb-search-border);
   border-radius: var(--radius-control);
@@ -880,6 +883,18 @@ body {
   background: transparent;
   color: var(--kb-text-body);
   font-size: 0.6875rem;
+}
+
+/* 表格顶角归零（PR5 R1）：原型 .kb-table 无自身圆角，顶角由外卡 10px 裁切。
+   清零 AntD 由 token.borderRadiusLG=14px 注入到 .ant-table / .ant-table-container /
+   .ant-table-content 与首末 th 的圆角，避免与外卡 10px 圆角叠加露出错位弧线。
+   仅作用于独立资料页作用域，不改全局 AntD Table 样式。 */
+.reference-library-table-scope .ant-table,
+.reference-library-table-scope .ant-table-container,
+.reference-library-table-scope .ant-table-container .ant-table-content,
+.reference-library-table-scope .ant-table .ant-table-thead > tr > th.ant-table-cell:first-child,
+.reference-library-table-scope .ant-table .ant-table-thead > tr > th.ant-table-cell:last-child {
+  border-radius: 0;
 }
 
 /* 表头/正文行高采用「固定高度 + 垂直居中」方案（原型实测：表头 35.5px、正文行 38.5px；
@@ -956,6 +971,20 @@ body {
   padding: 0;
 }
 
+/* 独立资料页卡壳（PR5 R1）：与 .kb-card 同一套卡壳 token（基准 §6.1 / §6.5）——
+   白底 / 1px 描边 / 10px 圆角 / 轻阴影（全部经 --kb-card-* 变量取值），并 overflow:hidden
+   让表头/表尾顶角由外卡 10px 裁切（AntD 由 token.borderRadiusLG=14px 注入的 14px 顶角
+   已在下方表格作用域规则里清零，避免与外卡圆角叠加露出错位弧线）。
+   `.reference-library-card` 挂在 Card 外层包裹 div（AntD 组件禁止挂 className，
+   由 eslint local/no-design-system-classname 强制），故选择器仍是「祖先 → .ant-card」。 */
+.reference-library-card .ant-card {
+  background: var(--kb-card-bg);
+  border: 1px solid var(--kb-card-border);
+  border-radius: var(--kb-card-radius);
+  box-shadow: var(--kb-card-shadow);
+  overflow: hidden;
+}
+
 .reference-library-list-body {
   display: flex;
   flex-direction: column;
@@ -974,8 +1003,9 @@ body {
   height: 2.25rem;
 }
 
-/* 独立资料页筛选区：常驻展示（保留既有可用性）；作为工具区之下的连续段，与 .kb-filter-panel
-   同几何（12px padding + 1px 底线），并与表格保持贴合。 */
+/* 独立资料页筛选区（PR5 R2）：状态化展开段——默认不渲染（占 0px），由工具区「筛选」按钮
+   展开；展开时作为工具区之下的连续段，与 .kb-filter-panel 同几何（12px padding + 1px 底线），
+   并与表格保持贴合。收起不清值（filterOpen 只控制渲染）。 */
 .reference-library-filter-panel {
   align-items: center;
   border-bottom: 1px solid var(--kb-divider);
@@ -1000,8 +1030,10 @@ body {
   padding: 12px;
 }
 
-/* 工具按钮 active 态：有生效筛选时提示（文字与边框转主蓝） */
-.kb-toolbar-button--active {
+/* 工具按钮 active 态：有生效筛选时提示（文字与边框转主蓝）。
+   PR5 R2 起独立资料页同用（.reference-library-toolbar-button--active）。 */
+.kb-toolbar-button--active,
+.reference-library-toolbar-button--active {
   border-color: var(--kb-primary);
   color: var(--kb-primary);
 }

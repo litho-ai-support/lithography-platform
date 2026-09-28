@@ -80,10 +80,10 @@ const columns: TableColumnsType<ReferenceDocumentListItem> = [
  *   `knowledge-base` 变体供 /admin/document-database 消费（PR3 R7）：kb-card 外壳 +
  *   主搜索 + 筛选展开区 + 紧凑表格与卡底分页，新增入口由页面右上主操作区承担；
  *   默认变体供独立 /reference-documents 页消费（PR5 S3-1；评审修复轮 P1-1 补结构、
- *   复检轮 O1 去卡头）：保留通用 AntD Card 外壳但**不渲染卡头**（列表标题由页面 PageHeader
- *   承载），卡内「工具区—筛选区—表格—卡底分页」四段连续贴合
- *   （与 .kb-card 内三段连续同构，段间不留额外间距），几何对齐知识库表格；且不挂任何
- *   `.kb-*` 壳类，故整页 kb modifier 探针（PR3 回归）在该页恒为 0。
+ *   复检轮 O1 去卡头；PR5 R2 筛选区默认收起）：保留通用 AntD Card 外壳但**不渲染卡头**
+ *   （列表标题由页面 PageHeader 承载），卡内「工具区—筛选区（展开时）—表格—卡底分页」
+ *   连续贴合，几何对齐知识库表格；且不挂任何 `.kb-*` 壳类，故整页 kb modifier 探针
+ *   （PR3 回归）在该页恒为 0。
  *
  * 两个变体均**不渲染新增入口**（PR5 S3-2）：管理员新增属页面级主操作，由页面页头动作区
  * 承担；本组件不读取 Session、不判定角色，工程师与管理员的 DOM 差异只由页面层产生。
@@ -147,8 +147,9 @@ export function ReferenceDocumentList({ variant = 'default' }: ReferenceDocument
   const isKnowledgeBase = variant === 'knowledge-base';
   /** 局部作用域类前缀：知识库变体沿用 PR3 的 kb-*；独立资料页使用 reference-library-*。 */
   const scope = isKnowledgeBase ? 'kb' : 'reference-library';
-  /** 知识库变体筛选默认收起；独立资料页筛选常驻（保留既有可用性与单测口径）。 */
-  const filtersExpanded = isKnowledgeBase ? filterOpen : true;
+  /** 两个变体同构：筛选区默认收起（不渲染、占 0px），由工具区「筛选」按钮展开（PR5 R2）。
+   *  收起不清值：`filterOpen` 只控制渲染，不参与 filter 计算。 */
+  const filtersExpanded = filterOpen;
 
   /** 各状态的卡内边距：知识库变体落 `kb-card-state`，独立资料页落 `reference-library-card-state`
    * （两者同几何 1rem），使四态与工具区 / 表格处于同一张卡内的连续结构。 */
@@ -165,17 +166,15 @@ export function ReferenceDocumentList({ variant = 'default' }: ReferenceDocument
           placeholder="按文档标题搜索"
           value={searchText}
         />
-        {isKnowledgeBase ? (
-          <ToolbarButton
-            active={hasActiveFilter}
-            activeClassName="kb-toolbar-button--active"
-            aria-expanded={filterOpen}
-            className="kb-toolbar-button"
-            onClick={() => setFilterOpen((previous) => !previous)}
-          >
-            筛选
-          </ToolbarButton>
-        ) : null}
+        <ToolbarButton
+          active={hasActiveFilter}
+          activeClassName={`${scope}-toolbar-button--active`}
+          aria-expanded={filterOpen}
+          className={`${scope}-toolbar-button`}
+          onClick={() => setFilterOpen((previous) => !previous)}
+        >
+          筛选
+        </ToolbarButton>
       </div>
 
       {filtersExpanded ? (
@@ -207,8 +206,8 @@ export function ReferenceDocumentList({ variant = 'default' }: ReferenceDocument
                 : []
             }
           />
-          {isKnowledgeBase ? (
-            <ToolbarButton className="kb-toolbar-button" onClick={resetFilters}>
+          {hasActiveFilter ? (
+            <ToolbarButton className={`${scope}-toolbar-button`} onClick={resetFilters}>
               重置
             </ToolbarButton>
           ) : null}

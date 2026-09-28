@@ -165,6 +165,8 @@ describe('ReferenceDocumentList', () => {
 
     // AntD Select 的 placeholder 不是 input 属性，jsdom 下按 combobox role + 页面顺序定位
     //（与 real e2e 先例一致）；下拉经 portal 渲染，mouseDown 展开
+    // PR5 R2：筛选区默认收起，先点工具区「筛选」按钮展开
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     const [typeSelect, modelSelect] = screen.getAllByRole('combobox');
     await act(async () => {
       fireEvent.mouseDown(typeSelect);
@@ -199,7 +201,8 @@ describe('ReferenceDocumentList', () => {
 
     await screen.findByText('暂无参考资料。');
 
-    // 打开文档类型下拉（筛选区首个 combobox）并选中 → 空文案切换为筛选语义
+    // 打开文档类型下拉（先展开筛选区，筛选区首个 combobox）并选中 → 空文案切换为筛选语义
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.mouseDown(screen.getAllByRole('combobox')[0]);
     fireEvent.click(await screen.findByText('错误代码手册'));
 
@@ -282,6 +285,8 @@ describe('ReferenceDocumentList', () => {
       expect(fetchModelsMock).toHaveBeenCalledTimes(2);
     });
 
+    // PR5 R2：筛选区默认收起，展开后才能取到型号下拉
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     const [, modelSelect] = screen.getAllByRole('combobox');
     await act(async () => {
       fireEvent.mouseDown(modelSelect);
@@ -373,6 +378,64 @@ describe('ReferenceDocumentList', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('独立资料页筛选区默认收起，展开 / 活动 / 重置状态机与知识库变体同构（PR5 R2）', async () => {
+    fetchListMock.mockResolvedValue(buildPage([buildItem(970001)], 25));
+
+    render(<ReferenceDocumentList />);
+    await screen.findByText('参考资料 970001');
+
+    const filterButton = () => screen.getByRole('button', { name: '筛选' });
+    // 默认收起：筛选控件完全不渲染（占 0px），按钮 aria-expanded=false
+    expect(screen.queryAllByRole('combobox')).toHaveLength(0);
+    expect(filterButton()).toHaveAttribute('aria-expanded', 'false');
+    expect(filterButton().className).toBe('toolbar-button reference-library-toolbar-button');
+
+    fireEvent.click(filterButton());
+    expect(filterButton()).toHaveAttribute('aria-expanded', 'true');
+    const [typeSelect] = screen.getAllByRole('combobox');
+    await act(async () => {
+      fireEvent.mouseDown(typeSelect);
+    });
+    fireEvent.click(await screen.findByText('维护指南'));
+
+    await waitFor(() => {
+      expect(fetchListMock).toHaveBeenLastCalledWith(
+        { page: 1, pageSize: 10 },
+        { documentType: 'MAINTENANCE_GUIDE' },
+      );
+    });
+    // 有生效筛选：筛选按钮转 active，重置按钮出现
+    expect(filterButton()).toHaveClass('reference-library-toolbar-button--active');
+
+    // 收起不清值：不触发新请求，重新展开后已选值仍在
+    const callsAfterFilter = fetchListMock.mock.calls.length;
+    fireEvent.click(filterButton());
+    expect(screen.queryAllByRole('combobox')).toHaveLength(0);
+    expect(fetchListMock.mock.calls.length).toBe(callsAfterFilter);
+    fireEvent.click(filterButton());
+    expect(
+      document.querySelector('.reference-library-filter-panel')?.textContent ?? '',
+      '重新展开后已选值仍在（收起不清值）',
+    ).toContain('维护指南');
+
+    // 翻到第 2 页后重置：清除全部条件并回到第 1 页（filter 变化由 query 状态机回页）
+    const secondPage = document.querySelector('.ant-pagination-item-2 a') as HTMLElement | null;
+    expect(secondPage).not.toBeNull();
+    fireEvent.click(secondPage as HTMLElement);
+    await waitFor(() => {
+      expect(fetchListMock).toHaveBeenLastCalledWith(
+        { page: 2, pageSize: 10 },
+        { documentType: 'MAINTENANCE_GUIDE' },
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '重置' }));
+    await waitFor(() => {
+      expect(fetchListMock).toHaveBeenLastCalledWith({ page: 1, pageSize: 10 }, undefined);
+    });
+    expect(filterButton()).not.toHaveClass('reference-library-toolbar-button--active');
   });
 
   describe('knowledge-base 变体（PR3 R7）', () => {
