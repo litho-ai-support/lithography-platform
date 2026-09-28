@@ -3,11 +3,7 @@
 import { Button } from 'antd';
 import { useNavigate } from 'react-router';
 
-import {
-  AuthSessionPanel,
-  isAuthSessionRoleAllowedAt,
-  useAuthSession,
-} from '@/features/auth-session';
+import { isAuthSessionRoleAllowedAt, useAuthSession } from '@/features/auth-session';
 
 import { PageHeader } from '@/shared/ui/page-header';
 
@@ -25,6 +21,16 @@ const REPAIR_REQUEST_CREATE_PATH = '/customer/repair-requests/new';
 // SUPER_ADMIN 按裁定 2 继承放行（仅读本人名下，实际为空态），无需置灰。
 const REPAIR_REQUESTS_LIST_PATH = '/customer/repair-requests';
 
+/**
+ * 客户工作台首页（PR5 S1 正式化）。
+ *
+ * 只保留两条真实业务入口（发起申请 / 我的申请），不放置假统计、设备状态或演示数据；
+ * 身份与退出统一由左侧导航用户卡承担，本页不再挂载开发期的会话信息面板。
+ *
+ * 按钮不使用 `size="large"`：AntD 的 large 档会走 borderRadiusLG(14px)，与
+ * frontend/docs/gkj-visual-baseline.md 6.5「页面主要动作（主按钮）8px」的全局规则冲突；
+ * 默认档消费 token.borderRadius(8px)。
+ */
 export function CustomerPage() {
   const navigate = useNavigate();
   const { session, status } = useAuthSession();
@@ -39,7 +45,7 @@ export function CustomerPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        description="CUSTOMER 临时落地页。当前身份来自后端登录结果，仅展示安全会话信息。"
+        description="提交设备维修申请，并跟踪接单情况、处理进度与工程师回复。"
         eyebrow="Customer Workspace"
         title="客户页面"
       />
@@ -56,7 +62,6 @@ export function CustomerPage() {
             <Button
               disabled={!canCreateRepairRequest}
               onClick={() => navigate(REPAIR_REQUEST_CREATE_PATH)}
-              size="large"
               type="primary"
             >
               发起维修申请
@@ -76,13 +81,9 @@ export function CustomerPage() {
               查看已提交申请的接单情况、处理进度与工程师回复，未接单的申请可删除。
             </div>
           </div>
-          <Button onClick={() => navigate(REPAIR_REQUESTS_LIST_PATH)} size="large">
-            查看维修申请
-          </Button>
+          <Button onClick={() => navigate(REPAIR_REQUESTS_LIST_PATH)}>查看维修申请</Button>
         </div>
       </div>
-
-      <AuthSessionPanel />
     </div>
   );
 }

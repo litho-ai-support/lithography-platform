@@ -134,6 +134,24 @@ describe('设备型号加载状态', () => {
     expect(await screen.findByText('暂无可用的设备型号，请稍后再试。')).toBeTruthy();
     expect(isDisabled(screen.getByRole('button', { name: '提交申请' }))).toBe(true);
   });
+
+  // S2-2：空态可恢复，不必刷新整页
+  it('无可用型号时可重试拉取，型号就绪后即可提交', async () => {
+    fetchEquipmentModelsMock.mockResolvedValueOnce([]).mockResolvedValueOnce(MODEL_OPTIONS);
+
+    renderForm();
+    expect(await screen.findByText('暂无可用的设备型号，请稍后再试。')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
+
+    // 「重试」先同步置 loading，再在微任务回写就绪态。此处用 act 包裹的 `waitFor` 而非
+    // `expect.poll`：poll 不进入 act 边界，回写 setState 会落在边界外并输出 act(...) 告警
+    // （本用例为 S2 新增，故一并收口；同组另一条用例本就使用 act 包裹的 `findBy*` 等待）。
+    await waitFor(() => expect(isDisabled(screen.getByRole('combobox'))).toBe(false));
+
+    expect(screen.queryByText('暂无可用的设备型号，请稍后再试。')).toBeNull();
+    expect(isDisabled(screen.getByRole('button', { name: '提交申请' }))).toBe(false);
+  });
 });
 
 describe('提交校验与反馈', () => {
@@ -293,6 +311,8 @@ describe('提交校验与反馈', () => {
     await waitFor(() => {
       expect(createRepairRequestMock).toHaveBeenCalledTimes(1);
     });
+    // S2-1：提交中主按钮进入 loading 态（防连点的可视反馈）
+    expect(submitButton.classList.contains('ant-btn-loading')).toBe(true);
 
     pending.resolve({ ok: true, repairRequest: CREATED_RECORD });
     expect(await screen.findByText('维修申请创建成功')).toBeTruthy();

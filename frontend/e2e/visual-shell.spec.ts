@@ -7,29 +7,71 @@ import { expect, test } from '@playwright/test';
 import { seedAuthSession } from './helpers/auth-session-seed';
 
 // GraphQL stub：壳层验收只关心导航/布局，但仍返回已访问页面所需的最小合法 DTO。
-// 不能把 `{ data: {} }` 当成空态：管理员 mapper 会把它判为外部契约异常，污染
-// 浏览器日志并掩盖真正的壳层报错。
+// 不能把 `{ data: {} }` 当成空态：adapter 会把它读成 undefined，页面进入 ready 后取
+// `data.items` 直接抛 TypeError，而 React Router 的 error boundary 接住异常后壳层仍在，
+// 用例会「业务页崩了却依然全绿」（PR5 S0–S4 全量复审 P2-1）。
+const SHELL_GRAPHQL_STUBS: Record<string, unknown> = {
+  AdminUsers: { adminUsers: { items: [], page: 1, pageSize: 20, total: 0 } },
+  // 工程师首页工作台（/engineer）会真实读列表：登记最小合法 DTO，否则退化成失败关闭。
+  EngineerRepairRequests: {
+    engineerRepairRequests: { items: [], page: 1, pageSize: 10, total: 0 },
+  },
+  MyRepairRequests: { myRepairRequests: { items: [], page: 1, pageSize: 10, total: 0 } },
+};
+
+// 未登记 operation 与页面运行时异常都必须是失败依据，而不是被静默吸收：
+// 前者会退化成上面那种「空 data 契约异常」，后者会被 error boundary 吞掉。
+// 注意：被 error boundary 接住的 render 异常不会派发 window error 事件，React 只把
+// 原始异常打到 console.error（实测本用例即为此形态），因此必须同时收 console.error，
+// 否则「业务页崩了」在浏览器事件层面完全不可见。
+const unregisteredOperations: string[] = [];
+const pageErrors: string[] = [];
+const consoleErrors: string[] = [];
+
 test.beforeEach(async ({ page }) => {
+  unregisteredOperations.length = 0;
+  pageErrors.length = 0;
+  consoleErrors.length = 0;
+
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+
   await page.route('**/graphql', async (route) => {
     const requestBody = route.request().postDataJSON() as { operationName?: string } | null;
-    const data =
-      requestBody?.operationName === 'AdminUsers'
-        ? {
-            adminUsers: {
-              items: [],
-              page: 1,
-              pageSize: 20,
-              total: 0,
-            },
-          }
-        : {};
+    const operationName = requestBody?.operationName ?? '';
+    const stub = SHELL_GRAPHQL_STUBS[operationName];
+
+    // 失败关闭：未登记的 operation 不返回空 data，而是显式报错，避免掩盖真实契约缺口
+    if (stub === undefined) {
+      unregisteredOperations.push(operationName);
+
+      await route.fulfill({
+        body: JSON.stringify({
+          errors: [{ message: `visual-shell 未登记 operation：${operationName}` }],
+        }),
+        contentType: 'application/json',
+        status: 200,
+      });
+
+      return;
+    }
 
     await route.fulfill({
-      body: JSON.stringify({ data }),
+      body: JSON.stringify({ data: stub }),
       contentType: 'application/json',
       status: 200,
     });
   });
+});
+
+test.afterEach(() => {
+  expect(pageErrors, '页面出现未预期的运行时异常').toEqual([]);
+  expect(consoleErrors, '页面出现未预期的 console.error').toEqual([]);
+  expect(unregisteredOperations, '存在未登记的 GraphQL operation').toEqual([]);
 });
 
 test('seeded roles see only their own stable menu items in the sidebar', async ({ page }) => {
@@ -76,23 +118,68 @@ test('seeded roles see only their own stable menu items in the sidebar', async (
   }
 });
 
-test('refreshing a business child route restores the active menu item by prefix', async ({
-  page,
-}) => {
-  await seedAuthSession(page, 'SUPER_ADMIN');
-  // 直接打开子路由等价于刷新场景：完整路由树 + loader 参与执行
-  await page.goto('/admin/users');
+// PR5 S1-3：刷新后菜单选中正确需覆盖每个角色的真实路由（jsdom 单测不执行 loader，
+// 与「刷新」不等价，故必须有浏览器级用例）。三例分别覆盖：子路由前缀选中、客户主页
+// 无同名菜单项时回落选中「首页」、以及无同名业务项的排除关系。
+const REFRESH_CASES: ReadonlyArray<{
+  activeLabel: string;
+  inactiveLabel: string;
+  path: string;
+  readyHeading: string;
+  readyText?: string;
+  role: 'CUSTOMER' | 'SUPER_ADMIN';
+}> = [
+  {
+    activeLabel: '用户管理',
+    inactiveLabel: '首页',
+    path: '/admin/users',
+    readyHeading: '用户管理',
+    role: 'SUPER_ADMIN',
+  },
+  {
+    activeLabel: '我的申请',
+    inactiveLabel: '首页',
+    path: '/customer/repair-requests',
+    // 业务页就绪正控：Heading 存在只说明壳层渲染了路由，还必须有该页真实 ready 态产物
+    readyHeading: '我的维修申请',
+    readyText: '还没有维修申请，点击客户首页「发起维修申请」创建。',
+    role: 'CUSTOMER',
+  },
+  {
+    activeLabel: '首页',
+    inactiveLabel: '我的申请',
+    path: '/customer',
+    readyHeading: '客户页面',
+    role: 'CUSTOMER',
+  },
+];
 
-  const userManagement = page.getByRole('navigation', { name: '主导航' }).getByRole('link', {
-    name: '用户管理',
+for (const refreshCase of REFRESH_CASES) {
+  test(`refreshing ${refreshCase.path} selects "${refreshCase.activeLabel}" for ${refreshCase.role}`, async ({
+    page,
+  }) => {
+    await seedAuthSession(page, refreshCase.role);
+    // 直接打开目标路由等价于刷新：完整路由树 + protectedRouteLoader 参与执行
+    await page.goto(refreshCase.path);
+
+    // 就绪正控：先证明目标业务页真的渲染完成，再看菜单选中；
+    // 否则业务页抛异常被 error boundary 接住时，壳层与菜单断言依然成立（假绿）。
+    await expect(page.getByRole('heading', { name: refreshCase.readyHeading })).toBeVisible();
+    if (refreshCase.readyText !== undefined) {
+      await expect(page.getByText(refreshCase.readyText)).toBeVisible();
+    }
+
+    const nav = page.getByRole('navigation', { name: '主导航' });
+    const active = nav.getByRole('link', { name: refreshCase.activeLabel });
+
+    await expect(active).toBeVisible();
+    await expect(active).toHaveAttribute('aria-current', 'page');
+    await expect(nav.getByRole('link', { name: refreshCase.inactiveLabel })).not.toHaveAttribute(
+      'aria-current',
+      'page',
+    );
   });
-
-  await expect(userManagement).toBeVisible();
-  await expect(userManagement).toHaveAttribute('aria-current', 'page');
-  await expect(
-    page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '首页' }),
-  ).not.toHaveAttribute('aria-current', 'page');
-});
+}
 
 test('anonymous direct access to a protected URL is redirected to login with returnTo', async ({
   page,

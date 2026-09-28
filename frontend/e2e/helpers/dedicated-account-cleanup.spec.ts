@@ -13,7 +13,7 @@
 //   情况都必须在业务写入（adminCreateUser）之前失败，且哨兵无论成败都精确恢复；
 // - 负例全部经 mock 表达，不触真实数据库。
 
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   assertApiSqlSameDatabase,

@@ -99,9 +99,16 @@
   --radius-action: 8px; /* 页面主要动作（主按钮） */
   --radius-control: 6px; /* 搜索、筛选、表格操作和弹窗动作等紧凑控件 */
   --radius-pill: 999px; /* 状态胶囊 */
-  /* gkj 知识库页（#knowledge-base-page，PR3 R7）：页面级 opt-in 变体常量，仅
-     /admin/document-database 消费；与通用 panel/search 基准不同（基准表第 6 节）。
-     禁止其他页面消费本组变量；组件不得散落 raw hex */
+  /* gkj 知识库页（#knowledge-base-page，PR3 R7）：页面级 opt-in 变体常量；与通用 panel/search
+     基准不同（基准表第 6 节）。所有权口径（PR5 S3 评审修复轮 P3-1 澄清，消除注释与实现矛盾）：
+     - 页面壳变量（--kb-workspace-bg / --kb-card-bg / --kb-card-border / --kb-card-radius /
+       --kb-card-shadow / --kb-primary / --kb-primary-hover / --kb-primary-shadow / --kb-on-primary）
+       仅 /admin/document-database 消费，禁止其他页面消费；
+     - 紧凑表格/搜索局部变量（--kb-divider / --kb-search-bg / --kb-search-border / --kb-text-body /
+       --kb-text-muted / --kb-text-faint / --kb-text-tool / --kb-table-head-bg /
+       --kb-table-head-border / --kb-table-row-hover）经白名单允许被 .reference-library-* 局部作用域
+       复用（同一声明、两个选择器），不复制数值。
+     组件不得散落 raw hex */
   --kb-workspace-bg: #f3f4f6;
   --kb-card-bg: #ffffff;
   --kb-card-border: #e5e7eb;
@@ -527,18 +534,21 @@ body {
 
 .page-header {
   align-items: flex-start;
-  /* 原型页头无分隔线、无额外底部内边距（负责人 0916 对照表） */
+  /* 原型页头无分隔线、无额外底部内边距（负责人 0916 对照表）；
+     文字块与右侧 extra 的间距取原型主壳页头 gap-4=16px */
   display: flex;
-  gap: 24px;
+  gap: 16px;
   justify-content: space-between;
 }
 
 .page-eyebrow {
   color: var(--eyebrow-text);
   font-size: 0.625rem;
-  font-weight: 800;
-  /* 原型 .atta-eyebrow：10px/800/.16em/uppercase；仅在 gkj 对应工作台页传入（可选 API） */
-  letter-spacing: 0.16em;
+  font-weight: 700;
+  /* 基准取原型**主壳静态页头**：10px / font-bold(700) / tracking-[0.18em] / uppercase；
+     不得引用 JS 注入的 .atta-eyebrow（10px/800/.16em），那是生成页的第二套视觉语言
+     （逐项核查报告 20260928 §3 第 1、2 项） */
+  letter-spacing: 0.18em;
   margin: 0 0 4px;
   text-transform: uppercase;
 }
@@ -807,8 +817,11 @@ body {
   padding: 12px;
 }
 
-/* 主搜索框：36px 高 / 6px 圆角（--radius-control）/ 浅底 + 描边（原型 bg-slate-50 / border-slate-200）；图标 16×16 描边 */
-.kb-search {
+/* 主搜索框：36px 高 / 6px 圆角（--radius-control）/ 浅底 + 描边（原型 bg-slate-50 / border-slate-200）；图标 16×16 描边。
+   PR5 S3-1 起与 .reference-library-search 共用同一份定义：独立资料页只换作用域类名，
+   不复制几何数值，也不把 .kb-* 壳类扩散到通用工作区。 */
+.kb-search,
+.reference-library-search {
   align-items: center;
   background: var(--kb-search-bg);
   border: 1px solid var(--kb-search-border);
@@ -820,7 +833,8 @@ body {
   padding: 0 12px;
 }
 
-.kb-search svg {
+.kb-search svg,
+.reference-library-search svg {
   color: var(--kb-text-faint);
   flex-shrink: 0;
   height: 1rem;
@@ -828,7 +842,8 @@ body {
   width: 1rem;
 }
 
-.kb-search input {
+.kb-search input,
+.reference-library-search input {
   background: transparent;
   border: 0;
   color: var(--kb-text-body);
@@ -840,7 +855,8 @@ body {
   padding: 0;
 }
 
-.kb-search input::placeholder {
+.kb-search input::placeholder,
+.reference-library-search input::placeholder {
   color: var(--kb-text-faint);
 }
 
@@ -856,9 +872,11 @@ body {
   padding: 0 12px;
 }
 
-/* 紧凑表格主题：仅作用于挂 .kb-table-scope 的容器内 AntD Table（原型 .kb-table 密度）；
-   4 类选择器稳赢 AntD cssinjs 的 :where() 低特异性注入样式 */
-.kb-table-scope .ant-table {
+/* 紧凑表格主题：仅作用于挂 .kb-table-scope / .reference-library-table-scope 的容器内 AntD Table
+   （原型 .kb-table 密度）；4 类选择器稳赢 AntD cssinjs 的 :where() 低特异性注入样式。
+   PR5 S3-1 起两个作用域共用同一份数值定义：独立资料页只换类名，不复制密度值。 */
+.kb-table-scope .ant-table,
+.reference-library-table-scope .ant-table {
   background: transparent;
   color: var(--kb-text-body);
   font-size: 0.6875rem;
@@ -868,7 +886,8 @@ body {
    第三轮修复：此前 10px 块向 padding 会让 24px 的 size=small 按钮与 23px 的 StatusPill
    以 inline-block 基线把行盒撑到 45px）。border-box 全局生效，height 含 1px 底线；
    height 在表格单元格上是最小高度，内容永不超出（长文本列已全部 ellipsis + nowrap） */
-.kb-table-scope .ant-table .ant-table-thead > tr > th.ant-table-cell {
+.kb-table-scope .ant-table .ant-table-thead > tr > th.ant-table-cell,
+.reference-library-table-scope .ant-table .ant-table-thead > tr > th.ant-table-cell {
   background: var(--kb-table-head-bg);
   border-bottom: 1px solid var(--kb-table-head-border);
   color: var(--kb-text-muted);
@@ -881,7 +900,8 @@ body {
   white-space: nowrap;
 }
 
-.kb-table-scope .ant-table .ant-table-tbody > tr > td.ant-table-cell {
+.kb-table-scope .ant-table .ant-table-tbody > tr > td.ant-table-cell,
+.reference-library-table-scope .ant-table .ant-table-tbody > tr > td.ant-table-cell {
   border-bottom: 1px solid var(--kb-divider);
   height: 38.5px;
   line-height: 1.5;
@@ -890,18 +910,79 @@ body {
 }
 
 .kb-table-scope .ant-table .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell,
-.kb-table-scope .ant-table .ant-table-tbody > tr > td.ant-table-cell-row-hover {
+.kb-table-scope .ant-table .ant-table-tbody > tr > td.ant-table-cell-row-hover,
+.reference-library-table-scope
+  .ant-table
+  .ant-table-tbody
+  > tr.ant-table-row:hover
+  > td.ant-table-cell,
+.reference-library-table-scope .ant-table .ant-table-tbody > tr > td.ant-table-cell-row-hover {
   background: var(--kb-table-row-hover);
 }
 
-/* 卡底部分页/统计行（原型 px-4 py-3 / 10px / text-slate-400） */
-.kb-card-footer {
+/* 卡底部分页/统计行（原型 px-4 py-3 / 10px / text-slate-400）。
+   PR5 S3-1 起与 .reference-library-card-footer 共用：独立资料页同样以「共 N 条 + 紧凑分页」
+   收在表格下方（两端对齐），几何取自基准 §6.3 而非当前实现自证。 */
+.kb-card-footer,
+.reference-library-card-footer {
   align-items: center;
   color: var(--kb-text-faint);
   display: flex;
   font-size: 0.625rem;
   justify-content: space-between;
   padding: 12px 16px;
+}
+
+/* 独立资料页工具栏（/reference-documents，PR5 S3-1；PR5 S3 评审修复轮 P1-1）：
+   与知识库工具区同为卡内连续段——12px padding + 1px 底线（原型 .kb-card 内 p-3 / border-slate-100），
+   表格紧随其后、卡底分页紧随表格，四段之间不插入额外间距。
+   页面仍是通用 AntD Card，故由 .reference-library-card .ant-card-body 归零内边距，
+   让工具区自带的 12px padding 承担卡内边距；不启用任何 .kb-* 壳类。
+   注：`.reference-library-card` 挂在 Card 外层包裹 div 上（AntD 组件禁止挂 className，
+   由 eslint local/no-design-system-classname 强制），故选择器仍是「祖先 → .ant-card-body」。 */
+.reference-library-toolbar {
+  align-items: center;
+  border-bottom: 1px solid var(--kb-divider);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+}
+
+/* 独立资料页卡体与列表容器（PR5 S3 评审修复轮 P1-1）：卡体不再自带内边距，
+   列表容器为纯纵向排布、不插入段间距，使「工具区—筛选区—表格—卡底分页」成为同一张卡内的
+   连续结构（原型 gkj.html L1043-1072）。此前的 `flex flex-col gap-4` 会在每两段之间多插 16px。 */
+.reference-library-card .ant-card-body {
+  padding: 0;
+}
+
+.reference-library-list-body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 独立资料页卡内状态区（加载 / 失败 / 空）：与 .kb-card-state 同几何，保留卡内边距 */
+.reference-library-card-state {
+  padding: 1rem;
+}
+
+/* 工具区/筛选区的 AntD Select 与搜索框同高同圆角（基准 §6.3 紧凑控件：36px / 6px）。
+   AntD v6 的 Select 已不再渲染 `.ant-select-selector`：视觉盒就是 `.ant-select` 根元素，
+   故高度与圆角直接落在根上（与 e2e 注释「单选值落在 .ant-select-content」同一版口径）。 */
+.reference-library-filter-panel .ant-select {
+  border-radius: var(--radius-control);
+  height: 2.25rem;
+}
+
+/* 独立资料页筛选区：常驻展示（保留既有可用性）；作为工具区之下的连续段，与 .kb-filter-panel
+   同几何（12px padding + 1px 底线），并与表格保持贴合。 */
+.reference-library-filter-panel {
+  align-items: center;
+  border-bottom: 1px solid var(--kb-divider);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
 }
 
 /* 卡内状态区（加载 / 失败 / 空）：占表格区域，保留卡内边距（四态同卡要求） */
@@ -925,8 +1006,11 @@ body {
   color: var(--kb-primary);
 }
 
-/* 主搜索框清除按钮（有输入时出现；原型无清除，属可用性保留） */
-.kb-search-clear {
+/* 主搜索框清除按钮（有输入时出现；原型无清除，属可用性保留）。
+   PR5 S3-1 起与 .reference-library-search-clear 共用同一份定义：两个允许的前缀必须同源，
+   否则独立资料页的 × 会退化为浏览器默认按钮（PR5 S3 评审修复轮 P1-2）。 */
+.kb-search-clear,
+.reference-library-search-clear {
   background: transparent;
   border: 0;
   color: var(--kb-text-faint);
@@ -938,8 +1022,57 @@ body {
   padding: 0;
 }
 
-.kb-search-clear:hover {
+.kb-search-clear:hover,
+.reference-library-search-clear:hover {
   color: var(--kb-text-tool);
+}
+
+/* 参考资料详情页（/reference-documents/:documentId，PR5 S4-3）：长标题安全换行，
+   使其不因无空格长串撑破卡头与整页。
+   Card 卡头标题默认 textEllipsis（nowrap + ellipsis，antd card 样式），此处改为随容器换行；
+   overflow-wrap:anywhere 同时收窄 flex 项的最小内容宽度（break-word 不参与 min-content 计算，
+   换成 break-word 会让无断点长标题重新撑出整页横向滚动，实测反向变异已验证）。
+   长文件名 / 长说明无需额外规则：antd descriptions 已在 `.ant-descriptions-item-content` 上
+   声明 `word-break: break-word` + `overflow-wrap: break-word`（Chromium 下按 anywhere 口径
+   参与最小内容宽度计算），实测反向变异（强制 normal）才会把表格撑宽 1029px 并引发整页横滚。 */
+.reference-document-detail .ant-card-head-title {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* 窄视口（<640px）卡头纵向重排（PR5 S4-3 评审 P1-1）：
+   横向布局下 extra（编辑 + 删除两枚按钮）独占一行右侧，375px 详情页里把标题压成
+   约 93px 窄列、卡头高达 504px（占视口 75.6%），两枚按钮垂直居中落在标题中缝，
+   信息层级不可用。此处让标题占满整行、操作区另起一行；标题按 2 行截断，
+   完整文本由组件挂的原生 title 属性承载（与列表页 S3-5 同口径）。
+   仅收在本页前缀下，不改动 antd Card 的全局样式。 */
+@media (max-width: 639px) {
+  /* antd 的行容器是 `.ant-card-head-wrapper`（width:100%; display:flex; align-items:center），
+     `.ant-card-head` 本身已是纵向 flex，只在 wrapper 上改方向才会真正堆叠 */
+  .reference-document-detail .ant-card-head-wrapper {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* flex:1 在纵向 flex 容器里会按主轴（高度）伸缩，此处显式取消，
+     让标题按内容高度占满整行宽度 */
+  .reference-document-detail .ant-card-head-title {
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    display: -webkit-box;
+    flex: none;
+    line-clamp: 2;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  /* 横向布局里 extra 靠右（margin-inline-start: auto），纵向重排后必须取消，
+     否则操作区会被推到右侧而重新挤压标题 */
+  .reference-document-detail .ant-card-extra {
+    margin-inline-start: 0;
+    width: 100%;
+  }
 }
 
 /* 汇总数值后的口径小字（业务口径提示，不破坏 67.5px 行高）：

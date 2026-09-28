@@ -148,6 +148,58 @@ describe('ReferenceDocumentForm', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  // 本地预检只是默认提示镜像（策略常量见 ../infrastructure/reference-document.types），
+  // 权威在服务端：服务端上限比前端默认值更严时，本地放行的文件仍必须交给服务端判定，
+  // 并以服务端消息覆盖本地结果——本地预检不得成为不可绕过的唯一关卡。
+  it('服务端上限更严：本地预检放行后，服务端拒绝消息覆盖本地结果', async () => {
+    const onSubmit = vi.fn().mockResolvedValue({ ok: false, message: '上传文件超过大小限制。' });
+
+    render(<ReferenceDocumentForm onSubmit={onSubmit} />);
+
+    await fillValidForm();
+    const withinLocalLimit = new File(['content'], 'big.pdf', { type: 'application/pdf' });
+
+    Object.defineProperty(withinLocalLimit, 'size', { value: 19 * 1024 * 1024 });
+    selectUploadFile(withinLocalLimit);
+    fireEvent.click(screen.getByRole('button', { name: '提 交' }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('上传文件超过大小限制。')).toBeTruthy();
+  });
+
+  // 末位扩展名口径边界：无点 / 点开头 / 点结尾都不构成有效扩展名，
+  // 必须走「缺少扩展名」专用提示，而不是把整个文件名当成扩展名误报
+  it.each(['README', 'manual', '.gitignore', 'manual.'])(
+    '扩展名边界：%s 按「缺少扩展名」专用提示拦截',
+    async (fileName) => {
+      const onSubmit = vi.fn().mockResolvedValue({ ok: true });
+
+      render(<ReferenceDocumentForm onSubmit={onSubmit} />);
+
+      await fillValidForm();
+      selectUploadFile(new File(['payload'], fileName, { type: 'application/octet-stream' }));
+      fireEvent.click(screen.getByRole('button', { name: '提 交' }));
+
+      expect(await screen.findByText('文件缺少扩展名，无法识别文件类型。')).toBeTruthy();
+      expect(onSubmit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('扩展名取末位且大小写不敏感：report.final.PDF 命中白名单放行', async () => {
+    const onSubmit = vi.fn().mockResolvedValue({ ok: true });
+
+    render(<ReferenceDocumentForm onSubmit={onSubmit} />);
+
+    await fillValidForm();
+    const file = new File(['bytes'], 'report.final.PDF', { type: 'application/pdf' });
+
+    selectUploadFile(file);
+    fireEvent.click(screen.getByRole('button', { name: '提 交' }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({ file });
+  });
+
   it('带文件提交走上传中文案，输出携带 File；成功后恢复', async () => {
     let resolveSubmit: ((value: { ok: true }) => void) | undefined;
     const onSubmit = vi.fn().mockImplementation(
@@ -182,6 +234,39 @@ describe('ReferenceDocumentForm', () => {
 
     // loading 图标 span 会残留在可访问名中（jsdom 不感知 width:0），用正则匹配
     await waitFor(() => expect(screen.getByRole('button', { name: /提\s*交/ })).toBeTruthy());
+  });
+
+  it('提交挂起期间只有进行中状态：不渲染进度条、不出现任何百分比（无可验证 loaded/total 时不显示假进度）', async () => {
+    let resolveSubmit: ((value: { ok: true }) => void) | undefined;
+    const onSubmit = vi.fn().mockImplementation(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          resolveSubmit = resolve;
+        }),
+    );
+
+    const { container } = render(<ReferenceDocumentForm onSubmit={onSubmit} />);
+
+    await fillValidForm();
+    selectUploadFile(new File(['manual'], 'machine-manual.txt', { type: 'text/plain' }));
+    fireEvent.click(screen.getByRole('button', { name: '提 交' }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    // 真实进行中反馈：按钮 loading + 「上传中」文案
+    expect(screen.getByRole('button', { name: /上传中/ })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /上传中/ }).classList.contains('ant-btn-loading'),
+    ).toBe(true);
+    // 上传通道不吐字节进度：不得出现进度条，也不得出现任何百分比文案（假进度红线）
+    expect(container.querySelectorAll('.ant-progress')).toHaveLength(0);
+    expect(container.textContent).not.toContain('%');
+
+    await act(async () => {
+      resolveSubmit?.({ ok: true });
+    });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /提\s*交/ })).toBeTruthy());
+    expect(container.textContent).not.toContain('%');
   });
 
   it('编辑模式：不渲染文件选择；已有文件的资料允许清空正文提交', async () => {
@@ -259,6 +344,28 @@ describe('ReferenceDocumentForm', () => {
 
     await screen.findByText('标题为必填项，且不能超过 255 个字符。');
     // 表单内容保留
+    expect((screen.getByPlaceholderText('请输入文档标题') as HTMLInputElement).value).toBe(
+      '测试资料',
+    );
+  });
+
+  it('提交链路抛异常：走兜底文案并复位按钮，不把底层异常透出，保留表单内容', async () => {
+    // 非业务拒绝的异常（transport / auth 等）由面板 catch 兜底（S4-4 下载链路同口径）
+    const onSubmit = vi.fn().mockRejectedValue(new Error('boom: raw transport failure'));
+
+    render(<ReferenceDocumentForm onSubmit={onSubmit} submitText="创建资料" />);
+
+    await fillValidForm();
+    fireEvent.click(screen.getByRole('button', { name: /创建资料/ }));
+
+    expect(await screen.findByText('参考资料提交失败，请稍后重试。')).toBeTruthy();
+    expect(screen.queryByText(/boom/)).toBeNull();
+    // 兜底后必须复位：按钮不再 loading，用户可重试
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /创建资料/ }).classList.contains('ant-btn-loading'),
+      ).toBe(false),
+    );
     expect((screen.getByPlaceholderText('请输入文档标题') as HTMLInputElement).value).toBe(
       '测试资料',
     );

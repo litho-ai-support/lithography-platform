@@ -1,13 +1,13 @@
 // src/features/reference-document/ui/reference-document-list.tsx
 
 import { useEffect, useMemo, useState } from 'react';
-import { PlusOutlined } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
-import { Alert, Button, Card, Empty, Input, Pagination, Select, Skeleton, Table } from 'antd';
+import { Alert, Button, Card, Empty, Pagination, Select, Skeleton, Table } from 'antd';
+import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 
 import { formatDateTimeText } from '@/shared/ui/format-date-time';
-import { KbSearchField, KbToolbarButton } from '@/shared/ui/knowledge-base';
+import { ToolbarButton, ToolbarSearchField } from '@/shared/ui/toolbar-controls';
 
 import { useReferenceDocumentList } from '../application/use-reference-document-list';
 import { useReferenceEquipmentModels } from '../application/use-reference-equipment-models';
@@ -17,16 +17,19 @@ import type {
 } from '../infrastructure/reference-document.types';
 import { REFERENCE_DOCUMENT_TYPE_LABELS } from '../infrastructure/reference-document.types';
 
-import {
-  buildReferenceDocumentDetailPath,
-  REFERENCE_DOCUMENT_NEW_PATH,
-} from './reference-document-paths';
+import { buildReferenceDocumentDetailPath } from './reference-document-paths';
 
 /** 标题搜索防抖间隔（ms） */
 const SEARCH_DEBOUNCE_MS = 300;
 
+/**
+ * 列定义即「只展示后端真实字段」的唯一真源（PR5 S3-4）：七列一一对应后端
+ * ReferenceDocumentItem 的字段，不引入向量化、分块数、参与检索等派生/伪造列。
+ * 长文本列（标题 / 说明 / 原始文件名）统一走 AntD `ellipsis`（PR5 S3-5）：
+ * 单行截断 + 原生 title 提示，行高保持在紧凑密度内；行点击进入详情不受影响。
+ */
 const columns: TableColumnsType<ReferenceDocumentListItem> = [
-  { dataIndex: 'title', key: 'title', title: '文档标题', width: 260 },
+  { dataIndex: 'title', key: 'title', ellipsis: true, title: '文档标题', width: 260 },
   {
     dataIndex: 'documentType',
     key: 'documentType',
@@ -72,20 +75,24 @@ const columns: TableColumnsType<ReferenceDocumentListItem> = [
  * - 标题搜索防抖；类型下拉与型号下拉筛选（型号选项走后端 equipmentModels）；
  * - 加载中 / 空列表 / 加载失败（含重试）/ 分页交互齐全；
  * - 空态区分筛选结果为空（total = 0）与当前页为空（保留分页器可回页，不形成死路）；
- * - 点击列表项进入详情路由；新增入口仅 SUPER_ADMIN 可见（canManage 由页面层按角色判定）；
- * - variant='knowledge-base' 供 /admin/document-database 消费（PR3 R7）：kb-card 外壳 +
+ * - 点击列表项进入详情路由；
+ * - 两个变体共用同一份状态机与表格/分页结构，只切换**局部作用域类名前缀**：
+ *   `knowledge-base` 变体供 /admin/document-database 消费（PR3 R7）：kb-card 外壳 +
  *   主搜索 + 筛选展开区 + 紧凑表格与卡底分页，新增入口由页面右上主操作区承担；
- *   默认变体保持独立 /reference-documents 页外观不变。
+ *   默认变体供独立 /reference-documents 页消费（PR5 S3-1；评审修复轮 P1-1 补结构、
+ *   复检轮 O1 去卡头）：保留通用 AntD Card 外壳但**不渲染卡头**（列表标题由页面 PageHeader
+ *   承载），卡内「工具区—筛选区—表格—卡底分页」四段连续贴合
+ *   （与 .kb-card 内三段连续同构，段间不留额外间距），几何对齐知识库表格；且不挂任何
+ *   `.kb-*` 壳类，故整页 kb modifier 探针（PR3 回归）在该页恒为 0。
+ *
+ * 两个变体均**不渲染新增入口**（PR5 S3-2）：管理员新增属页面级主操作，由页面页头动作区
+ * 承担；本组件不读取 Session、不判定角色，工程师与管理员的 DOM 差异只由页面层产生。
  */
 type ReferenceDocumentListProps = {
-  canManage: boolean;
   variant?: 'default' | 'knowledge-base';
 };
 
-export function ReferenceDocumentList({
-  canManage,
-  variant = 'default',
-}: ReferenceDocumentListProps) {
+export function ReferenceDocumentList({ variant = 'default' }: ReferenceDocumentListProps) {
   const navigate = useNavigate();
   const [searchText, setSearchText] = useState('');
   const [debouncedKeyword, setDebouncedKeyword] = useState('');
@@ -137,165 +144,42 @@ export function ReferenceDocumentList({
     setEquipmentModelId(undefined);
   };
 
-  if (variant === 'knowledge-base') {
-    return (
-      <div className="kb-card">
-        <div className="kb-toolbar">
-          <KbSearchField
-            clearLabel="清除标题搜索"
-            onChange={setSearchText}
-            placeholder="按文档标题搜索"
-            value={searchText}
-          />
-          <KbToolbarButton
+  const isKnowledgeBase = variant === 'knowledge-base';
+  /** 局部作用域类前缀：知识库变体沿用 PR3 的 kb-*；独立资料页使用 reference-library-*。 */
+  const scope = isKnowledgeBase ? 'kb' : 'reference-library';
+  /** 知识库变体筛选默认收起；独立资料页筛选常驻（保留既有可用性与单测口径）。 */
+  const filtersExpanded = isKnowledgeBase ? filterOpen : true;
+
+  /** 各状态的卡内边距：知识库变体落 `kb-card-state`，独立资料页落 `reference-library-card-state`
+   * （两者同几何 1rem），使四态与工具区 / 表格处于同一张卡内的连续结构。 */
+  const inCardState = (node: ReactNode) => <div className={`${scope}-card-state`}>{node}</div>;
+
+  const listBody = (
+    <>
+      <div className={`${scope}-toolbar`}>
+        <ToolbarSearchField
+          className={`${scope}-search`}
+          clearClassName={`${scope}-search-clear`}
+          clearLabel="清除标题搜索"
+          onChange={setSearchText}
+          placeholder="按文档标题搜索"
+          value={searchText}
+        />
+        {isKnowledgeBase ? (
+          <ToolbarButton
             active={hasActiveFilter}
+            activeClassName="kb-toolbar-button--active"
             aria-expanded={filterOpen}
+            className="kb-toolbar-button"
             onClick={() => setFilterOpen((previous) => !previous)}
           >
             筛选
-          </KbToolbarButton>
-        </div>
-
-        {filterOpen ? (
-          <div className="kb-filter-panel">
-            <Select
-              allowClear
-              placeholder="文档类型"
-              style={{ width: 160 }}
-              value={documentType}
-              onChange={(value) => setDocumentType(value)}
-              options={Object.entries(REFERENCE_DOCUMENT_TYPE_LABELS).map(([value, label]) => ({
-                label,
-                value,
-              }))}
-            />
-            <Select
-              allowClear
-              loading={models.state.status === 'loading'}
-              placeholder="适用设备型号"
-              style={{ width: 240 }}
-              value={equipmentModelId}
-              onChange={(value) => setEquipmentModelId(value)}
-              options={
-                models.state.status === 'ready'
-                  ? models.state.models.map((model) => ({
-                      label: `${model.modelName}（${model.modelCode}）`,
-                      value: model.id,
-                    }))
-                  : []
-              }
-            />
-            <KbToolbarButton onClick={resetFilters}>重置</KbToolbarButton>
-          </div>
-        ) : null}
-
-        {models.state.status === 'failed' ? (
-          <div className="kb-card-state">
-            <Alert
-              action={
-                <Button onClick={models.reload} size="small">
-                  重试
-                </Button>
-              }
-              title={models.state.message}
-              showIcon
-              type="error"
-            />
-          </div>
-        ) : null}
-
-        {state.status === 'loading' ? (
-          <div className="kb-card-state">
-            <Skeleton active paragraph={{ rows: 6 }} />
-          </div>
-        ) : null}
-
-        {state.status === 'failed' ? (
-          <div className="kb-card-state">
-            <Alert
-              action={
-                <Button onClick={reload} size="small">
-                  重试
-                </Button>
-              }
-              title={state.message}
-              showIcon
-              type="error"
-            />
-          </div>
-        ) : null}
-
-        {state.status === 'ready' && state.total === 0 ? (
-          <div className="kb-card-state">
-            <Empty
-              description={hasActiveFilter ? '没有符合筛选条件的参考资料。' : '暂无参考资料。'}
-            />
-          </div>
-        ) : null}
-
-        {state.status === 'ready' && state.total > 0 ? (
-          <>
-            {state.items.length > 0 ? (
-              <div className="kb-table-scope">
-                <Table<ReferenceDocumentListItem>
-                  columns={columns}
-                  dataSource={state.items}
-                  onRow={(record) => ({
-                    onClick: () => navigate(buildReferenceDocumentDetailPath(record.id)),
-                    style: { cursor: 'pointer' },
-                  })}
-                  pagination={false}
-                  rowKey="id"
-                  scroll={{ x: 1100 }}
-                />
-              </div>
-            ) : (
-              <div className="kb-card-state">
-                <Empty description="当前页暂无数据，请翻页返回。" />
-              </div>
-            )}
-            <div className="kb-card-footer">
-              <span>共 {state.total} 条</span>
-              <Pagination
-                current={state.page}
-                onChange={goToPage}
-                pageSize={state.pageSize}
-                showSizeChanger={false}
-                size="small"
-                total={state.total}
-              />
-            </div>
-          </>
+          </ToolbarButton>
         ) : null}
       </div>
-    );
-  }
 
-  return (
-    <Card
-      extra={
-        canManage ? (
-          <Button
-            icon={<PlusOutlined />}
-            onClick={() => navigate(REFERENCE_DOCUMENT_NEW_PATH)}
-            size="small"
-            type="primary"
-          >
-            新增资料
-          </Button>
-        ) : null
-      }
-      title="参考资料列表"
-    >
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <Input
-            allowClear
-            placeholder="按文档标题搜索"
-            style={{ width: 240 }}
-            value={searchText}
-            onChange={(event) => setSearchText(event.target.value)}
-          />
+      {filtersExpanded ? (
+        <div className={`${scope}-filter-panel`}>
           <Select
             allowClear
             placeholder="文档类型"
@@ -323,45 +207,58 @@ export function ReferenceDocumentList({
                 : []
             }
           />
+          {isKnowledgeBase ? (
+            <ToolbarButton className="kb-toolbar-button" onClick={resetFilters}>
+              重置
+            </ToolbarButton>
+          ) : null}
         </div>
+      ) : null}
 
-        {models.state.status === 'failed' ? (
-          <Alert
-            action={
-              <Button onClick={models.reload} size="small">
-                重试
-              </Button>
-            }
-            title={models.state.message}
-            showIcon
-            type="error"
-          />
-        ) : null}
+      {models.state.status === 'failed'
+        ? inCardState(
+            <Alert
+              action={
+                <Button onClick={models.reload} size="small">
+                  重试
+                </Button>
+              }
+              title={models.state.message}
+              showIcon
+              type="error"
+            />,
+          )
+        : null}
 
-        {state.status === 'loading' ? <Skeleton active paragraph={{ rows: 6 }} /> : null}
+      {state.status === 'loading' ? inCardState(<Skeleton active paragraph={{ rows: 6 }} />) : null}
 
-        {state.status === 'failed' ? (
-          <Alert
-            action={
-              <Button onClick={reload} size="small">
-                重试
-              </Button>
-            }
-            title={state.message}
-            showIcon
-            type="error"
-          />
-        ) : null}
+      {state.status === 'failed'
+        ? inCardState(
+            <Alert
+              action={
+                <Button onClick={reload} size="small">
+                  重试
+                </Button>
+              }
+              title={state.message}
+              showIcon
+              type="error"
+            />,
+          )
+        : null}
 
-        {state.status === 'ready' && state.total === 0 ? (
-          <Empty
-            description={hasActiveFilter ? '没有符合筛选条件的参考资料。' : '暂无参考资料。'}
-          />
-        ) : null}
+      {state.status === 'ready' && state.total === 0
+        ? inCardState(
+            <Empty
+              description={hasActiveFilter ? '没有符合筛选条件的参考资料。' : '暂无参考资料。'}
+            />,
+          )
+        : null}
 
-        {state.status === 'ready' && state.total > 0 ? (
-          <div className="flex flex-col gap-4">
-            {state.items.length > 0 ? (
+      {state.status === 'ready' && state.total > 0 ? (
+        <>
+          {state.items.length > 0 ? (
+            <div className={`${scope}-table-scope`}>
               <Table<ReferenceDocumentListItem>
                 columns={columns}
                 dataSource={state.items}
@@ -373,22 +270,37 @@ export function ReferenceDocumentList({
                 rowKey="id"
                 scroll={{ x: 1100 }}
               />
-            ) : (
-              <Empty description="当前页暂无数据，请翻页返回。" />
-            )}
-            <div className="flex justify-end">
-              <Pagination
-                current={state.page}
-                onChange={goToPage}
-                pageSize={state.pageSize}
-                showSizeChanger={false}
-                showTotal={(total) => `共 ${total} 条`}
-                total={state.total}
-              />
             </div>
+          ) : (
+            inCardState(<Empty description="当前页暂无数据，请翻页返回。" />)
+          )}
+          <div className={`${scope}-card-footer`}>
+            <span>共 {state.total} 条</span>
+            <Pagination
+              current={state.page}
+              onChange={goToPage}
+              pageSize={state.pageSize}
+              showSizeChanger={false}
+              size="small"
+              total={state.total}
+            />
           </div>
-        ) : null}
-      </div>
-    </Card>
+        </>
+      ) : null}
+    </>
+  );
+
+  if (isKnowledgeBase) {
+    return <div className="kb-card">{listBody}</div>;
+  }
+
+  return (
+    <div className="reference-library-card">
+      {/* 不渲染卡头：原型 .kb-card 内只有「工具区—表格—卡底」三段，列表标题由页面 PageHeader 承载
+          （PR5 S3 复检轮 O1）。AntD Card 在无 title/extra 时不会生成 .ant-card-head。 */}
+      <Card>
+        <div className="reference-library-list-body">{listBody}</div>
+      </Card>
+    </div>
   );
 }

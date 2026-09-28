@@ -26,11 +26,12 @@
 // docs/tmp/PR 证据目录（本地可追溯，不随 PR 提交）。
 
 import { expect, type Locator, type Page, test } from '@playwright/test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { installAdminDocumentKbGraphqlMocks } from './helpers/admin-document-kb-mocks';
 import { seedAuthSession } from './helpers/auth-session-seed';
+import { readPngDimensions } from './helpers/visual-evidence';
 
 const PAGE_PATH = '/admin/document-database';
 const MODEL_WARNING_TEXT = '设备型号选项加载失败';
@@ -194,20 +195,6 @@ async function focusTab(page: Page, name: string): Promise<void> {
     const at = activeTab.getBoundingClientRect();
     return Math.abs(ib.left - at.left) < 2 && Math.abs(ib.width - at.width) < 2;
   });
-}
-
-/** 读取 PNG 物理像素尺寸（IHDR：宽偏移 16、高偏移 20，大端 uint32），
-    用于机械断言截图物理尺寸严格等于指定视口（0922 复查 B2）。 */
-function readPngDimensions(filePath: string): { height: number; width: number } {
-  const buffer = readFileSync(filePath);
-  if (
-    buffer.length < 24 ||
-    buffer.readUInt32BE(0) !== 0x89504e47 ||
-    buffer.readUInt32BE(4) !== 0x0d0a1a0a
-  ) {
-    throw new Error(`不是合法 PNG：${filePath}`);
-  }
-  return { height: buffer.readUInt32BE(20), width: buffer.readUInt32BE(16) };
 }
 
 /** AI 浮动入口（entry-trigger-shell）为全局组件：1440/1366 套按复查建议隐藏减少
@@ -505,7 +492,6 @@ async function waitForFontsReady(page: Page): Promise<void> {
 
 /** 采集 1:1 局部图：元素截图物理尺寸必须等于元素 CSS 尺寸（dpr=1、不二次缩放）。 */
 async function shootLocal(
-  page: Page,
   locator: Locator,
   filePath: string,
   evidence: Record<string, unknown>,
@@ -559,21 +545,18 @@ async function captureImplementationLocals(
   const pane = activePane(page);
   const evidence: Record<string, unknown> = {};
   await shootLocal(
-    page,
     page.locator('.page-header--kb'),
     path.join(outputDir, `kb-local-${tag}-header.png`),
     evidence,
     'header',
   );
   await shootLocal(
-    page,
     page.locator('.kb-card.kb-summary'),
     path.join(outputDir, `kb-local-${tag}-summary.png`),
     evidence,
     'summary',
   );
   await shootLocal(
-    page,
     pane.locator('.kb-toolbar'),
     path.join(outputDir, `kb-local-${tag}-toolbar.png`),
     evidence,

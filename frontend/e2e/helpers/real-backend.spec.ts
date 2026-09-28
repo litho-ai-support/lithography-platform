@@ -657,7 +657,7 @@ describe('real-backend 已回复维修申请的精确清理（负责人单卡片
     expect(childRowsExpression).toContain('FROM ai_report WHERE request_id IN (920006)');
   });
 
-  it.each<[string, Partial<RepairRequestCleanupResponseTarget['expected']>, string]>([
+  it.each<[string, RepairRequestCleanupResponseTarget['expected'], string]>([
     [
       '回复归属申请与目标不一致',
       { ...RESPONSE_TARGET.expected, requestId: 920007 },

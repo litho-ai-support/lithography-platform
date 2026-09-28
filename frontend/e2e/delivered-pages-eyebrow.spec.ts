@@ -35,6 +35,9 @@ const CASES: readonly EyebrowCase[] = [
   { eyebrow: 'Reference Document Detail', path: '/reference-documents/501', role: 'SUPER_ADMIN' },
   { eyebrow: 'Repair Requests', path: '/engineer/repair-requests', role: 'ENGINEER' },
   { eyebrow: 'Repair Request Detail', path: '/engineer/repair-requests/901', role: 'ENGINEER' },
+  // 客户主页（PR5 S1）：正式化后纳入交付业务页覆盖；ENGINEER / SUPER_ADMIN 的角色主页
+  // 仍为开发期占位（PR6 归属），故本清单暂不收录。
+  { eyebrow: 'Customer Workspace', path: '/customer', role: 'CUSTOMER' },
   { eyebrow: 'My Repair Requests', path: '/customer/repair-requests', role: 'CUSTOMER' },
   { eyebrow: 'New Repair Request', path: '/customer/repair-requests/new', role: 'CUSTOMER' },
   { eyebrow: 'Repair Request Detail', path: '/customer/repair-requests/901', role: 'CUSTOMER' },

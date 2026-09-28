@@ -14,36 +14,18 @@ import {
 
 import { useReferenceEquipmentModels } from '../application/use-reference-equipment-models';
 import {
+  REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH,
+  REFERENCE_DOCUMENT_TITLE_MAX_LENGTH,
   REFERENCE_DOCUMENT_TYPE_LABELS,
   REFERENCE_DOCUMENT_TYPE_OPTIONS,
+  REFERENCE_DOCUMENT_UPLOAD_EXTENSION_MIME,
+  REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES,
+  REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES_TEXT,
 } from '../infrastructure/reference-document.types';
 
-// 长度上限与后端契约对齐（backend dto/reference-document-write.dto.ts），
-// 修改需同步后端，避免单边漂移导致前端误拦或漏校验。
-const TITLE_MAX_LENGTH = 255;
-const DOCUMENT_TYPE_MAX_LENGTH = 100;
-
-// 文件预检口径与后端 REST 上传边界同规格（扩展名白名单 + 大小上限）。
-// 单一口径在后端 env（REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES /
-// REFERENCE_DOCUMENT_ALLOWED_MIME_TYPES，类型判定以扩展名为主），
-// 此处常量仅为选择文件后的即时反馈镜像，修改需同步后端 env 默认值。
-const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
-const UPLOAD_MAX_BYTES_TEXT = '20MB';
-const UPLOAD_ALLOWED_EXTENSIONS = [
-  'pdf',
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'ppt',
-  'pptx',
-  'png',
-  'jpg',
-  'jpeg',
-  'txt',
-  'md',
-  'csv',
-];
+// 长度上限与上传策略的唯一定义在 ../infrastructure/reference-document.types，
+// 此处仅派生展示顺序用的扩展名列表；改动需同步后端契约与 env 默认值。
+const UPLOAD_ALLOWED_EXTENSIONS = Object.keys(REFERENCE_DOCUMENT_UPLOAD_EXTENSION_MIME);
 
 /**
  * 表单统一输出（创建直接使用；编辑由调用方转 PATCH，字段范围一致）。
@@ -90,8 +72,9 @@ const TYPE_SELECT_OPTIONS = REFERENCE_DOCUMENT_TYPE_OPTIONS.map((value) => ({
  * - 文档类型候选与种子语义对齐（自由字符串契约，前端提供固定候选集）；
  * - 创建模式支持「文本 / 文件」双来源：文件经 Upload 手动模式暂存（beforeUpload 返回
  *   false，不上传，提交时由调用方走 REST multipart 通道）；文本与文件双空在提交前拦截
- *   （与后端 CONTENT_SOURCE_EMPTY 同口径），类型白名单与大小上限做即时预检（单一口径
- *   在后端 env，见上方常量注释）；编辑模式不支持换文件，但已有文件的资料允许清空正文；
+ *   （与后端 CONTENT_SOURCE_EMPTY 同口径），类型白名单与大小上限做即时预检（策略常量
+ *   集中在 ../infrastructure/reference-document.types，服务端为唯一权威）；编辑模式不支持
+ *   换文件，但已有文件的资料允许清空正文；
  * - 设备型号可空（通用资料），可清除；
  * - 提交中禁用并以进行中标志防连点（带文件提交展示「上传中」）；业务拒绝展示后端
  *   消息并保留表单内容；
@@ -136,9 +119,14 @@ export function ReferenceDocumentForm({
 
       // 文件预检：扩展名白名单 + 大小上限（即时反馈镜像，后端为唯一真源）
       if (selectedFile !== null) {
-        const extension = selectedFile.name
-          .slice(selectedFile.name.lastIndexOf('.') + 1)
-          .toLowerCase();
+        // 末位扩展名口径：最后一个点必须不在首位、也不在末尾，否则视为缺少扩展名。
+        // 直接用 lastIndexOf('.') + 1 切片时，无点文件（README）会取到 -1 + 1 = 0，
+        // 得到整个文件名而被当成「扩展名」，使「缺少扩展名」分支永不可达。
+        const dotIndex = selectedFile.name.lastIndexOf('.');
+        const extension =
+          dotIndex > 0 && dotIndex < selectedFile.name.length - 1
+            ? selectedFile.name.slice(dotIndex + 1).toLowerCase()
+            : '';
 
         if (!UPLOAD_ALLOWED_EXTENSIONS.includes(extension)) {
           setSubmitError(
@@ -150,8 +138,8 @@ export function ReferenceDocumentForm({
           return;
         }
 
-        if (selectedFile.size > UPLOAD_MAX_BYTES) {
-          setSubmitError(`上传文件不能超过 ${UPLOAD_MAX_BYTES_TEXT}。`);
+        if (selectedFile.size > REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES) {
+          setSubmitError(`上传文件不能超过 ${REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES_TEXT}。`);
 
           return;
         }
@@ -228,10 +216,13 @@ export function ReferenceDocumentForm({
           name="title"
           rules={[
             { message: '请输入文档标题', required: true },
-            { max: TITLE_MAX_LENGTH, message: `文档标题不能超过 ${TITLE_MAX_LENGTH} 个字符` },
+            {
+              max: REFERENCE_DOCUMENT_TITLE_MAX_LENGTH,
+              message: `文档标题不能超过 ${REFERENCE_DOCUMENT_TITLE_MAX_LENGTH} 个字符`,
+            },
           ]}
         >
-          <Input maxLength={TITLE_MAX_LENGTH} placeholder="请输入文档标题" />
+          <Input maxLength={REFERENCE_DOCUMENT_TITLE_MAX_LENGTH} placeholder="请输入文档标题" />
         </Form.Item>
         <Form.Item
           label="文档类型"
@@ -239,8 +230,8 @@ export function ReferenceDocumentForm({
           rules={[
             { message: '请选择文档类型', required: true },
             {
-              max: DOCUMENT_TYPE_MAX_LENGTH,
-              message: `文档类型不能超过 ${DOCUMENT_TYPE_MAX_LENGTH} 个字符`,
+              max: REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH,
+              message: `文档类型不能超过 ${REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH} 个字符`,
             },
           ]}
         >
@@ -268,7 +259,7 @@ export function ReferenceDocumentForm({
         {initial === undefined ? (
           <Form.Item
             label="资料文件"
-            tooltip={`支持 ${UPLOAD_ALLOWED_EXTENSIONS.join(' / ')} 格式，单文件不超过 ${UPLOAD_MAX_BYTES_TEXT}；上传文件时可不填文本内容`}
+            tooltip={`支持 ${UPLOAD_ALLOWED_EXTENSIONS.join(' / ')} 格式，单文件不超过 ${REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES_TEXT}；上传文件时可不填文本内容`}
           >
             <Upload
               beforeUpload={() => false}

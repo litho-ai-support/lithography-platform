@@ -39,6 +39,27 @@ const DELETE_MUTATION = `
   }
 `;
 
+/** 详情查询（与 features/repair-request 的 adapter 同形状）：用于把 UI 展示值与后端载荷对照。 */
+const DETAIL_QUERY = `
+  query MyRepairRequest($id: Int!) {
+    myRepairRequest(id: $id) {
+      id
+      requestNo
+      responses { id engineerNickname resolutionStatus responseText createdAt }
+    }
+  }
+`;
+
+/** 客户侧统一时间格式（与 src/pages/customer/format-date.ts 同参数），用于核对展示值。 */
+const customerTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  day: '2-digit',
+  hour: '2-digit',
+  hour12: false,
+  minute: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+});
+
 test.describe('real backend manage flow', () => {
   test.beforeEach(async () => {
     const env = readBackendEnvOrNull();
@@ -195,6 +216,40 @@ test.describe('real backend manage flow', () => {
     await expect(page.getByText('李工')).toBeVisible();
     await expect(page.getByText('处理中')).toBeVisible();
     await expect(page.getByText(/engineerAccountId|accountId|customerAccountId/)).toHaveCount(0);
+
+    // S2-7：回复时间来自后端字段并按客户侧分钟精度格式化。期望值由同一后端载荷推导
+    // （而非硬编码字面量），避免对序号化时区做假设；同时不得出现原始 ISO 串。
+    const { body } = await realGraphqlCall(env, DETAIL_QUERY, { id: 920003 });
+    const replyCreatedAt = (
+      body as {
+        data?: { myRepairRequest?: { responses?: Array<{ createdAt: string }> } };
+      }
+    ).data?.myRepairRequest?.responses?.[0]?.createdAt;
+    expect(replyCreatedAt, '真实载荷应含回复时间').toBeTruthy();
+    const expectedTime = customerTimeFormatter.format(new Date(replyCreatedAt as string));
+    await expect(page.getByText(expectedTime)).toBeVisible();
+    await expect(page.getByText(replyCreatedAt as string)).toHaveCount(0);
+  });
+
+  // S2-6（真实数据）：seed 920001 属客户甲、未接单且 0 条回复 —— 详情页整个回复模块
+  // 不渲染（无标题 / 无计数 / 无占位），且未接单仍保留删除入口（只读，不改动 seed 行）
+  test('unaccepted request without responses hides the whole reply module', async ({ page }) => {
+    const env = readBackendEnv();
+
+    await page.goto('/login');
+    await page.getByLabel('账号或邮箱').fill('mock_customer_alpha');
+    await page.getByLabel('密码').fill(env.MOCK_SEED_PASSWORD);
+    await page.getByRole('button', { name: /登\s*录/ }).click();
+    await expect(page).toHaveURL(/\/customer$/);
+
+    await page.goto(`${LIST_PATH}/920001`);
+    // 先确认数据已就绪，再断言回复模块缺失（排除 loading 造成的假阴性）
+    await expect(page.getByText('MOCK-RR-2026-0001').first()).toBeVisible();
+    await expect(page.getByText(/工程师回复/)).toHaveCount(0);
+    await expect(page.getByText(/暂无工程师回复/)).toHaveCount(0);
+    // 未接单详情只剩「申请信息」与「故障正文」两块面板
+    await expect(page.locator('.surface-panel')).toHaveCount(2);
+    await expect(page.getByRole('button', { name: '删除申请' })).toBeVisible();
   });
 
   // T-08：已接单拒绝（裁定 5 CONFLICT）。UI 无删除入口，走 API 直发探测；

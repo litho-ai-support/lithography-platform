@@ -159,7 +159,13 @@ test.describe('real backend reference document flow', () => {
       // 新增指定型号资料（标题含运行唯一标识，跨运行/并行执行永不撞名）
       await page.getByRole('button', { name: '新增资料' }).click();
       await expect(page).toHaveURL(new RegExp(NEW_PAGE_PATH));
-      await page.getByLabel('文档标题').fill(`${RUN_TITLE_KEYWORD}（光闸维护）`);
+      // 就绪判据（S3-1 修复）：URL 由 pushState 先行变更，SPA 尚未提交新路由时列表页仍在 DOM，
+      // 其搜索框 aria-label「按文档标题搜索」会被 getByLabel('文档标题') 子串命中（Playwright
+      // 默认非精确匹配），导致 fill 落在列表搜索框而创建表单标题为空；必须等创建页渲染完成再填表。
+      // 评审修复轮 P3-2：这里连同 { exact: true } 一起收口——就绪判据管时序、精确匹配管子串歧义，
+      // 两者互补；即便将来路由切换时序再变，fill 也不会落到「按文档标题搜索」上。
+      await expect(page.getByRole('heading', { name: '新增参考资料' })).toBeVisible();
+      await page.getByLabel('文档标题', { exact: true }).fill(`${RUN_TITLE_KEYWORD}（光闸维护）`);
       // AntD Select 交互按维修申请先例：点击 combobox 打开下拉后点 option（label 点击不展开下拉）
       await page.getByRole('combobox').nth(0).click();
       await page.locator('.ant-select-item-option', { hasText: '检查表' }).click();
@@ -189,7 +195,9 @@ test.describe('real backend reference document flow', () => {
 
       // 编辑：改标题 → 保存后详情刷新（仍含运行唯一标识，清理反查不变）
       await page.getByRole('button', { name: /编\s*辑/ }).click();
-      await page.getByLabel('文档标题').fill(`${RUN_TITLE_KEYWORD}（光闸维护·已改）`);
+      await page
+        .getByLabel('文档标题', { exact: true })
+        .fill(`${RUN_TITLE_KEYWORD}（光闸维护·已改）`);
       await page.getByRole('button', { name: /保存修改/ }).click();
       await expect(page.getByText('参考资料已保存。')).toBeVisible();
       await expect(page.getByText(`${RUN_TITLE_KEYWORD}（光闸维护·已改）`).first()).toBeVisible();
@@ -354,7 +362,10 @@ test.describe('real backend reference document flow', () => {
       await expect(page.getByRole('heading', { name: '参考资料库' })).toBeVisible();
       await page.getByRole('button', { name: '新增资料' }).click();
       await expect(page).toHaveURL(new RegExp(NEW_PAGE_PATH));
-      await page.getByLabel('文档标题').fill(`${RUN_TITLE_KEYWORD}（文件上传）`);
+      // 同 S3-1 修复：等创建页提交后再填表；并用 { exact: true } 避开列表页「按文档标题搜索」
+      // 搜索框的子串命中（评审修复轮 P3-2）
+      await expect(page.getByRole('heading', { name: '新增参考资料' })).toBeVisible();
+      await page.getByLabel('文档标题', { exact: true }).fill(`${RUN_TITLE_KEYWORD}（文件上传）`);
       await page.getByRole('combobox').nth(0).click();
       await page.locator('.ant-select-item-option', { hasText: '检查表' }).click();
 

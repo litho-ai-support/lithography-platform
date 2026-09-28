@@ -1,18 +1,15 @@
 // src/pages/customer/repair-request-detail/index.tsx
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Descriptions, Popconfirm, Tag, Timeline, Typography } from 'antd';
-import { message } from 'antd';
+import { useCallback } from 'react';
+import { Alert, Button, Descriptions, Popconfirm, Skeleton, Tag, Timeline } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 
 import {
-  deleteMyRepairRequest,
-  fetchMyRepairRequest,
-  type RepairRequestDetail,
   RESOLUTION_STATUS_LABELS,
+  useCustomerRepairRequestDetailFlow,
 } from '@/features/repair-request';
 
-import { isGraphQLIngressError } from '@/shared/graphql';
+import { useMessageFeedback } from '@/shared/ui/message-feedback';
 import { PageHeader } from '@/shared/ui/page-header';
 
 import { formatDate } from '../format-date';
@@ -29,13 +26,12 @@ export function CustomerRepairRequestDetailRoute() {
   return <CustomerRepairRequestDetailPage requestId={Number(requestId)} />;
 }
 
-type DetailState =
-  | { status: 'loading' }
-  | { status: 'failed'; message: string; notFound: boolean }
-  | { status: 'ready'; detail: RepairRequestDetail };
-
 /**
  * 客户维修申请详情页。
+ *
+ * 页面只负责布局与导航目标装配：加载状态机、删除命令、目标代次守卫与失败回刷
+ * 均由 feature application hook（useCustomerRepairRequestDetailFlow）承担，
+ * 页面不感知 adapter、代次与竞态细节。
  *
  * - requestId 由路由层（阶段三 T-04）从 useParams 注入；本组件保持可独立测试；
  * - 不存在 / 非本人 / 已删除由后端统一 NOT_FOUND（防探测），页面呈现友好错误态而非数据；
@@ -44,72 +40,20 @@ type DetailState =
  */
 export function CustomerRepairRequestDetailPage({ requestId }: { requestId: number }) {
   const navigate = useNavigate();
-  const [detailState, setDetailState] = useState<DetailState>({ status: 'loading' });
-  const [deleting, setDeleting] = useState(false);
-  const deletingRef = useRef(false);
+  // 反馈端口由 ui 层注入（application 不依赖具体 UI 组件实现）
+  const notify = useMessageFeedback();
+  const { state, deleting, deleteRequest } = useCustomerRepairRequestDetailFlow(requestId, notify);
 
-  // loading 置位不在 loadDetail 内同步做（react-hooks/set-state-in-effect）：
-  // 首次加载由初始状态覆盖，删除失败后刷新在事件处理器中显式置位。
-  const loadDetail = useCallback(async (id: number) => {
-    try {
-      const result = await fetchMyRepairRequest(id);
-
-      if (result.ok) {
-        setDetailState({ status: 'ready', detail: result.detail });
-      } else {
-        // 分类依据显式化：只有 not-found 呈现 warning 态，未来新增 failure reason 不会误分类
-        setDetailState({
-          status: 'failed',
-          message: result.message,
-          notFound: result.reason === 'not-found',
-        });
-      }
-    } catch (error) {
-      setDetailState({
-        status: 'failed',
-        message: isGraphQLIngressError(error)
-          ? error.userMessage
-          : '维修申请详情加载失败，请稍后重试。',
-        notFound: false,
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    // 微任务中发起：effect 同步链路不触发 setState（react-hooks/set-state-in-effect）
-    queueMicrotask(() => void loadDetail(requestId));
-  }, [loadDetail, requestId]);
-
+  // 删除成功且目标仍有效时导航回列表；目标已在途中切换/卸载或删除失败时 deleteRequest 返回 false。
   const handleDelete = useCallback(async () => {
-    if (deletingRef.current) {
-      return;
+    const deleted = await deleteRequest();
+
+    if (deleted) {
+      navigate(REPAIR_REQUESTS_LIST_PATH);
     }
+  }, [deleteRequest, navigate]);
 
-    deletingRef.current = true;
-    setDeleting(true);
-
-    try {
-      const result = await deleteMyRepairRequest(requestId);
-
-      if (result.ok) {
-        message.success('维修申请已删除。');
-        navigate(REPAIR_REQUESTS_LIST_PATH);
-      } else {
-        message.error(result.message);
-        setDetailState({ status: 'loading' });
-        void loadDetail(requestId);
-      }
-    } catch (error) {
-      message.error(isGraphQLIngressError(error) ? error.userMessage : '删除失败，请稍后重试。');
-      setDetailState({ status: 'loading' });
-      void loadDetail(requestId);
-    } finally {
-      deletingRef.current = false;
-      setDeleting(false);
-    }
-  }, [loadDetail, navigate, requestId]);
-
-  if (detailState.status === 'loading') {
+  if (state.status === 'loading') {
     return (
       <div className="page-stack">
         <PageHeader
@@ -117,12 +61,16 @@ export function CustomerRepairRequestDetailPage({ requestId }: { requestId: numb
           eyebrow="Repair Request Detail"
           title="维修申请详情"
         />
-        <div className="surface-panel" />
+        {/* 与列表页「加载失败 / 不存在」共用同一页面骨架（页头 + 面板），
+            面板内必须是骨架屏而非空白 div，避免出现无信息的空白面板（S2-8）。 */}
+        <div className="surface-panel">
+          <Skeleton active paragraph={{ rows: 8 }} />
+        </div>
       </div>
     );
   }
 
-  if (detailState.status === 'failed') {
+  if (state.status === 'failed') {
     return (
       <div className="page-stack">
         <PageHeader
@@ -138,15 +86,15 @@ export function CustomerRepairRequestDetailPage({ requestId }: { requestId: numb
               </Button>
             }
             showIcon
-            title={detailState.message}
-            type={detailState.notFound ? 'warning' : 'error'}
+            title={state.message}
+            type={state.notFound ? 'warning' : 'error'}
           />
         </div>
       </div>
     );
   }
 
-  const { detail } = detailState;
+  const { detail } = state;
 
   return (
     <div className="page-stack">
@@ -165,7 +113,9 @@ export function CustomerRepairRequestDetailPage({ requestId }: { requestId: numb
               {`${detail.equipmentModel.modelName}（${detail.equipmentModel.modelCode}）`}
             </Descriptions.Item>
             <Descriptions.Item label="错误码">{detail.errorCode}</Descriptions.Item>
-            <Descriptions.Item label="故障描述">{detail.faultDescription}</Descriptions.Item>
+            <Descriptions.Item label="故障描述">
+              <span className="break-words">{detail.faultDescription}</span>
+            </Descriptions.Item>
             <Descriptions.Item label="接单状态">
               {detail.isAccepted
                 ? `已接单（${detail.acceptedAt ? formatDate(detail.acceptedAt) : '时间未知'}）`
@@ -194,12 +144,15 @@ export function CustomerRepairRequestDetailPage({ requestId }: { requestId: numb
         <pre className="whitespace-pre-wrap break-words text-sm">{detail.contentMd}</pre>
       </div>
 
-      <div className="surface-panel">
-        <div className="mb-2 font-medium">工程师回复（{detail.responses.length}）</div>
-        {detail.responses.length > 0 ? (
+      {/* 0 条回复时整个回复模块（含标题、计数、占位）都不渲染：
+          任务书要求「有回复才显示回复模块」，空计数或「暂无回复」占位会让客户误判为数据缺失。 */}
+      {detail.responses.length > 0 ? (
+        <div className="surface-panel">
+          <div className="mb-2 font-medium">工程师回复（{detail.responses.length}）</div>
           <Timeline
             items={detail.responses.map((response) => ({
-              children: (
+              // AntD v6：items.children 已弃用（运行时告警），改用 items.content
+              content: (
                 <div className="flex flex-col gap-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{response.engineerNickname}</span>
@@ -210,17 +163,14 @@ export function CustomerRepairRequestDetailPage({ requestId }: { requestId: numb
                       {formatDate(response.createdAt)}
                     </span>
                   </div>
-                  <div className="text-sm">{response.responseText}</div>
+                  <div className="text-sm break-words">{response.responseText}</div>
                 </div>
               ),
               key: response.id,
             }))}
           />
-        ) : (
-          // 空状态显式化：与列表页「暂无回复」口径一致，避免用户误判为加载不完整或页面遗漏
-          <Typography.Text type="secondary">暂无工程师回复。</Typography.Text>
-        )}
-      </div>
+        </div>
+      ) : null}
 
       <div>
         <Button onClick={() => navigate(REPAIR_REQUESTS_LIST_PATH)}>返回列表</Button>

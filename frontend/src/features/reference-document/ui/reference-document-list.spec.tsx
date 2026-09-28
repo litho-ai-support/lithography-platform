@@ -91,7 +91,7 @@ describe('ReferenceDocumentList', () => {
       }),
     );
 
-    render(<ReferenceDocumentList canManage={false} />);
+    render(<ReferenceDocumentList />);
 
     expect(document.querySelector('.ant-skeleton')).toBeTruthy();
 
@@ -111,7 +111,7 @@ describe('ReferenceDocumentList', () => {
   it('无筛选时以不带 filter 参数请求；点击行进入详情路由', async () => {
     fetchListMock.mockResolvedValue(buildPage([buildItem(970001)]));
 
-    render(<ReferenceDocumentList canManage={false} />);
+    render(<ReferenceDocumentList />);
     await screen.findByText('参考资料 970001');
 
     expect(fetchListMock).toHaveBeenLastCalledWith({ page: 1, pageSize: 10 }, undefined);
@@ -127,7 +127,7 @@ describe('ReferenceDocumentList', () => {
     try {
       fetchListMock.mockResolvedValue(buildPage([buildItem(970001)]));
 
-      render(<ReferenceDocumentList canManage={false} />);
+      render(<ReferenceDocumentList />);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -160,7 +160,7 @@ describe('ReferenceDocumentList', () => {
   it('选择文档类型与设备型号后请求携带组合 filter（下拉经 AntD 门户渲染）', async () => {
     fetchListMock.mockResolvedValue(buildPage([buildItem(970001)]));
 
-    render(<ReferenceDocumentList canManage={false} />);
+    render(<ReferenceDocumentList />);
     await screen.findByText('参考资料 970001');
 
     // AntD Select 的 placeholder 不是 input 属性，jsdom 下按 combobox role + 页面顺序定位
@@ -195,7 +195,7 @@ describe('ReferenceDocumentList', () => {
   it('结果为空区分「筛选无结果」与「库为空」', async () => {
     fetchListMock.mockResolvedValue(buildPage([], 0, 1));
 
-    render(<ReferenceDocumentList canManage={false} />);
+    render(<ReferenceDocumentList />);
 
     await screen.findByText('暂无参考资料。');
 
@@ -211,7 +211,7 @@ describe('ReferenceDocumentList', () => {
     const networkError = new GraphQLIngressError({ type: 'network', message: 'fetch failed' });
     fetchListMock.mockRejectedValueOnce(networkError);
 
-    render(<ReferenceDocumentList canManage={false} />);
+    render(<ReferenceDocumentList />);
 
     await screen.findByText(networkError.userMessage);
     expect(screen.queryByText('暂无参考资料。')).toBeNull();
@@ -223,26 +223,163 @@ describe('ReferenceDocumentList', () => {
     expect(fetchListMock).toHaveBeenLastCalledWith({ page: 1, pageSize: 10 }, undefined);
   });
 
-  it('canManage 控制新增入口可见性；不可见时不渲染按钮', async () => {
+  it('列表本体不渲染新增入口：主操作已移交页面页头（PR5 S3-2）', async () => {
     fetchListMock.mockResolvedValue(buildPage([buildItem(970001)]));
 
-    const { rerender } = render(<ReferenceDocumentList canManage={false} />);
+    render(<ReferenceDocumentList />);
     await screen.findByText('参考资料 970001');
 
     expect(screen.queryByText('新增资料')).toBeNull();
+    expect(navigateMock).not.toHaveBeenCalledWith('/reference-documents/new');
+  });
 
-    rerender(<ReferenceDocumentList canManage={true} />);
-    await screen.findByText('新增资料');
+  it('当前页为空但总数不为 0 时保留分页器并可翻页回退（不形成死路，PR5 S3-3）', async () => {
+    fetchListMock.mockResolvedValueOnce(buildPage([], 25, 3));
 
-    fireEvent.click(screen.getByText('新增资料'));
-    expect(navigateMock).toHaveBeenCalledWith('/reference-documents/new');
+    const { container } = render(<ReferenceDocumentList />);
+
+    // 第三页被删空：文案是「当前页空」，不是「库空」，也不与失败态叠加
+    await screen.findByText('当前页暂无数据，请翻页返回。');
+    expect(screen.queryByText('暂无参考资料。')).toBeNull();
+    expect(screen.queryByText('没有符合筛选条件的参考资料。')).toBeNull();
+    expect(screen.getByText('共 25 条')).toBeTruthy();
+
+    const secondPage = container.querySelector('.ant-pagination-item-2 a');
+    expect(secondPage).not.toBeNull();
+
+    fetchListMock.mockResolvedValueOnce(buildPage([buildItem(970005)], 25, 2));
+    fireEvent.click(secondPage as HTMLElement);
+
+    await screen.findByText('参考资料 970005');
+    expect(fetchListMock).toHaveBeenLastCalledWith({ page: 2, pageSize: 10 }, undefined);
+    expect(screen.queryByText('当前页暂无数据，请翻页返回。')).toBeNull();
+  });
+
+  it('设备型号加载失败展示重试入口，重试后型号恢复可选并参与筛选（PR5 S3-3）', async () => {
+    const modelsError = new GraphQLIngressError({
+      type: 'network',
+      message: 'models fetch failed',
+    });
+    fetchModelsMock.mockRejectedValueOnce(modelsError);
+    fetchListMock.mockResolvedValue(buildPage([buildItem(970001)]));
+
+    render(<ReferenceDocumentList />);
+
+    // 型号失败不阻塞列表：列表仍就绪，只额外多一条型号错误与重试入口
+    await screen.findByText('参考资料 970001');
+    await screen.findByText(modelsError.userMessage);
+    expect(screen.getByRole('button', { name: /重\s*试/ })).toBeTruthy();
+
+    // 重试成功返回与首次不同的型号集合，证明下拉选项确实来自重试后的响应
+    fetchModelsMock.mockResolvedValueOnce([
+      { id: 47, modelCode: 'ASML-TWINSCAN-XT-1900I', modelName: 'ASML TWINSCAN XT:1900i' },
+    ]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
+    });
+
+    await waitFor(() => {
+      expect(fetchModelsMock).toHaveBeenCalledTimes(2);
+    });
+
+    const [, modelSelect] = screen.getAllByRole('combobox');
+    await act(async () => {
+      fireEvent.mouseDown(modelSelect);
+    });
+    fireEvent.click(await screen.findByText(/ASML TWINSCAN XT:1900i/));
+
+    await waitFor(() => {
+      expect(fetchListMock).toHaveBeenLastCalledWith(
+        { page: 1, pageSize: 10 },
+        { equipmentModelId: 47 },
+      );
+    });
+    // 重试成功后错误告警消失
+    expect(screen.queryByText(modelsError.userMessage)).toBeNull();
+  });
+
+  it('表格只渲染后端真实字段集合，不含向量化 / 分块 / 参与检索等伪造列与假统计（PR5 S3-4）', async () => {
+    fetchListMock.mockResolvedValue(buildPage([buildItem(970001)], 1));
+
+    const { container } = render(<ReferenceDocumentList />);
+    await screen.findByText('参考资料 970001');
+
+    const headerTexts = Array.from(container.querySelectorAll('.ant-table-thead th')).map((th) =>
+      th.textContent?.trim(),
+    );
+    expect(headerTexts).toEqual([
+      '文档标题',
+      '文档类型',
+      '适用设备型号',
+      '文档说明',
+      '原始文件名',
+      '创建人',
+      '创建时间',
+    ]);
+
+    // 唯一统计是后端返回的 total，不得出现派生指标或伪造状态
+    const text = container.textContent ?? '';
+    for (const forbidden of [
+      '向量化',
+      '向量',
+      '分块',
+      '参与检索',
+      '命中',
+      '相似度',
+      '索引状态',
+      'embedding',
+      'chunk',
+    ]) {
+      expect(text, `不应出现伪造字段：${forbidden}`).not.toContain(forbidden);
+    }
+    expect(container.querySelectorAll('.ant-statistic')).toHaveLength(0);
+  });
+
+  it('独立资料页清除按钮落在 reference-library-* 前缀下，点击后恢复无筛选请求（评审修复轮 P1-2）', async () => {
+    vi.useFakeTimers();
+
+    try {
+      fetchListMock.mockResolvedValue(buildPage([buildItem(970001)]));
+
+      render(<ReferenceDocumentList />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      fireEvent.change(screen.getByPlaceholderText('按文档标题搜索'), {
+        target: { value: '维护指南' },
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(fetchListMock).toHaveBeenLastCalledWith(
+        { page: 1, pageSize: 10 },
+        { titleKeyword: '维护指南' },
+      );
+
+      // 前缀契约：独立资料页直接消费中性原语 shared/ui/toolbar-controls，DOM 上同时保留
+      // 中性基类 toolbar-search-clear 与页面作用域覆盖层 reference-library-search-clear；
+      // index.css 中 .kb-search-clear / .reference-library-search-clear 共用同一条几何定义，
+      // 若独立变体退回默认前缀 'kb'，样式与几何断言的落点即失效（CSS 侧由 e2e computed style 守住）。
+      const clearButton = screen.getByRole('button', { name: '清除标题搜索' });
+      expect(clearButton.className).toBe('toolbar-search-clear reference-library-search-clear');
+
+      fireEvent.click(clearButton);
+      expect(screen.getByPlaceholderText<HTMLInputElement>('按文档标题搜索').value).toBe('');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(fetchListMock).toHaveBeenLastCalledWith({ page: 1, pageSize: 10 }, undefined);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe('knowledge-base 变体（PR3 R7）', () => {
     it('渲染 kb-card 工具区/紧凑表格/卡底统计，不渲染卡片标题与新增入口', async () => {
       fetchListMock.mockResolvedValue(buildPage([buildItem(970001)], 1));
 
-      render(<ReferenceDocumentList canManage variant="knowledge-base" />);
+      render(<ReferenceDocumentList variant="knowledge-base" />);
       await screen.findByText('参考资料 970001');
 
       expect(document.querySelector('.kb-card')).not.toBeNull();
@@ -261,7 +398,7 @@ describe('ReferenceDocumentList', () => {
     it('筛选默认收起，展开后选择类型触发组合筛选，重置清除全部条件', async () => {
       fetchListMock.mockResolvedValue(buildPage([buildItem(970001)], 1));
 
-      render(<ReferenceDocumentList canManage variant="knowledge-base" />);
+      render(<ReferenceDocumentList variant="knowledge-base" />);
       await screen.findByText('参考资料 970001');
 
       // 默认收起：无可见 combobox
@@ -296,7 +433,7 @@ describe('ReferenceDocumentList', () => {
       try {
         fetchListMock.mockResolvedValue(buildPage([buildItem(970001)]));
 
-        render(<ReferenceDocumentList canManage variant="knowledge-base" />);
+        render(<ReferenceDocumentList variant="knowledge-base" />);
         await act(async () => {
           await vi.advanceTimersByTimeAsync(0);
         });

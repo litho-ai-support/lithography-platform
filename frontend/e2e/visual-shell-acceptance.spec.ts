@@ -49,6 +49,13 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
     const statValue = style('.stat-card-value');
     const statHint = style('.stat-card-hint');
     const simpleEmpty = style('.empty-state--simple .empty-state-title');
+    const eyebrow = style('.page-eyebrow');
+    const header = style('.page-header');
+    const headerContent = style('.page-header-content');
+    const sidebarBrand = style('.app-sidebar-brand');
+    const sidebarNav = style('.app-sidebar-nav');
+    const sidebarFooter = style('.app-sidebar-footer');
+    const userCard = style('.app-user-card');
     const brandLink = document.querySelector<HTMLElement>('.app-sidebar-brand-link')!;
     const collapseButton = document.querySelector<HTMLElement>('.app-sidebar-collapse-button')!;
 
@@ -58,8 +65,24 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
         fontSize: description.fontSize,
         lineHeight: description.lineHeight,
         marginTop: description.marginTop,
+        maxWidth: description.maxWidth,
       },
+      // 页头 eyebrow：基准为主壳静态页头（10px/700/.18em），非生成页 .atta-eyebrow
+      eyebrow: { fontWeight: eyebrow.fontWeight, letterSpacing: eyebrow.letterSpacing },
+      header: { gap: header.gap },
+      headerContent: { maxWidth: headerContent.maxWidth },
       nav: { color: nav.color, fontSize: nav.fontSize, fontWeight: nav.fontWeight },
+      navContainer: { gap: sidebarNav.gap, padding: sidebarNav.padding },
+      // 导航描边图标为内联 SVG（属性级契约），AntD 图标 viewBox 不同故被选择器过滤
+      navIcons: Array.from(
+        document.querySelectorAll<SVGElement>('.app-sidebar-nav svg[viewBox="0 0 24 24"]'),
+      ).map((icon) => ({
+        stroke: icon.getAttribute('stroke'),
+        strokeLinecap: icon.getAttribute('stroke-linecap'),
+        strokeLinejoin: icon.getAttribute('stroke-linejoin'),
+        strokeWidth: icon.getAttribute('stroke-width'),
+        viewBox: icon.getAttribute('viewBox'),
+      })),
       panel: {
         backgroundColor: panel.backgroundColor,
         borderRadius: panel.borderRadius,
@@ -105,12 +128,30 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
         nameClientWidth: style('.app-sidebar-brand-name').width,
         nameScrollWidth:
           document.querySelector<HTMLElement>('.app-sidebar-brand-name')!.scrollWidth,
+        padding: sidebarBrand.padding,
+        minHeight: sidebarBrand.minHeight,
       },
+      sidebarFooter: {
+        minHeight: sidebarFooter.minHeight,
+        padding: sidebarFooter.padding,
+      },
+      userCard: { gap: userCard.gap },
     };
   });
 
   expect(snapshot.rootFontSize).toBe('16px');
   expect(snapshot.nav).toEqual({ color: 'rgb(71, 85, 105)', fontSize: '12px', fontWeight: '600' });
+  expect(snapshot.navContainer).toEqual({ gap: '4px', padding: '12px' });
+  expect(snapshot.navIcons.length).toBeGreaterThan(0);
+  for (const icon of snapshot.navIcons) {
+    expect(icon).toEqual({
+      stroke: 'currentColor',
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      strokeWidth: '2',
+      viewBox: '0 0 24 24',
+    });
+  }
   expect(snapshot.title).toEqual({
     color: 'rgb(30, 41, 59)',
     fontSize: '24px',
@@ -121,7 +162,12 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
     fontSize: '14px',
     lineHeight: '20px',
     marginTop: '4px',
+    maxWidth: '760px',
   });
+  // 页头：eyebrow 取主壳静态页头（700/0.18em），文字块-extra 间距 16px
+  expect(snapshot.eyebrow).toEqual({ fontWeight: '700', letterSpacing: '1.8px' });
+  expect(snapshot.header).toEqual({ gap: '16px' });
+  expect(snapshot.headerContent).toEqual({ maxWidth: '820px' });
   expect(snapshot.pill).toEqual({
     backgroundColor: 'rgb(220, 252, 231)',
     color: 'rgb(22, 101, 52)',
@@ -153,6 +199,11 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
     Number.parseFloat(snapshot.brand.nameClientWidth),
   );
   expect(snapshot.brand.linkRight).toBeLessThan(snapshot.brand.buttonLeft);
+  // 品牌区几何与底部用户区（原型 atta-brand-wrap / nav-engineer-card 实测值）
+  expect(snapshot.brand.padding).toBe('20px 48px 20px 20px');
+  expect(snapshot.brand.minHeight).toBe('88px');
+  expect(snapshot.sidebarFooter).toEqual({ minHeight: '87.5px', padding: '14px' });
+  expect(snapshot.userCard).toEqual({ gap: '12px' });
 
   await testInfo.attach('computed-style-M-1440x900.json', {
     body: JSON.stringify(snapshot, null, 2),

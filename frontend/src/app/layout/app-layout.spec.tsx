@@ -134,6 +134,25 @@ describe('AppLayout（S3 壳层）', () => {
     expect(screen.getByRole('link', { name: '首页' })).not.toHaveAttribute('aria-current', 'page');
   });
 
+  // PR5 S1-3：客户从菜单进入主页（/customer）或我的申请子路由，刷新后选中态正确；
+  // 客户主页无同名业务菜单项，按既有回落规则选中「首页」。
+  it('客户主页刷新后选中「首页」，我的申请子路由按前缀选中「我的申请」', () => {
+    useAuthSessionMock.mockReturnValue(sessionFor('CUSTOMER'));
+    const view = renderLayout('/customer');
+
+    expect(screen.getByRole('link', { name: '首页' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: '我的申请' })).not.toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+
+    view.unmount();
+    renderLayout('/customer/repair-requests');
+
+    expect(screen.getByRole('link', { name: '我的申请' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: '首页' })).not.toHaveAttribute('aria-current', 'page');
+  });
+
   it('文档数据库路由应用知识库工作区变体，其他页面保持通用基准（PR3 R7）', () => {
     useAuthSessionMock.mockReturnValue(sessionFor('SUPER_ADMIN'));
     const view = renderLayout('/admin/document-database');

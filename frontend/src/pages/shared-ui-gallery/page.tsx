@@ -52,7 +52,7 @@ const COLUMNS: ColumnsType<GalleryRow> = [
 export function SharedUiGalleryPage() {
   return (
     <div className="page-stack">
-      {/* eyebrow 为可选 API，组合页同屏取证其 computed style（gkj .atta-eyebrow 语言） */}
+      {/* eyebrow 为可选 API，组合页同屏取证其 computed style（原型主壳静态页头语言） */}
       <PageHeader
         description="共享视觉 primitives 的真实渲染组合，仅用于开发与验收取证。"
         eyebrow="Shared UI Evidence"

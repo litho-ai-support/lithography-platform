@@ -14,7 +14,7 @@ type PageHeaderProps = {
   variant?: 'default' | 'knowledge-base';
 };
 
-// 页头：eyebrow 为可选装饰性小标（gkj .atta-eyebrow：10px/800/.16em/uppercase），
+// 页头：eyebrow 为可选装饰性小标（原型主壳静态页头：10px/700/.18em/uppercase），
 // 仅在原型对应工作台页传入，不强行加入无 eyebrow 的通用页面（逐条复核报告 20260916
 // 修复建议 4）。样式见 index.css 的 .page-eyebrow。
 // variant='knowledge-base' 时追加 .page-header--kb 紧凑变体（仅知识库页消费，
