@@ -169,18 +169,18 @@ ok/warn/critical 三种胶囊 `background-color` 均非 transparent。仅断言 
 > `.reference-library-*` 页面作用域覆盖层类；不引入 `.kb-*` 壳类、也不加 workspace / page modifier。
 > 允许的作用域类为：
 >
-> | 用途             | 独立资料页（白名单）                                                                     | 与知识库页共用同一条 CSS 规则                                       |
-> | ---------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-> | 卡壳             | `.reference-library-card .ant-card`（祖先作用域，消费卡壳 token；替代 `.kb-card` 外壳）   | 同一套 `--kb-card-*` token（`.kb-card`）                            |
-> | 列表容器         | `.reference-library-list-body`、`.reference-library-card .ant-card-body`                  | 独立页专属（知识库由 `.kb-card` 外壳直接承载，无 AntD Card）        |
-> | 工具区           | `.reference-library-toolbar`                                                              | 同几何（`.kb-toolbar`）                                             |
-> | 主搜索框         | `.reference-library-search`                                                               | `.kb-search`                                                        |
-> | 清除按钮         | `.reference-library-search-clear`                                                         | `.kb-search-clear`                                                  |
-> | 工具按钮（筛选/重置） | `.reference-library-toolbar-button`（`--active` 同源）                                | `.kb-toolbar-button`（`--active`）                                  |
-> | 筛选展开区       | `.reference-library-filter-panel`（默认收起，由工具按钮展开）                             | `.kb-filter-panel`                                                  |
-> | 表格作用域       | `.reference-library-table-scope`（含表格顶角归零）                                        | `.kb-table-scope`                                                   |
-> | 卡底分页行       | `.reference-library-card-footer`                                                          | `.kb-card-footer`                                                   |
-> | 卡内状态区       | `.reference-library-card-state`                                                           | `.kb-card-state`                                                    |
+> | 用途                  | 独立资料页（白名单）                                                                    | 与知识库页共用同一条 CSS 规则                                |
+> | --------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+> | 卡壳                  | `.reference-library-card .ant-card`（祖先作用域，消费卡壳 token；替代 `.kb-card` 外壳） | 同一套 `--kb-card-*` token（`.kb-card`）                     |
+> | 列表容器              | `.reference-library-list-body`、`.reference-library-card .ant-card-body`                | 独立页专属（知识库由 `.kb-card` 外壳直接承载，无 AntD Card） |
+> | 工具区                | `.reference-library-toolbar`                                                            | 同几何（`.kb-toolbar`）                                      |
+> | 主搜索框              | `.reference-library-search`                                                             | `.kb-search`                                                 |
+> | 清除按钮              | `.reference-library-search-clear`                                                       | `.kb-search-clear`                                           |
+> | 工具按钮（筛选/重置） | `.reference-library-toolbar-button`（`--active` 同源）                                  | `.kb-toolbar-button`（`--active`）                           |
+> | 筛选展开区            | `.reference-library-filter-panel`（默认收起，由工具按钮展开）                           | `.kb-filter-panel`                                           |
+> | 表格作用域            | `.reference-library-table-scope`（含表格顶角归零）                                      | `.kb-table-scope`                                            |
+> | 卡底分页行            | `.reference-library-card-footer`                                                        | `.kb-card-footer`                                            |
+> | 卡内状态区            | `.reference-library-card-state`                                                         | `.kb-card-state`                                             |
 >
 > 新增第三个作用域前缀前，必须先在本表登记，并同步 `src/index.css` 的成对规则与
 > `scripts/lint-colors.mjs` 的 `--kb-*` 白名单；未登记前缀一律按越界处理。

@@ -100,14 +100,15 @@
   --radius-control: 6px; /* 搜索、筛选、表格操作和弹窗动作等紧凑控件 */
   --radius-pill: 999px; /* 状态胶囊 */
   /* gkj 知识库页（#knowledge-base-page，PR3 R7）：页面级 opt-in 变体常量；与通用 panel/search
-     基准不同（基准表第 6 节）。所有权口径（PR5 S3 评审修复轮 P3-1 澄清，消除注释与实现矛盾）：
-     - 页面壳变量（--kb-workspace-bg / --kb-card-bg / --kb-card-border / --kb-card-radius /
-       --kb-card-shadow / --kb-primary / --kb-primary-hover / --kb-primary-shadow / --kb-on-primary）
-       仅 /admin/document-database 消费，禁止其他页面消费；
-     - 紧凑表格/搜索局部变量（--kb-divider / --kb-search-bg / --kb-search-border / --kb-text-body /
+     基准不同（基准表第 6 节）。所有权口径（PR5 S3 评审修复轮 P3-1 澄清；PR5 R1 补全卡壳共享）：
+     - 页面壳变量（--kb-workspace-bg / --kb-primary / --kb-primary-hover / --kb-primary-shadow /
+       --kb-on-primary）仅 /admin/document-database 消费，禁止其他页面消费；
+     - 卡壳 + 紧凑表格/搜索局部变量（--kb-card-bg / --kb-card-border / --kb-card-radius /
+       --kb-card-shadow / --kb-divider / --kb-search-bg / --kb-search-border / --kb-text-body /
        --kb-text-muted / --kb-text-faint / --kb-text-tool / --kb-table-head-bg /
        --kb-table-head-border / --kb-table-row-hover）经白名单允许被 .reference-library-* 局部作用域
-       复用（同一声明、两个选择器），不复制数值。
+       复用（同一声明、两个选择器），不复制数值 —— 独立资料列表卡壳与知识库列表同语言，
+       契约见基准 §6.1 / §6.5。
      组件不得散落 raw hex */
   --kb-workspace-bg: #f3f4f6;
   --kb-card-bg: #ffffff;

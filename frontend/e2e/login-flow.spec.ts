@@ -66,8 +66,11 @@ test('anonymous engineer visit completes the public login flow and returns to th
   await page.getByLabel('密码').fill('test-only-password');
   await page.getByRole('button', { name: /登\s*录/ }).click();
 
+  // 成功契约（docs/development/task-acceptance.md「登录」）：判据是「进入目标工作区 +
+  // 会话持久化」，不是瞬时文案。LoginForm 的成功反馈与 onAuthenticated 跳转在同一事件里提交，
+  // 表单随即卸载，目标工程师首页也不再渲染该文案；原 `登录成功` 断言只在 dev server 冷启动
+  // 首屏较慢时偶然可见，暖缓存下必然失败，故移除，改由下方「URL + 角色 + sessionStorage」承担。
   await expect(page).toHaveURL(/\/engineer$/);
-  await expect(page.getByText('登录成功')).toBeVisible();
   await expect(page.getByText('ENGINEER').first()).toBeVisible();
   expect(loginAuthorization).toBeUndefined();
 
