@@ -476,14 +476,46 @@ export function insertPr5CleanupSafetyReferenceDocument(
   return { createdByAccountId, id, titleKeyword: ledger.keyword };
 }
 
+/**
+ * ledger 申请条目 → **完整字段绑定**（P1-1）：除三因子与回复集合外，同时携带 ledger 记录的
+ * `equipment_model_id / error_code / fault_description / content_md` 完整预期；回收的只读预检
+ * 与事务内 DELETE 都会按这些字段精确匹配，任一字段被外部改写即零写入失败关闭。
+ */
 export function toPr5RepairRequestBinding(
   entry: Pr5CleanupSafetyLedgerRequest,
+  responseIds: readonly number[] = entry.responseIds,
 ): Pr5RepairRequestBinding {
   return {
     customerAccountId: entry.customerAccountId,
+    expectation: {
+      contentMd: entry.contentMd,
+      equipmentModelId: entry.equipmentModelId,
+      errorCode: entry.errorCode,
+      faultDescription: entry.faultDescription,
+    },
     id: entry.id,
     requestNo: entry.requestNo,
-    responseIds: [...entry.responseIds],
+    responseIds: [...responseIds],
+  };
+}
+
+/** ledger 资料条目 → **完整字段绑定**（P1-1）：与 locator / 回收预检 / 事务内 DELETE 共用同一预期 */
+export function toPr5ReferenceDocumentBinding(
+  document: Pr5CleanupSafetyLedgerDocument,
+  titleKeyword: string,
+): Pr5ReferenceDocumentBinding {
+  return {
+    createdByAccountId: document.createdByAccountId,
+    expectation: {
+      contentText: document.contentText,
+      documentType: document.documentType,
+      equipmentModelId: document.equipmentModelId,
+      storageBackend: document.storageBackend,
+      storageReference: document.storageReference,
+      title: document.title,
+    },
+    id: document.id,
+    titleKeyword,
   };
 }
 
@@ -518,10 +550,21 @@ function planPr5CleanupSafetyReclaim(ledger: Pr5CleanupSafetyLedger): Pr5Cleanup
       continue;
     }
 
-    const binding = toPr5RepairRequestBinding(entry);
+    // 完整字段核验（P1-1）：与 locator **共用同一断言**，任一非三因子字段被外部改写即零写入失败关闭
+    assertPr5CleanupSafetyRequestRowMatches(entry, readPr5CleanupSafetyRequestRow(entry.id));
 
-    assertPr5RepairRequestBindingBound(binding);
-    requests.push(binding);
+    // 先按 ledger 记录的回复集合做绑定核验（未知子行 → pr5_engineer_response_child_binding_must_match_this_run），
+    // 再由回复闭包逐字段核验每个子行；两步都在任何 DELETE 之前，发现冲突即零写入失败关闭
+    assertPr5RepairRequestBindingBound(toPr5RepairRequestBinding(entry));
+
+    const responses = readPr5CleanupSafetyRunResponses(entry.id, ledger);
+
+    requests.push(
+      toPr5RepairRequestBinding(
+        entry,
+        responses.map((response) => response.id),
+      ),
+    );
   }
 
   const responses: Pr5EngineerResponseBinding[] = [];
@@ -542,11 +585,13 @@ function planPr5CleanupSafetyReclaim(ledger: Pr5CleanupSafetyLedger): Pr5Cleanup
       continue;
     }
 
-    const binding: Pr5ReferenceDocumentBinding = {
-      createdByAccountId: document.createdByAccountId,
-      id: document.id,
-      titleKeyword: ledger.keyword,
-    };
+    // 完整字段核验（P1-1）：与 locator 共用同一断言；标题 / 类型 / 正文 / 存储 / 型号任一被改写即失败关闭
+    assertPr5CleanupSafetyDocumentRowMatches(
+      document,
+      readPr5CleanupSafetyDocumentRow(document.id),
+    );
+
+    const binding = toPr5ReferenceDocumentBinding(document, ledger.keyword);
 
     documents.push({ binding, reference: readPr5ReferenceDocumentStorageReferenceBound(binding) });
   }
@@ -751,6 +796,47 @@ interface Pr5CleanupSafetyRequestRow {
   readonly contentMd: string;
 }
 
+/**
+ * 按主键只读读取维修申请**完整行字段**（P1-1 共用原语）：locator 与 reclaimer 预检都经由此读取，
+ * 再交由同一断言比对，避免「locator 一套口径、reclaimer 另一套口径」。
+ */
+function readPr5CleanupSafetyRequestRow(id: number): Pr5CleanupSafetyRequestRow {
+  const raw = mysqlQuery(
+    `SELECT id, request_no, customer_account_id, equipment_model_id, error_code, fault_description, content_md FROM repair_request WHERE id = ${id}`,
+  ).trim();
+  const columns = raw.split('\t');
+
+  if (columns.length !== 7) {
+    throw new Error(`残留维修申请字段读取异常：${JSON.stringify(raw)}`);
+  }
+
+  const [idRaw, requestNo, customerRaw, equipmentModelRaw, errorCode, faultDescription, contentMd] =
+    columns;
+  const parsedId = Number(idRaw);
+  const customerAccountId = Number(customerRaw);
+
+  if (!Number.isSafeInteger(parsedId) || parsedId !== id) {
+    throw new Error(`残留维修申请 ID 解析异常：${JSON.stringify(raw)}`);
+  }
+
+  if (!Number.isSafeInteger(customerAccountId) || customerAccountId <= 0) {
+    throw new Error(`残留维修申请客户账号解析异常：${JSON.stringify(raw)}`);
+  }
+
+  return {
+    contentMd,
+    customerAccountId,
+    equipmentModelId: parsePr5CleanupSafetyNullablePositiveInteger(
+      equipmentModelRaw,
+      `残留维修申请 ${id} 设备型号`,
+    ),
+    errorCode,
+    faultDescription,
+    id,
+    requestNo,
+  };
+}
+
 function assertPr5CleanupSafetyRequestRowMatches(
   recorded: Pr5CleanupSafetyLedgerRequest,
   actual: Pr5CleanupSafetyRequestRow,
@@ -904,7 +990,8 @@ export function locatePr5CleanupSafetyResidueByRunId(
     }
 
     assertPr5CleanupSafetyDocumentRowMatches(recorded, actual);
-    documents.push({ createdByAccountId: actual.createdByAccountId, id, titleKeyword: keyword });
+    // 与 reclaimer 预检 / 事务内 DELETE 共用同一完整字段绑定（P1-1：不产生两套口径）
+    documents.push(toPr5ReferenceDocumentBinding(recorded, keyword));
   }
 
   // 闭包：ledger 记录的资料若仍在库，必须能按本轮标识定位到（标题标识被移除时同样失败关闭）
@@ -991,12 +1078,11 @@ export function locatePr5CleanupSafetyResidueByRunId(
     const responses = readPr5CleanupSafetyRunResponses(id, ledger);
 
     requests.push({
-      binding: {
-        customerAccountId: customer,
-        id,
-        requestNo,
-        responseIds: responses.map((response) => response.id),
-      },
+      // 与 reclaimer 预检 / 事务内 DELETE 共用同一完整字段绑定（P1-1：不产生两套口径）
+      binding: toPr5RepairRequestBinding(
+        recorded,
+        responses.map((response) => response.id),
+      ),
       responses,
     });
   }

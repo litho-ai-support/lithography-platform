@@ -215,6 +215,65 @@ export function assertPr5GeneratedId(
   }
 }
 
+/**
+ * SQL 字符串字面量白名单（P1-1）：完整字段绑定要内联进 WHERE，值来自 ledger / 数据库回读，
+ * 拒绝引号、反斜杠、LIKE 通配符与换行，杜绝字面量逃逸。空串非法（本轮所有绑定字段均非空）。
+ */
+export const PR5_SQL_LITERAL_PATTERN = /^[^'\\%\r\n]{1,300}$/;
+
+function assertPr5SqlLiteral(label: string, value: string): void {
+  if (!PR5_SQL_LITERAL_PATTERN.test(value)) {
+    throw new Error(`${label}未通过 SQL 字面量白名单校验：${JSON.stringify(value)}`);
+  }
+}
+
+function buildPr5NullableTextCondition(column: string, value: string | null): string {
+  if (value === null || value === 'NULL') {
+    return `${column} IS NULL`;
+  }
+
+  assertPr5SqlLiteral(`完整绑定字段 ${column}`, value);
+
+  return `${column} = '${value}'`;
+}
+
+function buildPr5NullableIntegerCondition(column: string, value: number | null): string {
+  if (value === null) {
+    return `${column} IS NULL`;
+  }
+
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`完整绑定字段 ${column} 未通过正整数校验：${JSON.stringify(value)}`);
+  }
+
+  return `${column} = ${value}`;
+}
+
+/**
+ * 维修申请的**完整字段预期**（P1-1）：提供后，只读预检与事务内 DELETE 都会按这些字段
+ * 精确匹配（等同 `AND` 追加到 where），任一字段被外部改写即精确命中 0 行 → 零写入失败关闭；
+ * 同时也关闭「只读预检通过、DELETE 前字段被改写」的 TOCTOU 窗口。
+ */
+export interface Pr5RepairRequestExpectation {
+  readonly equipmentModelId: number | null;
+  readonly errorCode: string;
+  readonly faultDescription: string;
+  readonly contentMd: string;
+}
+
+function buildPr5RepairRequestFullConditions(expectation: Pr5RepairRequestExpectation): string {
+  assertPr5SqlLiteral('维修申请完整绑定故障码', expectation.errorCode);
+  assertPr5SqlLiteral('维修申请完整绑定故障描述', expectation.faultDescription);
+  assertPr5SqlLiteral('维修申请完整绑定正文', expectation.contentMd);
+
+  return [
+    buildPr5NullableIntegerCondition('equipment_model_id', expectation.equipmentModelId),
+    `error_code = '${expectation.errorCode}'`,
+    `fault_description = '${expectation.faultDescription}'`,
+    `content_md = '${expectation.contentMd}'`,
+  ].join(' AND ');
+}
+
 export interface Pr5RepairRequestBinding {
   /** 数据库生成的维修申请主键 */
   readonly id: number;
@@ -222,6 +281,18 @@ export interface Pr5RepairRequestBinding {
   readonly customerAccountId: number;
   /** 本轮为该申请创建的工程师回复 ID（清理时按此集合精确绑定子行，不扩大删除外部回复） */
   readonly responseIds: readonly number[];
+  /** 完整字段预期（可选）：ledger 回收 / 残留恢复必须提供；提供后预检与 DELETE 都按全字段精确匹配 */
+  readonly expectation?: Pr5RepairRequestExpectation;
+}
+
+/** 维修申请绑定 where 子句（三因子必选 + 可选完整字段预期；预检与 DELETE 共用同一口径） */
+function buildPr5RepairRequestWhere(binding: Pr5RepairRequestBinding): string {
+  const { id, requestNo, customerAccountId } = binding;
+  const base = `id = ${id} AND request_no = '${requestNo}' AND customer_account_id = ${customerAccountId}`;
+
+  return binding.expectation === undefined
+    ? base
+    : `${base} AND ${buildPr5RepairRequestFullConditions(binding.expectation)}`;
 }
 
 /**
@@ -255,16 +326,21 @@ function assertPr5RepairRequestBindingParams(binding: Pr5RepairRequestBinding): 
       throw new Error(`维修申请清理目标回复 ID 未通过正整数校验：${JSON.stringify(responseId)}`);
     }
   }
+
+  // 完整字段预期若存在，先行校验（内联进 where 前的白名单门槛，杜绝字面量逃逸）
+  if (binding.expectation !== undefined) {
+    buildPr5RepairRequestFullConditions(binding.expectation);
+  }
 }
 
 export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): void {
-  const { id, requestNo, customerAccountId, responseIds } = binding;
+  const { id, responseIds } = binding;
 
   assertPr5RepairRequestBindingParams(binding);
 
   assertPhysicalCleanupAllowed(readBackendEnv());
 
-  const where = `id = ${id} AND request_no = '${requestNo}' AND customer_account_id = ${customerAccountId}`;
+  const where = buildPr5RepairRequestWhere(binding);
   // 无回复时以 0 占位：IN (0) 不匹配任何行，等价于「本轮允许的回复集合为空」
   const expectedResponseIds = responseIds.length === 0 ? '0' : responseIds.join(', ');
 
@@ -302,8 +378,8 @@ export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): v
 export function assertPr5RepairRequestBindingBound(binding: Pr5RepairRequestBinding): void {
   assertPr5RepairRequestBindingParams(binding);
 
-  const { id, requestNo, customerAccountId, responseIds } = binding;
-  const where = `id = ${id} AND request_no = '${requestNo}' AND customer_account_id = ${customerAccountId}`;
+  const { id, responseIds } = binding;
+  const where = buildPr5RepairRequestWhere(binding);
   const expectedResponseIds = responseIds.length === 0 ? '0' : responseIds.join(', ');
   const raw = mysqlQuery(
     'SELECT CONCAT(' +
@@ -372,6 +448,63 @@ export interface Pr5ReferenceDocumentBinding {
   readonly createdByAccountId: number;
   /** 本轮运行唯一标题关键字（并入三因子绑定，避免误删他人同 ID 数据） */
   readonly titleKeyword: string;
+  /** 完整字段预期（可选）：ledger 回收 / 残留恢复必须提供；提供后预检与 DELETE 都按全字段精确匹配 */
+  readonly expectation?: Pr5ReferenceDocumentExpectation;
+}
+
+/**
+ * 参考资料（除三因子外）的**完整字段预期**（P1-1）：提供后，只读预检与事务内 DELETE 都会按
+ * 这些字段精确匹配，任一字段被外部改写即零写入失败关闭，同时关闭 TOCTOU 窗口。
+ */
+export interface Pr5ReferenceDocumentExpectation {
+  readonly title: string;
+  readonly documentType: string;
+  readonly contentText: string;
+  readonly storageBackend: string | null;
+  readonly storageReference: string | null;
+  readonly equipmentModelId: number | null;
+}
+
+function buildPr5ReferenceDocumentFullConditions(
+  expectation: Pr5ReferenceDocumentExpectation,
+): string {
+  assertPr5SqlLiteral('资料完整绑定标题', expectation.title);
+  assertPr5SqlLiteral('资料完整绑定类型', expectation.documentType);
+  assertPr5SqlLiteral('资料完整绑定正文', expectation.contentText);
+
+  if (expectation.storageBackend !== null && expectation.storageBackend !== 'local') {
+    throw new Error(
+      `资料完整绑定存储后端未通过白名单校验：${JSON.stringify(expectation.storageBackend)}`,
+    );
+  }
+
+  if (
+    expectation.storageReference !== null &&
+    !STORAGE_REFERENCE_PATTERN.test(expectation.storageReference)
+  ) {
+    throw new Error(
+      `资料完整绑定存储引用未通过白名单校验：${JSON.stringify(expectation.storageReference)}`,
+    );
+  }
+
+  return [
+    `title = '${expectation.title}'`,
+    `document_type = '${expectation.documentType}'`,
+    `content_text = '${expectation.contentText}'`,
+    buildPr5NullableTextCondition('storage_backend', expectation.storageBackend),
+    buildPr5NullableTextCondition('storage_reference', expectation.storageReference),
+    buildPr5NullableIntegerCondition('equipment_model_id', expectation.equipmentModelId),
+  ].join(' AND ');
+}
+
+/** 资料绑定 where 子句（三因子必选 + 可选完整字段预期；预检、引用读取与 DELETE 共用同一口径） */
+function buildPr5ReferenceDocumentWhere(binding: Pr5ReferenceDocumentBinding): string {
+  const { id, createdByAccountId, titleKeyword } = binding;
+  const base = `id = ${id} AND created_by_account_id = ${createdByAccountId} AND title LIKE '%${titleKeyword}%'`;
+
+  return binding.expectation === undefined
+    ? base
+    : `${base} AND ${buildPr5ReferenceDocumentFullConditions(binding.expectation)}`;
 }
 
 /** 三因子绑定参数白名单校验（删除与只读核验共用同一口径，杜绝两套校验漂移） */
@@ -391,6 +524,11 @@ function assertPr5ReferenceDocumentBinding(binding: Pr5ReferenceDocumentBinding)
   if (!PR5_DOC_KEYWORD_PATTERN.test(titleKeyword)) {
     throw new Error(`参考资料清理目标标题关键字未通过白名单校验：${JSON.stringify(titleKeyword)}`);
   }
+
+  // 完整字段预期若存在，先行校验（内联进 where 前的白名单门槛，杜绝字面量逃逸）
+  if (binding.expectation !== undefined) {
+    buildPr5ReferenceDocumentFullConditions(binding.expectation);
+  }
 }
 
 /**
@@ -403,8 +541,7 @@ export function readPr5ReferenceDocumentStorageReferenceBound(
 ): string | null {
   assertPr5ReferenceDocumentBinding(binding);
 
-  const { id, createdByAccountId, titleKeyword } = binding;
-  const where = `id = ${id} AND created_by_account_id = ${createdByAccountId} AND title LIKE '%${titleKeyword}%'`;
+  const where = buildPr5ReferenceDocumentWhere(binding);
 
   // COUNT 与引用用 '|' 拼接成单列返回：mysql -N -B 的空列是行尾制表符，读回后被 trim 吃掉，
   // 无法区分「引用为空」与「列缺失」；'|' 不可能出现在引用白名单（hex + 扩展名）内，天然安全。
@@ -448,11 +585,11 @@ export function readPr5ReferenceDocumentStorageReferenceBound(
 export function deletePr5ReferenceDocumentBound(binding: Pr5ReferenceDocumentBinding): void {
   assertPr5ReferenceDocumentBinding(binding);
 
-  const { id, createdByAccountId, titleKeyword } = binding;
+  const { id } = binding;
 
   assertPhysicalCleanupAllowed(readBackendEnv());
 
-  const where = `id = ${id} AND created_by_account_id = ${createdByAccountId} AND title LIKE '%${titleKeyword}%'`;
+  const where = buildPr5ReferenceDocumentWhere(binding);
 
   mysqlQuery(
     [

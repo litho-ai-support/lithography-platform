@@ -13,7 +13,10 @@
 //   C6 造数中途抛错 → 已记入 ledger 的部分被安全回收；外部哨兵前后完整快照相等；
 //   C7 禁用 TRUNCATE 连续两轮 → 第二轮启动前无上一轮残留；主键不复用；最终只剩预置 / 外部哨兵；
 //   C8 残留 locator 完整字段核验：同标识同 owner 但标题后缀 / 正文被改写、申请字段被改写、
-//      未知回复 → 分别零删除失败关闭，全部数据不变。
+//      未知回复 → 分别零删除失败关闭，全部数据不变；
+//   C9 **直接调用 reclaimer**（非 locator）：申请 error_code/content_md/equipment_model_id 与资料
+//      content_text/document_type/storage_reference/storage_backend/equipment_model_id 被改写
+//      → 预检零删除失败关闭，全部数据不变（P1-1：证明真正执行删除的路径同样安全）。
 //
 // 运行入口（npm script，授权变量由执行者显式设置，不写入 npm script）：
 //   E2E_ALLOW_PHYSICAL_CLEANUP=1 DB_NAME=lithography_e2e npm run test:e2e:pr5-cleanup-safety
@@ -59,7 +62,7 @@ import { mysqlQuery } from '../e2e/helpers/real-backend';
 // 顶层：环境门 + 数据库执行锁（整组只执行一次；失败即硬失败，不 skip）
 // ---------------------------------------------------------------------------
 
-test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C8）', () => {
+test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', () => {
   // 释放会话把「是否已获取锁」与「释放」解耦：环境门 / schema / 获取锁阶段失败时
   // afterAll 的 release 是安全空操作，不会用二次异常覆盖根因（见 P2-3 / S3）。
   const lockSession: Pr5CleanupSafetyLockSession = createPr5CleanupSafetyLockSession();
@@ -461,6 +464,133 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C8）', 
 
       reclaimPr5CleanupSafetyLedger(ledger);
     }
+  });
+
+  test('C9 直接调用 reclaimer：申请 / 资料非三因子字段被改写 → 预检零删除失败关闭（非仅 locator）', () => {
+    const runId = createPr5CleanupSafetyRunId();
+    const context = resolvePr5CleanupSafetySeedContext();
+    const ledger = createPr5CleanupSafetyLedger(runId, context.adminAccountId);
+    // 合法白名单格式的存储引用（后端存储目录内不存在该文件，回收期删除为幂等空操作）
+    const documentReference = 'fedcba9876543210fedcba9876543210.md';
+    const documentTitle = `${ledger.keyword}（C9）`;
+    const faultTag = buildPr5CleanupSafetyFaultTag(runId);
+    // 造数前的完整外部哨兵基线：整个用例结束后必须逐字段恢复相等
+    const before = snapshotPr5CleanupSafetyExternalSentinel();
+    let documentId: number | null = null;
+    let requestId: number | null = null;
+
+    // 本用例的**被测对象是真正执行删除的 reclaimer**，不是 locator（P1-1 覆辙修复）
+    const reclaim = (): unknown => reclaimPr5CleanupSafetyLedger(ledger);
+    const countRow = (table: string, id: number): number =>
+      Number(mysqlQuery(`SELECT COUNT(*) FROM ${table} WHERE id = ${id}`));
+
+    try {
+      const doc = insertPr5CleanupSafetyReferenceDocument(ledger, {
+        createdByAccountId: context.adminAccountId,
+        label: 'C9',
+        storageReference: documentReference,
+      });
+      const entry = insertPr5CleanupSafetyRepairRequest(ledger, {
+        customerAccountId: context.customerAccountId,
+        equipmentModelId: context.equipmentModelId,
+        faultTag,
+      });
+
+      documentId = doc.id;
+      requestId = entry.id;
+
+      // 场景 1：申请故障码被改写（三因子与回复集合不变）→ reclaimer 预检零删除失败关闭
+      mysqlQuery(`UPDATE repair_request SET error_code = 'CS-被改写' WHERE id = ${entry.id}`);
+      expect(reclaim).toThrow(/字段 error_code 与 ledger 记录不符/);
+      expect(countRow('repair_request', entry.id)).toBe(1);
+      mysqlQuery(`UPDATE repair_request SET error_code = 'CS-${runId}' WHERE id = ${entry.id}`);
+
+      // 场景 2：申请正文被改写 → 零删除失败关闭
+      mysqlQuery(`UPDATE repair_request SET content_md = '被改写正文' WHERE id = ${entry.id}`);
+      expect(reclaim).toThrow(/字段 content_md 与 ledger 记录不符/);
+      expect(countRow('repair_request', entry.id)).toBe(1);
+      mysqlQuery(`UPDATE repair_request SET content_md = '${faultTag}' WHERE id = ${entry.id}`);
+
+      // 场景 3：申请设备型号被改写为另一合法型号 → 零删除失败关闭
+      const otherModelId = Number(
+        mysqlQuery(
+          `SELECT id FROM equipment_model WHERE id <> ${context.equipmentModelId} ORDER BY id LIMIT 1`,
+        ),
+      );
+
+      if (Number.isSafeInteger(otherModelId) && otherModelId > 0) {
+        mysqlQuery(
+          `UPDATE repair_request SET equipment_model_id = ${otherModelId} WHERE id = ${entry.id}`,
+        );
+        expect(reclaim).toThrow(/字段 equipment_model_id 与 ledger 记录不符/);
+        expect(countRow('repair_request', entry.id)).toBe(1);
+        mysqlQuery(
+          `UPDATE repair_request SET equipment_model_id = ${context.equipmentModelId} WHERE id = ${entry.id}`,
+        );
+      }
+
+      // 场景 4：资料正文被改写 → 零删除失败关闭
+      mysqlQuery(`UPDATE reference_document SET content_text = '被改写正文' WHERE id = ${doc.id}`);
+      expect(reclaim).toThrow(/字段 content_text 与 ledger 记录不符/);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      mysqlQuery(`UPDATE reference_document SET content_text = '${runId}' WHERE id = ${doc.id}`);
+
+      // 场景 5：资料文档类型被改写 → 零删除失败关闭
+      mysqlQuery(`UPDATE reference_document SET document_type = 'OTHER' WHERE id = ${doc.id}`);
+      expect(reclaim).toThrow(/字段 document_type 与 ledger 记录不符/);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      mysqlQuery(`UPDATE reference_document SET document_type = 'CHECKLIST' WHERE id = ${doc.id}`);
+
+      // 场景 6：资料存储引用被改写为非法值 → 零删除失败关闭
+      mysqlQuery(
+        `UPDATE reference_document SET storage_reference = '../被改写' WHERE id = ${doc.id}`,
+      );
+      expect(reclaim).toThrow(/字段 storage_reference 与 ledger 记录不符/);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      mysqlQuery(
+        `UPDATE reference_document SET storage_reference = '${documentReference}' WHERE id = ${doc.id}`,
+      );
+
+      // 场景 7：资料存储后端与引用被同时清空（仍满足表 CHECK 约束 storage pair）→ 零删除失败关闭
+      mysqlQuery(
+        `UPDATE reference_document SET storage_backend = NULL, storage_reference = NULL WHERE id = ${doc.id}`,
+      );
+      expect(reclaim).toThrow(/字段 storage_backend 与 ledger 记录不符/);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      mysqlQuery(
+        `UPDATE reference_document SET storage_backend = 'local', storage_reference = '${documentReference}' WHERE id = ${doc.id}`,
+      );
+
+      // 场景 8：资料设备型号被改写 → 零删除失败关闭
+      mysqlQuery(
+        `UPDATE reference_document SET equipment_model_id = ${context.equipmentModelId} WHERE id = ${doc.id}`,
+      );
+      expect(reclaim).toThrow(/字段 equipment_model_id 与 ledger 记录不符/);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      mysqlQuery(`UPDATE reference_document SET equipment_model_id = NULL WHERE id = ${doc.id}`);
+
+      // 屏幕上的关键对照：C8 证明 locator 安全，C9 证明**真正执行删除的 reclaimer** 对同一反例同样安全
+      expect(countRow('repair_request', entry.id)).toBe(1);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+    } finally {
+      // 先把被改写的字段幂等恢复为 ledger 基线，再回收：避免 teardown 抛出二次异常覆盖真正根因（S3 同源教训）
+      if (documentId !== null) {
+        mysqlQuery(
+          `UPDATE reference_document SET content_text = '${runId}', title = '${documentTitle}', document_type = 'CHECKLIST', storage_backend = 'local', storage_reference = '${documentReference}', equipment_model_id = NULL WHERE id = ${documentId}`,
+        );
+      }
+
+      if (requestId !== null) {
+        mysqlQuery(
+          `UPDATE repair_request SET error_code = 'CS-${runId}', fault_description = '${faultTag}', content_md = '${faultTag}', equipment_model_id = ${context.equipmentModelId} WHERE id = ${requestId}`,
+        );
+      }
+
+      reclaimPr5CleanupSafetyLedger(ledger);
+    }
+
+    // 全流程未改动 / 删除 / 新增任何外部行（字段恢复 + 回收后与造数前逐字段相等）
+    expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(before);
   });
 
   test('C5 文件删除器对指定本轮引用抛错：不误删其他文件；残留引用可精确回收', () => {
