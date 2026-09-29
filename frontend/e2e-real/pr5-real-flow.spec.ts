@@ -798,6 +798,9 @@ test.describe('PR5 real link permission and business closure', () => {
         await expect(page.getByText(title).first()).toBeVisible();
 
         // 类型筛选：命中本轮资料；清空后仍可见
+        // 独立资料列表页的筛选区自 2f7d247 起默认收起（与原型 gkj 一致），需先展开再操作。
+        await page.locator('.reference-library-toolbar-button').click();
+        await expect(page.locator('.reference-library-filter-panel')).toBeVisible();
         await page.getByRole('combobox').nth(0).click();
         await page.locator('.ant-select-item-option', { hasText: '检查表' }).click();
         await expect(page.getByText(title).first()).toBeVisible();
