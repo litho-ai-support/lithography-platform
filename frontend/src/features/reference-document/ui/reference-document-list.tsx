@@ -147,6 +147,27 @@ export function ReferenceDocumentList({ variant = 'default' }: ReferenceDocument
   const isKnowledgeBase = variant === 'knowledge-base';
   /** 局部作用域类前缀：知识库变体沿用 PR3 的 kb-*；独立资料页使用 reference-library-*。 */
   const scope = isKnowledgeBase ? 'kb' : 'reference-library';
+
+  /**
+   * 真实汇总条取值（PR5 整页视觉计划 S3）：三项全部来自本组件已取得的现有状态源，
+   * 不新增第二次请求、不固定演示数字、不引入原型演示字段：
+   * - 参考资料：列表状态机的 `state.total`（loading/failed 显示对应状态，不伪造数字）；
+   * - 支持类型：后端契约枚举 `REFERENCE_DOCUMENT_TYPE_LABELS` 的真实类型集合；
+   * - 适用型号：`useReferenceEquipmentModels()` 的真实型号数量（loading/failed 明确显示）。
+   */
+  const referenceTotalText =
+    state.status === 'ready'
+      ? `共 ${state.total} 条`
+      : state.status === 'loading'
+        ? '加载中…'
+        : '加载失败';
+  const documentTypesText = Object.values(REFERENCE_DOCUMENT_TYPE_LABELS).join(' · ');
+  const equipmentModelsText =
+    models.state.status === 'ready'
+      ? `${models.state.models.length} 个型号`
+      : models.state.status === 'loading'
+        ? '加载中…'
+        : '加载失败';
   /** 两个变体同构：筛选区默认收起（不渲染、占 0px），由工具区「筛选」按钮展开（PR5 R2）。
    *  收起不清值：`filterOpen` 只控制渲染，不参与 filter 计算。 */
   const filtersExpanded = filterOpen;
@@ -293,13 +314,32 @@ export function ReferenceDocumentList({ variant = 'default' }: ReferenceDocument
     return <div className="kb-card">{listBody}</div>;
   }
 
+  // 默认变体（独立 /reference-documents 页，PR5 整页视觉计划 S3-1）：在列表卡之上渲染
+  // 真实汇总条（三项取值见上方注释）。knowledge-base 内嵌变体不重复渲染本汇总条
+  //（知识库页有自己的四分区汇总条）。
   return (
-    <div className="reference-library-card">
-      {/* 不渲染卡头：原型 .kb-card 内只有「工具区—表格—卡底」三段，列表标题由页面 PageHeader 承载
-          （PR5 S3 复检轮 O1）。AntD Card 在无 title/extra 时不会生成 .ant-card-head。 */}
-      <Card>
-        <div className="reference-library-list-body">{listBody}</div>
-      </Card>
-    </div>
+    <>
+      <div className="reference-library-summary">
+        <div className="reference-library-summary-cell">
+          <div className="reference-library-summary-label">参考资料</div>
+          <div className="reference-library-summary-value">{referenceTotalText}</div>
+        </div>
+        <div className="reference-library-summary-cell">
+          <div className="reference-library-summary-label">支持类型</div>
+          <div className="reference-library-summary-value">{documentTypesText}</div>
+        </div>
+        <div className="reference-library-summary-cell">
+          <div className="reference-library-summary-label">适用型号</div>
+          <div className="reference-library-summary-value">{equipmentModelsText}</div>
+        </div>
+      </div>
+      <div className="reference-library-card">
+        {/* 不渲染卡头：原型 .kb-card 内只有「工具区—表格—卡底」三段，列表标题由页面 PageHeader 承载
+            （PR5 S3 复检轮 O1）。AntD Card 在无 title/extra 时不会生成 .ant-card-head。 */}
+        <Card>
+          <div className="reference-library-list-body">{listBody}</div>
+        </Card>
+      </div>
+    </>
   );
 }

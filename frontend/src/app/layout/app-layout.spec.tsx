@@ -168,6 +168,31 @@ describe('AppLayout（S3 壳层）', () => {
     expect(document.querySelector('.app-main--knowledge-base')).toBeNull();
   });
 
+  // PR5 整页视觉计划 S0-3：独立资料列表是第二个工作区变体，同样按**精确**路由开启；
+  // 新增（/reference-documents/new）与详情（/reference-documents/:id）必须保持通用基准。
+  it('参考资料精确列表路由应用 reference-library 工作区变体，新增/详情不继承（PR5 整页）', () => {
+    useAuthSessionMock.mockReturnValue(sessionFor('SUPER_ADMIN'));
+    const view = renderLayout('/reference-documents');
+
+    expect(document.querySelector('main.app-workspace--reference-library')).not.toBeNull();
+    expect(document.querySelector('.app-main--reference-library')).not.toBeNull();
+    // 两个变体互不借用：列表路由不得出现知识库 modifier
+    expect(document.querySelector('.app-workspace--knowledge-base')).toBeNull();
+    expect(document.querySelector('.app-main--knowledge-base')).toBeNull();
+
+    view.unmount();
+    renderLayout('/reference-documents/new');
+
+    expect(document.querySelector('.app-workspace--reference-library')).toBeNull();
+    expect(document.querySelector('.app-main--reference-library')).toBeNull();
+
+    view.unmount();
+    renderLayout('/reference-documents/501');
+
+    expect(document.querySelector('.app-workspace--reference-library')).toBeNull();
+    expect(document.querySelector('.app-main--reference-library')).toBeNull();
+  });
+
   it('底部展示真实当前用户卡与退出入口', () => {
     useAuthSessionMock.mockReturnValue(sessionFor('ENGINEER'));
     renderLayout('/engineer/repair-requests');

@@ -100,9 +100,13 @@
   --radius-control: 6px; /* 搜索、筛选、表格操作和弹窗动作等紧凑控件 */
   --radius-pill: 999px; /* 状态胶囊 */
   /* gkj 知识库页（#knowledge-base-page，PR3 R7）：页面级 opt-in 变体常量；与通用 panel/search
-     基准不同（基准表第 6 节）。所有权口径（PR5 S3 评审修复轮 P3-1 澄清；PR5 R1 补全卡壳共享）：
-     - 页面壳变量（--kb-workspace-bg / --kb-primary / --kb-primary-hover / --kb-primary-shadow /
+     基准不同（基准表第 6 节）。所有权口径（PR5 S3 评审修复轮 P3-1 澄清；PR5 R1 补全卡壳共享；
+     PR5 整页视觉计划 20260929 补工作区底色共享）：
+     - 主色族页面壳变量（--kb-primary / --kb-primary-hover / --kb-primary-shadow /
        --kb-on-primary）仅 /admin/document-database 消费，禁止其他页面消费；
+     - 工作区底色（--kb-workspace-bg）为纯色单一来源，经白名单额外允许被
+       .app-workspace--reference-library（精确 /reference-documents 列表路由）消费：两页
+       底色取值本就是同一个值，复制成第二个 token 只会引入分叉风险；
      - 卡壳 + 紧凑表格/搜索局部变量（--kb-card-bg / --kb-card-border / --kb-card-radius /
        --kb-card-shadow / --kb-divider / --kb-search-bg / --kb-search-border / --kb-text-body /
        --kb-text-muted / --kb-text-faint / --kb-text-tool / --kb-table-head-bg /
@@ -731,39 +735,77 @@ body {
   max-width: none;
 }
 
+/* 参考资料列表精确路由工作区变体（PR5 整页视觉计划 20260929）：
+   与知识库页同一套取值来源（纯色底 + 占满侧栏后剩余宽度），但独立命名 —— 两个路由
+   互不扩散（禁止把 .app-workspace--knowledge-base 借用到本路由）。仅精确列表路由消费，
+   新增（/reference-documents/new）与详情继续通用渐变 + 1280px 上限。 */
+.app-workspace--reference-library {
+  background: var(--kb-workspace-bg);
+  justify-content: flex-start;
+}
+
+.app-main--reference-library {
+  max-width: none;
+}
+
+/* 参考资料列表页面根（PR5 整页视觉计划 S2）：不复用 .kb-page；覆盖 .page-stack 的 20px
+   通用 gap，改为「页头下距 20px + 汇总条下距 16px」的显式纵向节奏（与知识库页同法），
+   使 22 + 48.5 + 67 + 20 + 67.5 + 16 = 241 的列表卡绝对位置成立。
+   桌面（>1024px）由 padding-block-start 消费顶部 48.5px 视觉节奏；窄屏不复制该节奏
+   （工作区自身 30px 顶距已足够）。 */
+.reference-library-page {
+  --reference-library-top-rhythm: 48.5px;
+  gap: 0;
+  min-width: 0;
+}
+
+@media (min-width: 1025px) {
+  .reference-library-page {
+    padding-block-start: var(--reference-library-top-rhythm);
+  }
+}
+
 .kb-page {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
-/* 页头变体：10px eyebrow / 20-28 标题 / 12-16 简介（通用 10-24-14 层级不变） */
-.page-header--kb {
+/* 页头变体：10px eyebrow / 20-28 标题 / 12-16 简介（通用 10-24-14 层级不变）。
+   PR5 整页视觉计划起 .page-header--reference-library 与 .page-header--kb 共用同一份
+   数值声明，但两条选择器（及产出类名）互不借用：本路由不得出现 .page-header--kb。 */
+.page-header--kb,
+.page-header--reference-library {
   margin-bottom: 1.25rem;
 }
 
-.page-header--kb .page-header-content {
+.page-header--kb .page-header-content,
+.page-header--reference-library .page-header-content {
   max-width: none;
 }
 
-.page-header--kb .page-eyebrow {
+.page-header--kb .page-eyebrow,
+.page-header--reference-library .page-eyebrow {
   font-weight: 700;
   letter-spacing: 0.18em;
   line-height: 1.5;
 }
 
-.page-header--kb .page-title {
+.page-header--kb .page-title,
+.page-header--reference-library .page-title {
   font-size: 1.25rem;
   line-height: 1.75rem;
 }
 
-.page-header--kb .page-description {
+.page-header--kb .page-description,
+.page-header--reference-library .page-description {
   font-size: 0.75rem;
   line-height: 1rem;
   max-width: none;
 }
 
-.page-header--kb .page-header-extra {
+.page-header--kb .page-header-extra,
+.page-header--reference-library .page-header-extra {
   padding-top: 0;
 }
 
@@ -784,16 +826,33 @@ body {
   margin-bottom: 1rem;
 }
 
-.kb-summary-cell {
+/* 参考资料列表真实汇总条（PR5 整页视觉计划 S3）：与 .kb-summary 同一套卡壳与单元排版
+   （三列，取值全部来自真实状态：列表 total / 类型枚举 / 型号 query），仅列数不同。
+   独立命名，不把 .kb-summary 壳类扩散到通用工作区。下距 16px 对齐原型。
+   三列单元排版与 .kb-summary-* 共用同一份声明（同一声明、两个选择器）。 */
+.reference-library-summary {
+  background: var(--kb-card-bg);
+  border: 1px solid var(--kb-card-border);
+  border-radius: var(--kb-card-radius);
+  box-shadow: var(--kb-card-shadow);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 1rem;
+}
+
+.kb-summary-cell,
+.reference-library-summary-cell {
   min-width: 0;
   padding: 1rem;
 }
 
-.kb-summary-cell + .kb-summary-cell {
+.kb-summary-cell + .kb-summary-cell,
+.reference-library-summary-cell + .reference-library-summary-cell {
   border-left: 1px solid var(--kb-divider);
 }
 
-.kb-summary-label {
+.kb-summary-label,
+.reference-library-summary-label {
   color: var(--kb-text-faint);
   font-size: 0.5625rem;
   letter-spacing: 0.05em;
@@ -801,12 +860,19 @@ body {
   text-transform: uppercase;
 }
 
-.kb-summary-value {
+.kb-summary-value,
+.reference-library-summary-value {
   color: var(--kb-text-body);
   font-size: 0.75rem;
   font-weight: 600;
   line-height: 1rem;
   margin-top: 0.25rem;
+}
+
+/* 参考资料汇总条取值可能含长型号串：允许在单元格内换行折断，避免窄视口撑破页面
+   （仅本路由，不改知识库汇总条既有值） */
+.reference-library-summary-value {
+  overflow-wrap: anywhere;
 }
 
 /* 卡内工具区：与表格同卡，12px padding + 1px 底线（原型 p-3 / border-slate-100） */
@@ -947,6 +1013,13 @@ body {
   font-size: 0.625rem;
   justify-content: space-between;
   padding: 12px 16px;
+}
+
+/* 参考资料列表卡底收敛至 39px（PR5 整页视觉计划 S4-2）：保留 24px 真实可点击分页器，
+   仅收敛纵向 padding（7.5 + 24 + 7.5 = 39，border-box），横向保持原型 16px。
+   知识库页卡底维持既有 48px 基准（padding 12px 16px），故此处独立覆盖共享声明。 */
+.reference-library-card-footer {
+  padding: 7.5px 16px;
 }
 
 /* 独立资料页工具栏（/reference-documents，PR5 S3-1；PR5 S3 评审修复轮 P1-1）：
@@ -1611,6 +1684,17 @@ body {
   .page-action-row {
     justify-content: flex-start;
     width: 100%;
+  }
+
+  /* 参考资料汇总条窄屏改单列堆叠（PR5 整页计划 S3-5）：三列在 375px 会挤压长取值，
+     改纵向堆叠并把列间竖分隔线换成横分隔线，且不产生整页横滚。 */
+  .reference-library-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .reference-library-summary-cell + .reference-library-summary-cell {
+    border-left: 0;
+    border-top: 1px solid var(--kb-divider);
   }
 
   .preview-window-body {

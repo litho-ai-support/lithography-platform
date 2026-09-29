@@ -834,7 +834,7 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     expect(restored).toEqual(baseline);
   });
 
-  test('共享外观回归：登录/用户管理/客户申请/独立参考资料页保持默认外观', async ({
+  test('共享外观回归：登录/用户管理/客户申请保持默认外观，独立参考资料页走自己的整页变体', async ({
     page,
   }, testInfo) => {
     test.setTimeout(120_000);
@@ -852,6 +852,11 @@ test.describe('mocked admin document database - knowledge base visual baseline (
           kbVariantNodes: document.querySelectorAll(
             '.kb-page, .kb-card, .page-header--kb, .app-workspace--knowledge-base, .app-main--knowledge-base',
           ).length,
+          // PR5 整页视觉计划起，独立资料列表是第二个工作区变体：与知识库变体互不借用
+          // （两个路由各自 0/非 0 互斥），故单独计数，不作为「默认外观」的一部分。
+          referenceLibraryVariantNodes: document.querySelectorAll(
+            '.reference-library-page, .page-header--reference-library, .app-workspace--reference-library, .app-main--reference-library',
+          ).length,
           mainMaxWidth: main === null ? null : getComputedStyle(main).maxWidth,
           workspaceBackgroundColor:
             workspace === null ? null : getComputedStyle(workspace).backgroundColor,
@@ -863,6 +868,7 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     const expectDefaultShell = async (label: string): Promise<void> => {
       const shell = await readShell();
       expect(shell.kbVariantNodes, `${label} 不应出现知识库变体节点`).toBe(0);
+      expect(shell.referenceLibraryVariantNodes, `${label} 不应出现参考资料列表变体节点`).toBe(0);
       if (shell.mainMaxWidth !== null) {
         expect(shell.mainMaxWidth, `${label} 应保持 1280px 上限`).toBe('1280px');
       }
@@ -871,6 +877,24 @@ test.describe('mocked admin document database - knowledge base visual baseline (
           'linear-gradient',
         );
       }
+      evidence[label] = shell;
+    };
+
+    /**
+     * 独立参考资料页探针（PR5 整页视觉计划 S1-4：该页不再是默认工作区外观）：
+     * 自己的一整套 modifier 必须齐备且纯色铺满；知识库变体节点仍必须为 0。
+     */
+    const expectReferenceLibraryShell = async (label: string): Promise<void> => {
+      const shell = await readShell();
+      expect(shell.kbVariantNodes, `${label} 不应借用知识库变体节点`).toBe(0);
+      expect(shell.referenceLibraryVariantNodes, `${label} 应具备完整的参考资料列表变体节点`).toBe(
+        4,
+      );
+      expect(shell.workspaceBackgroundImage, `${label} 应为纯色（不再渐变）`).toBe('none');
+      expect(shell.workspaceBackgroundColor, `${label} 应为纯色 #f3f4f6`).toBe(
+        'rgb(243, 244, 246)',
+      );
+      expect(shell.mainMaxWidth, `${label} 应取消 1280px 上限`).toBe('none');
       evidence[label] = shell;
     };
 
@@ -895,10 +919,11 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     await expectDefaultShell('admin-users');
     await shoot('kb-shared-admin-users-1440x900.png');
 
-    // 3) 独立参考资料页（SUPER_ADMIN）
+    // 3) 独立参考资料页（SUPER_ADMIN）：PR5 整页视觉计划起切换为自己的工作区变体，
+    //    不再属于「保持默认外观」集合（S1-4 更新旧回归假设）
     await page.goto('/reference-documents');
     await expect(page.getByRole('heading', { name: '参考资料库' })).toBeVisible();
-    await expectDefaultShell('reference-documents');
+    await expectReferenceLibraryShell('reference-documents');
     await shoot('kb-shared-reference-documents-1440x900.png');
 
     // 对照：知识库页确实启用了变体（同登录态下页面之间互不影响）

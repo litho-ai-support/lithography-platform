@@ -6,9 +6,15 @@
 // 真实前后端链路（管理员上传/编辑/软删、工程师只读下载）由 reference-document-real.spec.ts
 // 承担，职责分离。
 //
-// 验收内容（PR5 计划表 S3-1 / S3-5 / S3-6，数值源 frontend/docs/gkj-visual-baseline.md §6.3）：
-// - 保持通用工作区与默认 PageHeader：五类整页 kb modifier（与 PR3 回归探针 kbVariantNodes
-//   同一集合）为 0，且不出现 .kb-card / .kb-table-scope —— 知识库整页变体不扩到该路由；
+// 验收内容（PR5 整页视觉计划 20260929 + 计划表 S3-1 / S3-5 / S3-6，
+// 数值源 frontend/docs/gkj-visual-baseline.md §6.3 / §6.6）：
+// - 整页骨架（本轮范围变更）：`/reference-documents` 精确列表路由对齐 gkj 知识库页整页骨架——
+//   页头 top 70.5±0.5px / 高 67px、真实汇总条 top 157.5px / 高 67.5px / 下距 16px、
+//   列表卡 top 241±0.5px；工作区纯色 #f3f4f6 且取消 1280px 上限（1920 内容 x236 / w1658，
+//   1366/1440 左边界仍 236px）；
+// - 仍然不借用知识库整页变体：五类整页 kb modifier（与 PR3 回归探针 kbVariantNodes 同一集合）
+//   为 0，且不出现 .kb-card / .kb-table-scope / .kb-summary —— 两个路由取值同源、类名互不借用；
+// - 真实汇总条（S3）：三列分别取自列表 total、后端类型枚举与型号 query 条数，无演示字段；
 // - 卡壳（PR5 R1）：与 .kb-card 同一套 token——白底 / 1px #e5e7eb / 10px 圆角 /
 //   0 1px 3px rgba(15,23,42,.05) / overflow hidden；卡内 AntD Table 顶角归零（由外卡裁切）；
 // - 工具区：搜索框 36px / 6px 圆角，同排「筛选」按钮 36px / 6px 圆角（与原型工具栏同构）；
@@ -18,12 +24,14 @@
 // - P1-2（S3 评审修复轮）：输入非空后出现的清除按钮必须与知识库变体同源（透明底、无边框、
 //   padding 0、浅灰 #94a3b8、cursor pointer），不得退化为浏览器默认按钮；
 // - 紧凑表格：表头 35.5px / 10px，正文行 38.5px / 11px，行线 1px；
-// - 卡底分页行：padding 12px 16px、10px 字号、两端对齐，含「共 N 条」；
-// - 375×667 与 1440×900 均无整页横向滚动（横滚只允许发生在表格内部，基准 §6.4.4）；
+// - 卡底分页行：padding 7.5px 16px（纵向收敛使整行 39px，PR5 整页计划 S4-2）、10px 字号、
+//   两端对齐，含「共 N 条」；24px 真实分页器点击目标不压缩；
+// - 1366×768 / 1440×900 / 1920×1080 与 375×667 均无整页横向滚动（横滚只允许发生在表格内部，
+//   基准 §6.4.4）；
 // - S3-5：标题 / 说明 / 原始文件名三列单行截断（ellipsis + 原生 title 全文），三列**分别**验证
 //   截断确实发生（scrollWidth > clientWidth）且不撑高行、不撑破页面，点击被截断单元格仍进入详情路由；
-// - S3-7：本文件即 PR5「知识库表格局部对齐、整页变体不扩路由」基准的可执行副本，
-//   数值取自 baseline §6.3 / §6.4.4，不改写 baseline §6 的适用路由与既有断言。
+// - S3-7：本文件即 PR5「整页骨架对齐 + 类名互不借用」基准的可执行副本，
+//   数值取自 baseline §6.3 / §6.4.4 / §6.6，不改写 baseline §6 其他路由的既有断言。
 //
 // 截图与 JSON 写入 testInfo outputPath（frontend/test-results/...），由采集人复制归档到
 // docs/tmp/PR/PR5-证据（本地可追溯，不随 PR 提交）。
@@ -38,6 +46,7 @@ import path from 'node:path';
 
 import { seedAuthSession } from './helpers/auth-session-seed';
 import {
+  EQUIPMENT_MODELS,
   installReferenceLibraryMocks,
   LIST_ITEMS,
   LONG_DESCRIPTION,
@@ -61,8 +70,18 @@ const HEAD_CELL_HEIGHT = '35.5px';
 const HEAD_CELL_FONT_SIZE = '10px';
 const BODY_CELL_HEIGHT = '38.5px';
 const BODY_CELL_FONT_SIZE = '11px';
-const FOOTER_PADDING = '12px 16px';
+// 卡底分页行（PR5 整页视觉计划 S4-2）：保留 24px 真实分页器，纵向 padding 收敛为 7.5px，
+// 使整行 border-box 高 39px（对齐原型 39px 卡底）；横向保持原型 16px。
+const FOOTER_PADDING = '7.5px 16px';
 const FOOTER_FONT_SIZE = '10px';
+
+/** PR5 整页视觉计划 §2 的整页坐标契约（1440×900，M 档） */
+const HEADER_TOP = 70.5;
+const HEADER_HEIGHT = 67;
+const CARD_TOP = 241;
+const SUMMARY_HEIGHT = 67.5;
+const SUMMARY_BOTTOM_GAP = 16;
+const SUMMARY_TOP = HEADER_TOP + HEADER_HEIGHT + 20; // 70.5 + 67 + 20 = 157.5
 
 /** PR3 回归探针 kbVariantNodes 的同一集合：整页知识库 modifier，独立资料页必须为 0。 */
 const PAGE_LEVEL_KB_MODIFIERS = [
@@ -73,16 +92,22 @@ const PAGE_LEVEL_KB_MODIFIERS = [
   '.app-main--knowledge-base',
 ] as const;
 
-/** 视口清单：1440×900 为基准 §1 锁定视口；375×667 用于暴露整页横滚。 */
+/** 视口清单：1440×900 为基准 §1 锁定视口；1366×768 与 1920×1080 为 PR5 整页计划的
+ *  整页坐标视口（S5-1）；375×667 用于暴露整页横滚并守护窄屏不复制桌面 48.5px 节奏。 */
 const VIEWPORTS = [
   { height: 900, label: '1440x900', width: 1440 },
+  { height: 768, label: '1366x768', width: 1366 },
+  { height: 1080, label: '1920x1080', width: 1920 },
   { height: 667, label: '375x667', width: 375 },
 ] as const;
 
-test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密度与卡底分页（PR5 S3-1 / S3-6）', async ({
+/** 桌面视口（>1024px）：整页纵向节奏与绝对坐标契约只在这一档成立 */
+const isDesktopViewport = (label: string) => label !== '375x667';
+
+test('独立资料列表整页对齐知识库骨架：页头/汇总条/列表卡坐标、紧凑密度与卡底分页（PR5 整页 S1–S4）', async ({
   page,
 }, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
 
   const evidenceDir = testInfo.outputPath();
   mkdirSync(evidenceDir, { recursive: true });
@@ -103,6 +128,22 @@ test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密
       await expect(page.locator(selector), `${selector} 不应出现在独立资料页`).toHaveCount(0);
     }
     await expect(page.locator('.kb-table-scope')).toHaveCount(0);
+
+    // 整页骨架入口（PR5 整页计划 S1/S2/S3）：页面根、页头变体与真实汇总条均落在独立类名下
+    await expect(page.locator('.reference-library-page')).toHaveCount(1);
+    await expect(page.locator('.page-header--reference-library')).toHaveCount(1);
+    await expect(page.locator('.reference-library-summary')).toHaveCount(1);
+    await expect(page.locator('.reference-library-summary-cell')).toHaveCount(3);
+    // 汇总条三项全部来自真实状态：列表 total（10 条夹具）、后端类型枚举、型号 query 条数
+    await expect(page.locator('.reference-library-summary-cell').nth(0)).toContainText(
+      `共 ${LIST_ITEMS.length} 条`,
+    );
+    await expect(page.locator('.reference-library-summary-cell').nth(1)).toContainText(
+      '错误代码手册',
+    );
+    await expect(page.locator('.reference-library-summary-cell').nth(2)).toContainText(
+      `${EQUIPMENT_MODELS.length} 个型号`,
+    );
 
     await expect(page.getByText('光源模块维护指南')).toBeVisible();
 
@@ -215,6 +256,97 @@ test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密
       '工具区应紧贴卡上边框内侧（无卡头时才成立）',
     ).toBeLessThanOrEqual(0.5);
 
+    // PR5 整页计划 S0-4 / S0-5 / S1-2：整页纵向节奏与工作区几何。
+    // 公式：22（工作区顶距）+ 48.5（顶部节奏）+ 67（页头）+ 20（页头下距）
+    //      + 67.5（汇总条）+ 16（汇总条下距）= 241（列表卡 top）
+    // 窄屏不消费 48.5px 桌面节奏，故本组断言只锚定桌面视口。
+    let pageGeometrySnapshot: Record<string, number | string> | null = null;
+
+    if (isDesktopViewport(viewport.label)) {
+      const pageGeometry = await page.evaluate(() => {
+        const rect = (selector: string) => {
+          const el = document.querySelector(selector);
+
+          if (!el) {
+            throw new Error(`缺少整页节点：${selector}`);
+          }
+
+          const box = el.getBoundingClientRect();
+
+          return {
+            bottom: box.bottom,
+            height: box.height,
+            left: box.left,
+            top: box.top,
+            width: box.width,
+          };
+        };
+
+        return {
+          card: rect('.reference-library-card .ant-card'),
+          header: rect('.page-header'),
+          main: rect('.app-main--reference-library'),
+          summary: rect('.reference-library-summary'),
+          workspaceBg: getComputedStyle(
+            document.querySelector('.app-workspace--reference-library') as Element,
+          ).backgroundColor,
+        };
+      });
+
+      expect(
+        Math.abs(pageGeometry.header.top - HEADER_TOP),
+        `页头 top 应为 ${HEADER_TOP}px（实测 ${pageGeometry.header.top}px）`,
+      ).toBeLessThanOrEqual(0.5);
+      expect(
+        Math.abs(pageGeometry.header.height - HEADER_HEIGHT),
+        `页头高度应为 ${HEADER_HEIGHT}px（实测 ${pageGeometry.header.height}px）`,
+      ).toBeLessThanOrEqual(0.5);
+      expect(
+        Math.abs(pageGeometry.summary.top - SUMMARY_TOP),
+        `汇总条 top 应为 ${SUMMARY_TOP}px（实测 ${pageGeometry.summary.top}px）`,
+      ).toBeLessThanOrEqual(0.5);
+      expect(
+        Math.abs(pageGeometry.summary.height - SUMMARY_HEIGHT),
+        `汇总条高度应为 ${SUMMARY_HEIGHT}px（实测 ${pageGeometry.summary.height}px）`,
+      ).toBeLessThanOrEqual(0.5);
+      expect(
+        Math.abs(pageGeometry.card.top - pageGeometry.summary.bottom - SUMMARY_BOTTOM_GAP),
+        `汇总条下距应为 ${SUMMARY_BOTTOM_GAP}px（实测 ${
+          pageGeometry.card.top - pageGeometry.summary.bottom
+        }px）`,
+      ).toBeLessThanOrEqual(0.5);
+      expect(
+        Math.abs(pageGeometry.card.top - CARD_TOP),
+        `列表卡 top 应为 ${CARD_TOP}px（实测 ${pageGeometry.card.top}px）`,
+      ).toBeLessThanOrEqual(0.5);
+
+      // 工作区：纯色（取消通用渐变）+ 精确路由变体
+      expect(pageGeometry.workspaceBg, '资料列表工作区应为纯色 #f3f4f6').toBe('rgb(243, 244, 246)');
+
+      // 内容左边界固定 236px（210 侧栏 + 26 工作区左 padding）；
+      // 1920 下取消 1280px 上限占满剩余宽度（1920 − 236 − 26 = 1658）
+      expect(
+        Math.abs(pageGeometry.main.left - 236),
+        `内容左边界应为 236px（实测 ${pageGeometry.main.left}px）`,
+      ).toBeLessThanOrEqual(0.5);
+      expect(
+        Math.abs(pageGeometry.main.width - (viewport.width - 262)),
+        `内容宽度应为视口 − 262px（实测 ${pageGeometry.main.width}px）`,
+      ).toBeLessThanOrEqual(0.5);
+
+      pageGeometrySnapshot = {
+        cardTop: pageGeometry.card.top,
+        contentLeft: pageGeometry.main.left,
+        contentWidth: pageGeometry.main.width,
+        headerHeight: pageGeometry.header.height,
+        headerTop: pageGeometry.header.top,
+        summaryBottomGap: pageGeometry.card.top - pageGeometry.summary.bottom,
+        summaryHeight: pageGeometry.summary.height,
+        summaryTop: pageGeometry.summary.top,
+        workspaceBackground: pageGeometry.workspaceBg,
+      };
+    }
+
     const fileName = buildEvidenceFileName({
       area: 'reference-library-list',
       capturedAt,
@@ -315,6 +447,15 @@ test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密
     await expect(footer).toContainText(`共 ${LIST_ITEMS.length} 条`);
     expect(await footer.evaluate((el) => getComputedStyle(el).padding)).toBe(FOOTER_PADDING);
     expect(await footer.evaluate((el) => getComputedStyle(el).fontSize)).toBe(FOOTER_FONT_SIZE);
+    // 卡底收敛至 39px（PR5 整页计划 S4-2）：7.5 + 24（真实分页器）+ 7.5
+    expect(
+      await footer.evaluate((el) => getComputedStyle(el).height),
+      '卡底分页行应收敛为 39px',
+    ).toBe('39px');
+    expect(
+      await footer.locator('.ant-pagination').evaluate((el) => getComputedStyle(el).height),
+      '分页器点击目标保持 24px，不压缩',
+    ).toBe('24px');
     await expect(footer.locator('.ant-pagination')).toBeVisible();
 
     // 横滚只允许发生在表格内部（基准 §6.4.4）
@@ -371,6 +512,7 @@ test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密
       expandedPng: path.basename(expandedPngPath),
       expandedTableOffset,
       filledSearchPng: path.basename(filledSearchPng),
+      pageGeometry: pageGeometrySnapshot,
       gaps: {
         afterFilter: gapAfterFilter,
         afterTable: gapAfterTable,
@@ -395,7 +537,7 @@ test('独立资料列表局部对齐知识库表格：工具区 36px、紧凑密
 test('长标题 / 说明 / 原始文件名单行截断且详情入口仍可操作（PR5 S3-5）', async ({
   page,
 }, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
 
   const evidenceDir = testInfo.outputPath();
   mkdirSync(evidenceDir, { recursive: true });

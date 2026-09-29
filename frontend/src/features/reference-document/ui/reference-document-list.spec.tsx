@@ -105,7 +105,8 @@ describe('ReferenceDocumentList', () => {
     expect(screen.getByText('ASML TWINSCAN NXT:1980Di')).toBeTruthy();
     // 纯文本资料展示占位而非空白
     expect(screen.getByText('纯文本')).toBeTruthy();
-    expect(screen.getByText('共 1 条')).toBeTruthy();
+    // 总数出现两处：真实汇总条（参考资料）与卡底统计，二者同源
+    expect(screen.getAllByText('共 1 条')).toHaveLength(2);
   });
 
   it('无筛选时以不带 filter 参数请求；点击行进入详情路由', async () => {
@@ -245,7 +246,8 @@ describe('ReferenceDocumentList', () => {
     await screen.findByText('当前页暂无数据，请翻页返回。');
     expect(screen.queryByText('暂无参考资料。')).toBeNull();
     expect(screen.queryByText('没有符合筛选条件的参考资料。')).toBeNull();
-    expect(screen.getByText('共 25 条')).toBeTruthy();
+    // 汇总条（参考资料）与卡底统计同源，均为 total=25
+    expect(screen.getAllByText('共 25 条')).toHaveLength(2);
 
     const secondPage = container.querySelector('.ant-pagination-item-2 a');
     expect(secondPage).not.toBeNull();
@@ -436,6 +438,73 @@ describe('ReferenceDocumentList', () => {
       expect(fetchListMock).toHaveBeenLastCalledWith({ page: 1, pageSize: 10 }, undefined);
     });
     expect(filterButton()).not.toHaveClass('reference-library-toolbar-button--active');
+  });
+
+  // PR5 整页视觉计划 S3-2 / S3-3：汇总条三项必须可追溯到真实状态源，且四态显式。
+  describe('真实汇总条（PR5 整页视觉计划 S3）', () => {
+    const summaryText = () =>
+      document.querySelector('.reference-library-summary')?.textContent ?? '';
+
+    it('就绪态：总数取自列表 total，类型取自后端枚举，型号取自型号 query 条数', async () => {
+      fetchListMock.mockResolvedValue(buildPage([buildItem(970001)], 7, 1));
+
+      render(<ReferenceDocumentList />);
+      await screen.findByText('参考资料 970001');
+
+      const cells = document.querySelectorAll('.reference-library-summary-cell');
+      expect(cells).toHaveLength(3);
+      expect(cells[0].textContent).toContain('参考资料');
+      expect(cells[0].textContent).toContain('共 7 条');
+      expect(cells[1].textContent).toContain('支持类型');
+      // 类型集合来自后端契约枚举，不由测试复制
+      expect(cells[1].textContent).toContain('错误代码手册');
+      expect(cells[1].textContent).toContain('·');
+      // 型号条数取自 useReferenceEquipmentModels 的真实响应（beforeEach 桩为 2 条）
+      expect(cells[2].textContent).toContain('适用型号');
+      expect(cells[2].textContent).toContain('2 个型号');
+    });
+
+    it('加载态：总数与型号均显示加载状态，不伪造数字', () => {
+      fetchListMock.mockReturnValue(new Promise<ReferenceDocumentListPage>(() => {}));
+      fetchModelsMock.mockReturnValue(new Promise<never>(() => {}));
+
+      render(<ReferenceDocumentList />);
+
+      const cells = document.querySelectorAll('.reference-library-summary-cell');
+      expect(cells).toHaveLength(3);
+      expect(cells[0].textContent).toContain('加载中…');
+      expect(cells[2].textContent).toContain('加载中…');
+      // 类型来自静态枚举，加载态下仍可展示（不参与异步）
+      expect(cells[1].textContent).toContain('错误代码手册');
+    });
+
+    it('失败态：总数与型号均显示加载失败，仍不出现任何假统计', async () => {
+      const listError = new GraphQLIngressError({ type: 'network', message: 'list failed' });
+      const modelsError = new GraphQLIngressError({ type: 'network', message: 'models failed' });
+      fetchListMock.mockRejectedValue(listError);
+      fetchModelsMock.mockRejectedValue(modelsError);
+
+      render(<ReferenceDocumentList />);
+
+      // 列表与型号两处错误告警同为网络类归一文案，故用 findAll
+      await screen.findAllByText(listError.userMessage);
+
+      const cells = document.querySelectorAll('.reference-library-summary-cell');
+      expect(cells[0].textContent).toContain('加载失败');
+      expect(cells[2].textContent).toContain('加载失败');
+      expect(summaryText()).not.toMatch(/\d+\s*条/);
+      expect(summaryText()).not.toMatch(/\d+\s*个型号/);
+    });
+
+    it('knowledge-base 变体不重复渲染本汇总条（知识库页有自己的四分区汇总）', async () => {
+      fetchListMock.mockResolvedValue(buildPage([buildItem(970001)], 1));
+
+      render(<ReferenceDocumentList variant="knowledge-base" />);
+      await screen.findByText('参考资料 970001');
+
+      expect(document.querySelector('.reference-library-summary')).toBeNull();
+      expect(document.querySelector('.kb-summary')).toBeNull();
+    });
   });
 
   describe('knowledge-base 变体（PR3 R7）', () => {
