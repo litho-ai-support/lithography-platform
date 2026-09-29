@@ -17,6 +17,11 @@ function reply(line: string): void {
 }
 
 function waitForCommand(): Promise<string> {
+  // 显式 resume()：仅挂一个 data 监听时，某些环境下 process.stdin 不会被算作
+  // 活跃句柄，事件循环随即排空 → 顶层 await 永不 settle → Node 直接以
+  // 「Detected unsettled top-level await」退出（exit 13），子进程在握手前就死掉。
+  process.stdin.resume();
+
   return new Promise((resolve) => {
     process.stdin.once('data', (chunk: Buffer) => {
       resolve(chunk.toString('utf8').trim());
@@ -32,11 +37,6 @@ async function main(): Promise<number> {
 
     return 1;
   }
-
-  setTimeout(() => {
-    reply('FAILED:self-destruct-timeout');
-    process.exit(3);
-  }, SELF_DESTRUCT_TIMEOUT_MS).unref();
 
   // 屏障：先声明就绪，等父进程同时向所有竞争者发令，尽量让获取动作重叠
   reply('READY');
@@ -68,6 +68,18 @@ async function main(): Promise<number> {
   return 0;
 }
 
+// 兜底自尽：父进程异常退出时子进程不得悬挂。
+//
+// 刻意**不用 `unref()`**：`unref()` 过的定时器不持有句柄，一旦「stdin 未能算作
+// 活跃句柄」，事件循环就会直接排空，顶层 `await main()` 永不 settle，Node 随即以
+// 「Detected unsettled top-level await」退出（exit 13），子进程在握手前就死掉——
+// 这正是多进程竞态用例在 Node 24 下稳定失败的原因。该定时器必须真实持有句柄，
+// 正常结束路径由 `clearTimeout` 释放，不会拖满 20 秒。
+const selfDestruct = setTimeout(() => {
+  reply('FAILED:self-destruct-timeout');
+  process.exit(3);
+}, SELF_DESTRUCT_TIMEOUT_MS);
+
 /**
  * 收尾：断开 stdin 让事件循环自然收敛。
  *
@@ -76,4 +88,5 @@ async function main(): Promise<number> {
  * 语义（stdout 在正常退出路径上仍会被完整冲刷，不像 `process.exit()` 可能截断）。
  */
 process.exitCode = await main();
+clearTimeout(selfDestruct);
 process.stdin.destroy();

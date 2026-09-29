@@ -214,9 +214,13 @@ interface RaceChild {
 /**
  * 把可读流切成「一行一次」的拉取接口。
  *
- * 流结束、流出错或子进程提前退出时，**挂起中的读取必须立即 reject**：否则
- * 子进程启动失败会被父侧转译成一个 60 秒空等超时，真实原因（退出码与 stderr）
- * 随之丢失。`fail()` 由调用方在检测到子进程终止时触发。
+ * 流出错或子进程终止时，**挂起中的读取必须立即 reject**：否则子进程启动失败会被
+ * 父侧转译成一个 60 秒空等超时，真实原因（退出码与 stderr）随之丢失。
+ *
+ * 终态只由调用方在子进程 `close` 时触发（`fail()`）：`close` 必然晚于 `exit`，
+ * 此时退出码已落定、stderr 已冲刷完毕。刻意**不监听 `stdout` 的 `end`**——管道
+ * EOF 可能早于子进程 `exit` 事件，若在此处终结，诊断里的 `exit` 会仍是 `null`，
+ * 与「必须带退出码与 stderr」的承诺不符。
  */
 function createLineReader(
   stream: Readable,
@@ -234,6 +238,12 @@ function createLineReader(
   }
 
   function fail(reason: string): void {
+    // 首个终态为准：子进程「启动失败」与随后的「close」会接连触发，
+    // 若后到的原因覆盖先到的，真实原因（启动失败）就会被「未正常退出」顶掉。
+    if (terminal !== null) {
+      return;
+    }
+
     terminal = reason;
     rejectWaiting();
   }
@@ -259,9 +269,6 @@ function createLineReader(
     }
   });
 
-  stream.on('end', () => {
-    fail('stdout 已结束');
-  });
   stream.on('error', (error: Error) => {
     fail(`stdout 出错：${error.message}`);
   });
@@ -417,8 +424,12 @@ describe('执行锁的真实多进程竞争', () => {
   it('子进程无法启动时立即抛出含退出码与 stderr 的诊断，而不是等到超时', async () => {
     const missingScript = fileURLToPath(new URL('./race-child-missing.ts', import.meta.url));
     const child = startRaceChild(makeLockPath(), missingScript);
+    const failure = child.readLine();
 
-    await expect(child.readLine()).rejects.toThrow(/race-child-missing\.ts/);
+    // 退出码必须已落定（不得是 `exit=null`：那说明在子进程退出前就终结了诊断）
+    await expect(failure).rejects.toThrow(/exit=1\//);
+    // stderr 原文必须随诊断带出，否则「起不来」与「断言不成立」在父侧无法区分
+    await expect(failure).rejects.toThrow(/race-child-missing\.ts/);
     await child.exited;
   });
 });
