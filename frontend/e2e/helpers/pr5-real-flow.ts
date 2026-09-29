@@ -599,8 +599,12 @@ export interface Pr5RepairRequestBinding {
   readonly id: number;
   readonly requestNo: string;
   readonly customerAccountId: number;
-  /** 本轮为该申请创建的工程师回复 ID（清理时按此集合精确绑定子行，不扩大删除外部回复） */
-  readonly responseIds: readonly number[];
+  /**
+   * 本轮为该申请创建的工程师回复**完整绑定**（每条含 7/7 canonical 整行快照）。
+   * 父事务内会逐条按完整 7/7 快照复核并在删除前失败关闭——禁止退回裸 ID 集合
+   * （裸 ID 无法发现「阶段 A 后回复 resolution_status 等字段被改写」的 TOCTOU）。
+   */
+  readonly responses: readonly Pr5EngineerResponseBinding[];
   /** 建行时数据库实际落库的整行快照（13/13 列） */
   readonly snapshot: Pr5RowSnapshot;
 }
@@ -619,14 +623,17 @@ function buildPr5RepairRequestWhere(binding: Pr5RepairRequestBinding): string {
 /**
  * 归属核验后物理删除本轮自建维修申请（含其本轮工程师回复）。
  *
- * 事务内顺序：父行**整行快照**绑定唯一断言 → 子行集合精确断言（实际回复集合必须与本轮
- * responseIds 完全一致，多一条外部回复即失败关闭）→ 按 request_id + id IN (...) 精确删子行
- * → 再按同一整行快照删主行 → 残留核对为 0。任一绑定断言失败会让 MySQL 客户端在 DELETE
- * 之前报错退出，事务自动回滚（连接关闭触发回滚）。
+ * 事务内顺序（全部单事务，任一断言失败即整体回滚）：
+ *   1) 父行**整行快照**绑定唯一断言（非三因子字段被改写即精确命中 0 行 → 失败关闭）；
+ *   2) 子行集合闭包断言（实际回复集合必须与本轮回复集合完全一致，多一条外部回复即失败关闭）；
+ *   3) **逐条回复按完整 7/7 快照复核**：每条回复的整行 WHERE 必须精确命中 1 行（任一字段被
+ *      改写即命中 0 行、失败关闭），杜绝「阶段 A 后改回复字段仍被删除」的 TOCTOU；
+ *   4) 逐条按同一完整 7/7 WHERE 删除，并核对精确影响行数为 1；
+ *   5) 再按同一整行快照删主行；6) 父子残留核对为 0。
  */
 /** 绑定参数白名单校验（删除原语、只读预检与 locator 共用同一口径，杜绝两套校验漂移） */
 function assertPr5RepairRequestBindingParams(binding: Pr5RepairRequestBinding): void {
-  const { id, requestNo, customerAccountId, responseIds } = binding;
+  const { id, requestNo, customerAccountId, responses } = binding;
 
   if (!Number.isSafeInteger(id) || id <= 0) {
     throw new Error(`维修申请清理目标 ID 未通过正整数校验：${JSON.stringify(id)}`);
@@ -642,10 +649,24 @@ function assertPr5RepairRequestBindingParams(binding: Pr5RepairRequestBinding): 
     );
   }
 
-  for (const responseId of responseIds) {
-    if (!Number.isSafeInteger(responseId) || responseId <= 0) {
-      throw new Error(`维修申请清理目标回复 ID 未通过正整数校验：${JSON.stringify(responseId)}`);
+  // 子回复必须是**完整绑定**（含 7/7 canonical 快照）：逐条复用回复自身的参数白名单，
+  // 并强制 request_id 与父申请一致——杜绝「裸 ID 集合」或「挂到别的父申请」的误绑定。
+  const seenResponseIds = new Set<number>();
+
+  for (const response of responses) {
+    assertPr5EngineerResponseBindingParams(response);
+
+    if (response.requestId !== id) {
+      throw new Error(
+        `维修申请清理目标回复的父申请 ID 与绑定不一致：回复 ${response.id} 的 request_id=${response.requestId} ≠ 父申请 ${id}`,
+      );
     }
+
+    if (seenResponseIds.has(response.id)) {
+      throw new Error(`维修申请清理目标回复 ID 重复：${JSON.stringify(response.id)}`);
+    }
+
+    seenResponseIds.add(response.id);
   }
 
   // 整行快照：列名集合与取值类型必须完整合法（缺任一 canonical 列即拒绝，杜绝字面量逃逸）
@@ -665,7 +686,7 @@ export function readPr5RepairRequestBindingFromDb(input: {
   id: number;
   requestNo: string;
   customerAccountId: number;
-  responseIds: readonly number[];
+  responses: readonly Pr5EngineerResponseBinding[];
 }): Pr5RepairRequestBinding {
   const binding: Pr5RepairRequestBinding = {
     ...input,
@@ -677,8 +698,45 @@ export function readPr5RepairRequestBindingFromDb(input: {
   return binding;
 }
 
+/**
+ * 单条回复的「事务内完整 7/7 快照复核」语句组：以该回复的整行 WHERE 精确命中 1 行。
+ * 字段被改写 / 行被删除都会命中 0 行，哨兵名（含回复 ID，字面量出现在 SQL 文本中，可被
+ * `toThrow` 直接匹配）用「未知列」错误失败关闭，绝不静默继续删除。
+ */
+function buildPr5EngineerResponseChildCheckStatements(
+  response: Pr5EngineerResponseBinding,
+): string[] {
+  const { id } = response;
+  const responseWhere = buildPr5EngineerResponseBindingWhere(response);
+
+  return [
+    `SET @pr5_rr_child_full_${id} = (SELECT COUNT(*) FROM engineer_response WHERE ${responseWhere})`,
+    `SET @pr5_rr_child_full_check_${id} = IF(@pr5_rr_child_full_${id} = 1, 'SELECT 1', 'SELECT pr5_engineer_response_child_pk_${id}_full_snapshot_must_match_exactly_one')`,
+    `PREPARE pr5_rr_child_full_check_stmt_${id} FROM @pr5_rr_child_full_check_${id}`,
+    `EXECUTE pr5_rr_child_full_check_stmt_${id}`,
+    `DEALLOCATE PREPARE pr5_rr_child_full_check_stmt_${id}`,
+  ];
+}
+
+/** 单条回复的「按完整 7/7 WHERE 删除 + 精确影响行数核对」语句组（影响行数 ≠ 1 即失败关闭） */
+function buildPr5EngineerResponseChildDeleteStatements(
+  response: Pr5EngineerResponseBinding,
+): string[] {
+  const { id } = response;
+  const responseWhere = buildPr5EngineerResponseBindingWhere(response);
+
+  return [
+    `DELETE FROM engineer_response WHERE ${responseWhere}`,
+    `SET @pr5_rr_child_deleted_${id} = ROW_COUNT()`,
+    `SET @pr5_rr_child_delete_${id} = IF(@pr5_rr_child_deleted_${id} = 1, 'SELECT 1', 'SELECT pr5_engineer_response_child_delete_must_affect_exactly_one_row')`,
+    `PREPARE pr5_rr_child_delete_check_${id} FROM @pr5_rr_child_delete_${id}`,
+    `EXECUTE pr5_rr_child_delete_check_${id}`,
+    `DEALLOCATE PREPARE pr5_rr_child_delete_check_${id}`,
+  ];
+}
+
 export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): void {
-  const { id, responseIds } = binding;
+  const { id, responses } = binding;
 
   assertPr5RepairRequestBindingParams(binding);
 
@@ -686,7 +744,7 @@ export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): v
 
   const where = buildPr5RepairRequestWhere(binding);
   // 无回复时以 0 占位：IN (0) 不匹配任何行，等价于「本轮允许的回复集合为空」
-  const expectedResponseIds = responseIds.length === 0 ? '0' : responseIds.join(', ');
+  const expectedResponseIds = responses.length === 0 ? '0' : responses.map((r) => r.id).join(', ');
 
   mysqlQuery(
     [
@@ -698,11 +756,14 @@ export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): v
       'DEALLOCATE PREPARE pr5_rr_binding_check',
       `SET @pr5_rr_child_total = (SELECT COUNT(*) FROM engineer_response WHERE request_id = ${id})`,
       `SET @pr5_rr_child_matched = (SELECT COUNT(*) FROM engineer_response WHERE request_id = ${id} AND id IN (${expectedResponseIds}))`,
-      `SET @pr5_rr_child_binding = IF(@pr5_rr_child_total = ${responseIds.length} AND @pr5_rr_child_matched = ${responseIds.length}, 'SELECT 1', 'SELECT pr5_engineer_response_child_binding_must_match_this_run')`,
+      `SET @pr5_rr_child_binding = IF(@pr5_rr_child_total = ${responses.length} AND @pr5_rr_child_matched = ${responses.length}, 'SELECT 1', 'SELECT pr5_engineer_response_child_binding_must_match_this_run')`,
       'PREPARE pr5_rr_child_check FROM @pr5_rr_child_binding',
       'EXECUTE pr5_rr_child_check',
       'DEALLOCATE PREPARE pr5_rr_child_check',
-      `DELETE FROM engineer_response WHERE request_id = ${id} AND id IN (${expectedResponseIds})`,
+      // 逐条回复完整 7/7 快照复核（子回复完整 bindings 进入父事务的核心证据）
+      ...responses.flatMap((response) => buildPr5EngineerResponseChildCheckStatements(response)),
+      // 逐条按同一完整 7/7 WHERE 删除，并核对精确影响行数为 1
+      ...responses.flatMap((response) => buildPr5EngineerResponseChildDeleteStatements(response)),
       `DELETE FROM repair_request WHERE ${where}`,
       `SET @pr5_rr_residue = (SELECT COUNT(*) FROM repair_request WHERE id = ${id}) + (SELECT COUNT(*) FROM engineer_response WHERE request_id = ${id})`,
       "SET @pr5_rr_assertion = IF(@pr5_rr_residue = 0, 'SELECT 1', 'SELECT pr5_repair_request_residue_must_be_zero')",
@@ -722,9 +783,9 @@ export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): v
 export function assertPr5RepairRequestBindingBound(binding: Pr5RepairRequestBinding): void {
   assertPr5RepairRequestBindingParams(binding);
 
-  const { id, responseIds } = binding;
+  const { id, responses } = binding;
   const where = buildPr5RepairRequestWhere(binding);
-  const expectedResponseIds = responseIds.length === 0 ? '0' : responseIds.join(', ');
+  const expectedResponseIds = responses.length === 0 ? '0' : responses.map((r) => r.id).join(', ');
   const raw = mysqlQuery(
     'SELECT CONCAT(' +
       `(SELECT COUNT(*) FROM repair_request WHERE ${where}), '|', ` +
@@ -745,10 +806,15 @@ export function assertPr5RepairRequestBindingBound(binding: Pr5RepairRequestBind
     );
   }
 
-  if (childTotal !== responseIds.length || childMatched !== responseIds.length) {
+  if (childTotal !== responses.length || childMatched !== responses.length) {
     throw new Error(
-      `pr5_engineer_response_child_binding_must_match_this_run：本轮回复集合与父申请子行不一致（子行 ${childTotal} / 命中 ${childMatched} / 期望 ${responseIds.length}）：${JSON.stringify(binding)}`,
+      `pr5_engineer_response_child_binding_must_match_this_run：本轮回复集合与父申请子行不一致（子行 ${childTotal} / 命中 ${childMatched} / 期望 ${responses.length}）：${JSON.stringify(binding)}`,
     );
+  }
+
+  // 逐条回复完整 7/7 快照只读核验：任一字段被改写即精确命中 0 行 → 零写入失败关闭
+  for (const response of responses) {
+    assertPr5EngineerResponseBindingBound(response);
   }
 }
 
@@ -1091,6 +1157,27 @@ export function readPr5EngineerResponseBindingFromDb(input: {
   const binding: Pr5EngineerResponseBinding = {
     ...input,
     snapshot: readPr5FullRowSnapshot('engineer_response', input.id),
+  };
+
+  assertPr5EngineerResponseBindingParams(binding);
+
+  return binding;
+}
+
+/**
+ * 按主键读取回复**完整绑定**：五因子直接从数据库整行快照（7/7）派生，再统一走参数白名单校验。
+ * 供真实链路 teardown 用「当前库行」重建捕捉于创建时的回复集合（父行同样按当前行走
+ * readPr5RepairRequestBindingFromDb 重建），使父事务内逐条 7/7 复核仍能在删除前失败关闭。
+ */
+export function readPr5EngineerResponseBindingById(id: number): Pr5EngineerResponseBinding {
+  const snapshot = readPr5FullRowSnapshot('engineer_response', id);
+  const binding: Pr5EngineerResponseBinding = {
+    customerAccountId: Number(readPr5SnapshotColumn(snapshot, 'customer_account_id')),
+    engineerAccountId: Number(readPr5SnapshotColumn(snapshot, 'engineer_account_id')),
+    id,
+    requestId: Number(readPr5SnapshotColumn(snapshot, 'request_id')),
+    responseText: readPr5SnapshotColumn(snapshot, 'response_text'),
+    snapshot,
   };
 
   assertPr5EngineerResponseBindingParams(binding);

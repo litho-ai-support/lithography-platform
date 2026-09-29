@@ -22,6 +22,7 @@ import {
   encodePr5SqlStringLiteral,
   findPr5ReferenceDocumentIdsByKeyword,
   PR5_DOC_KEYWORD_PATTERN,
+  type Pr5EngineerResponseBinding,
   type Pr5RowSnapshot,
   readPr5CanonicalColumns,
   readPr5PrimaryKeySnapshot,
@@ -103,6 +104,44 @@ function referenceDocumentSnapshot(
   return createPr5RowSnapshot('reference_document', { ...RD_SNAPSHOT_BASE, ...overrides });
 }
 
+/** 工程师回复 7/7 canonical 快照基线（unit 专用；非五因子字段如 resolution_status 参与 WHERE） */
+const ER_SNAPSHOT_BASE: Readonly<Record<string, string>> = {
+  created_at: '2026-01-01 00:00:00.000',
+  customer_account_id: '42',
+  engineer_account_id: '7',
+  id: '11',
+  request_id: '970100',
+  resolution_status: 'PENDING',
+  response_text: '回复正文',
+};
+
+function engineerResponseBinding(
+  id: number,
+  overrides: Readonly<Record<string, string>> = {},
+): Pr5EngineerResponseBinding {
+  return {
+    customerAccountId: 42,
+    engineerAccountId: 7,
+    id,
+    requestId: 970100,
+    responseText: '回复正文',
+    snapshot: createPr5RowSnapshot('engineer_response', {
+      ...ER_SNAPSHOT_BASE,
+      id: String(id),
+      ...overrides,
+    }),
+  };
+}
+
+/** 期望的回复整行 WHERE（独立 oracle：任何列增删/漏拼都会让断言变红，含 resolution_status） */
+function expectedEngineerResponseWhere(id: number): string {
+  return (
+    `id = ${id} AND request_id = 970100 AND engineer_account_id = 7 AND customer_account_id = 42` +
+    " AND resolution_status = 'PENDING' AND response_text = '回复正文'" +
+    " AND created_at = '2026-01-01 00:00:00.000'"
+  );
+}
+
 /** 期望的整行 WHERE（独立 oracle：与 canonical 列清单手工对照，任何列增删/漏拼都会让断言变红） */
 const RR_ROW_WHERE =
   `id = 970100 AND request_no = '${VALID_REQUEST_NO}' AND customer_account_id = 42` +
@@ -162,7 +201,7 @@ describe('pr5-real-flow 参数白名单（非法参数绝不启动 mysql 进程�
           customerAccountId: 2,
           id: invalidId,
           requestNo: VALID_REQUEST_NO,
-          responseIds: [],
+          responses: [],
           snapshot: repairRequestSnapshot(),
         }),
       ).toThrow('未通过正整数校验');
@@ -180,7 +219,7 @@ describe('pr5-real-flow 参数白名单（非法参数绝不启动 mysql 进程�
         customerAccountId: 2,
         id: 1,
         requestNo: invalidRequestNo,
-        responseIds: [],
+        responses: [],
         snapshot: repairRequestSnapshot(),
       }),
     ).toThrow('未通过白名单校验');
@@ -193,7 +232,7 @@ describe('pr5-real-flow 参数白名单（非法参数绝不启动 mysql 进程�
         customerAccountId: invalidAccountId,
         id: 1,
         requestNo: VALID_REQUEST_NO,
-        responseIds: [],
+        responses: [],
         snapshot: repairRequestSnapshot(),
       }),
     ).toThrow('未通过正整数校验');
@@ -206,10 +245,30 @@ describe('pr5-real-flow 参数白名单（非法参数绝不启动 mysql 进程�
         customerAccountId: 2,
         id: 1,
         requestNo: VALID_REQUEST_NO,
-        responseIds: [invalidResponseId],
+        // 回复绑定 ID 非法（快照仍合法）：必须在任何 SQL 组装之前被回复参数白名单拒绝
+        responses: [{ ...engineerResponseBinding(11), id: invalidResponseId }],
         snapshot: repairRequestSnapshot(),
       }),
     ).toThrow('未通过正整数校验');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('维修申请清理：回复绑定的父申请 ID 与父绑定不一致直接抛错', () => {
+    // 绑定自身自洽（requestId 与快照的 request_id 一致），但挂到了别的父申请上
+    const otherParentBinding: Pr5EngineerResponseBinding = {
+      ...engineerResponseBinding(11, { request_id: '999999' }),
+      requestId: 999999,
+    };
+
+    expect(() =>
+      deletePr5RepairRequestBound({
+        customerAccountId: 42,
+        id: 970100,
+        requestNo: VALID_REQUEST_NO,
+        responses: [otherParentBinding],
+        snapshot: repairRequestSnapshot(),
+      }),
+    ).toThrow('父申请 ID 与绑定不一致');
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
@@ -295,12 +354,12 @@ describe('deletePr5RepairRequestBound 子行集合精确绑定（P1-3）', () =>
     process.env[OPT_IN_ENV] = '1';
   });
 
-  it('SQL 同时携带父行完整行快照与子行集合断言（删/改任一字段即失配）', () => {
+  it('SQL 同时携带父行完整行快照、子行闭包断言与逐条回复 7/7 完整快照复核', () => {
     deletePr5RepairRequestBound({
       customerAccountId: 42,
       id: 970100,
       requestNo: VALID_REQUEST_NO,
-      responseIds: [11, 22],
+      responses: [engineerResponseBinding(11), engineerResponseBinding(22)],
       snapshot: repairRequestSnapshot(),
     });
 
@@ -311,7 +370,7 @@ describe('deletePr5RepairRequestBound 子行集合精确绑定（P1-3）', () =>
     expect(sql).toContain(
       'pr5_repair_request_binding_id_request_no_customer_must_match_exactly_one',
     );
-    // 子行集合：总数与实际回复集合都必须精确等于本轮 responseIds
+    // 子行闭包：总数与实际回复集合都必须精确等于本轮回复集合
     expect(sql).toContain(
       'SET @pr5_rr_child_total = (SELECT COUNT(*) FROM engineer_response WHERE request_id = 970100)',
     );
@@ -321,14 +380,51 @@ describe('deletePr5RepairRequestBound 子行集合精确绑定（P1-3）', () =>
     expect(sql).toContain(
       "IF(@pr5_rr_child_total = 2 AND @pr5_rr_child_matched = 2, 'SELECT 1', 'SELECT pr5_engineer_response_child_binding_must_match_this_run')",
     );
-    // 子行删除必须带 request_id + 精确 ID 集合，绝不按父 ID 无差别删除
+    // 逐条回复 7/7 完整快照复核：按各自整行 WHERE 精确命中 1 行，否则哨兵（含回复 ID）失败关闭
     expect(sql).toContain(
-      'DELETE FROM engineer_response WHERE request_id = 970100 AND id IN (11, 22)',
+      `SET @pr5_rr_child_full_11 = (SELECT COUNT(*) FROM engineer_response WHERE ${expectedEngineerResponseWhere(11)})`,
     );
+    expect(sql).toContain(
+      `SET @pr5_rr_child_full_22 = (SELECT COUNT(*) FROM engineer_response WHERE ${expectedEngineerResponseWhere(22)})`,
+    );
+    expect(sql).toContain('pr5_engineer_response_child_pk_11_full_snapshot_must_match_exactly_one');
+    expect(sql).toContain('pr5_engineer_response_child_pk_22_full_snapshot_must_match_exactly_one');
+    // 逐条按完整 7/7 WHERE 删除（含 resolution_status，任一字段被改写即失配），并核对精确影响行数为 1
+    expect(sql).toContain(
+      `DELETE FROM engineer_response WHERE ${expectedEngineerResponseWhere(11)}`,
+    );
+    expect(sql).toContain(
+      `DELETE FROM engineer_response WHERE ${expectedEngineerResponseWhere(22)}`,
+    );
+    expect(sql).toContain(
+      "IF(@pr5_rr_child_deleted_11 = 1, 'SELECT 1', 'SELECT pr5_engineer_response_child_delete_must_affect_exactly_one_row')",
+    );
+    expect(sql).toContain(
+      "IF(@pr5_rr_child_deleted_22 = 1, 'SELECT 1', 'SELECT pr5_engineer_response_child_delete_must_affect_exactly_one_row')",
+    );
+    // 绝不按父 ID 无差别删除子行
     expect(sql).not.toContain('DELETE FROM engineer_response WHERE request_id = 970100;');
     // 残留核对为 0 后才提交
     expect(sql).toContain('pr5_repair_request_residue_must_be_zero');
     expect(sql).toContain('COMMIT');
+  });
+
+  it('子回复非五因子字段（resolution_status）进入父事务 WHERE：改这里会让删除失配', () => {
+    // 变异探针：把 resolution_status 改成 RESOLVED 后，父事务内的完整 WHERE 必须随之改变
+    deletePr5RepairRequestBound({
+      customerAccountId: 42,
+      id: 970100,
+      requestNo: VALID_REQUEST_NO,
+      responses: [engineerResponseBinding(11, { resolution_status: 'RESOLVED' })],
+      snapshot: repairRequestSnapshot(),
+    });
+
+    const sql = executedSql();
+
+    expect(sql).toContain("AND resolution_status = 'RESOLVED'");
+    expect(sql).not.toContain(
+      `DELETE FROM engineer_response WHERE ${expectedEngineerResponseWhere(11)}`,
+    );
   });
 
   it('无回复时以 IN (0) 占位，等价于「本轮允许的回复集合为空」', () => {
@@ -336,7 +432,7 @@ describe('deletePr5RepairRequestBound 子行集合精确绑定（P1-3）', () =>
       customerAccountId: 42,
       id: 970100,
       requestNo: VALID_REQUEST_NO,
-      responseIds: [],
+      responses: [],
       snapshot: repairRequestSnapshot(),
     });
 
@@ -344,6 +440,8 @@ describe('deletePr5RepairRequestBound 子行集合精确绑定（P1-3）', () =>
 
     expect(sql).toContain('AND id IN (0))');
     expect(sql).toContain("IF(@pr5_rr_child_total = 0 AND @pr5_rr_child_matched = 0, 'SELECT 1'");
+    // 无回复时不得出现任何逐条回复删除语句
+    expect(sql).not.toContain('DELETE FROM engineer_response WHERE id =');
   });
 
   it('绑定断言失败（哨兵）会让 mysql 客户端在 DELETE 之前报错退出：异常必须上抛', () => {
@@ -358,7 +456,7 @@ describe('deletePr5RepairRequestBound 子行集合精确绑定（P1-3）', () =>
         customerAccountId: 42,
         id: 970100,
         requestNo: VALID_REQUEST_NO,
-        responseIds: [11],
+        responses: [engineerResponseBinding(11)],
         snapshot: repairRequestSnapshot(),
       }),
     ).toThrow('pr5_engineer_response_child_binding_must_match_this_run');

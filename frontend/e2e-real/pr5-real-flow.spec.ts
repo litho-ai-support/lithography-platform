@@ -37,6 +37,7 @@ import {
   PR5_SEED_ACCEPTED_REQUEST_NO,
   type Pr5ReferenceDocumentBinding,
   type Pr5RepairRequestBinding,
+  readPr5EngineerResponseBindingById,
   readPr5PrimaryKeySnapshot,
   readPr5ReferenceDocumentBindingFromDb,
   readPr5ReferenceDocumentDeprecatedById,
@@ -338,7 +339,8 @@ function expectPr5RepairRequestReclaimed(binding: Pr5RepairRequestBinding | null
  * 本轮自建维修申请的物理回收（P1-1）：teardown 时**按当前库行重新读取整行快照**再删除——
  * 本轮自建行会被 UI 合法软删 / 接单 / 追加回复，创建时快照已不再等于当前行；
  * 用「主键 + 三因子 + 本轮回复集合」定位，但 WHERE 仍是当下完整行快照（口径不降低）。
- * 行已不存在（重入）则幂等跳过。
+ * 本轮回复集合按创建时捕捉的 ID 逐条用**当前库行**重建 7/7 完整绑定（父事务内会再逐条复核，
+ * 删除前失败关闭），既保持「本轮集合精确」闭包，又不使用过期的创建时快照。行已不存在则幂等跳过。
  */
 function reclaimPr5RepairRequestBound(binding: Pr5RepairRequestBinding | null): void {
   if (binding === null) {
@@ -358,7 +360,9 @@ function reclaimPr5RepairRequestBound(binding: Pr5RepairRequestBinding | null): 
       customerAccountId: binding.customerAccountId,
       id: binding.id,
       requestNo: binding.requestNo,
-      responseIds: binding.responseIds,
+      responses: binding.responses.map((response) =>
+        readPr5EngineerResponseBindingById(response.id),
+      ),
     }),
   );
 }
@@ -473,7 +477,7 @@ test.describe('PR5 real link permission and business closure', () => {
           customerAccountId,
           id: generatedId,
           requestNo,
-          responseIds: [],
+          responses: [],
         });
 
         // 成功页 → 列表：新申请按 createdAt DESC 置顶且为待接单
@@ -538,7 +542,7 @@ test.describe('PR5 real link permission and business closure', () => {
           customerAccountId,
           id: created.id,
           requestNo: created.requestNo,
-          responseIds: [],
+          responses: [],
         });
 
         // 真实接单（工程师身份）
@@ -608,7 +612,7 @@ test.describe('PR5 real link permission and business closure', () => {
           customerAccountId,
           id: created.id,
           requestNo: created.requestNo,
-          responseIds: [],
+          responses: [],
         });
 
         binding = createdBinding;
@@ -649,8 +653,11 @@ test.describe('PR5 real link permission and business closure', () => {
           throw new Error(`PR5 真实回复失败：${JSON.stringify(responseCall.body)}`);
         }
 
-        // P1-3：记录本轮回复 ID，清理时按该集合精确绑定子行（外部回复会使清理失败关闭）
-        binding = { ...createdBinding, responseIds: [response.id] };
+        // P1-3：记录本轮回复**完整绑定**（读回 7/7 整行快照），清理时父事务逐条按完整快照复核后删除
+        binding = {
+          ...createdBinding,
+          responses: [readPr5EngineerResponseBindingById(response.id)],
+        };
 
         // 有回复：计数、工程师昵称、状态标签与正文全部可见；已接单故无删除入口
         await page.reload();

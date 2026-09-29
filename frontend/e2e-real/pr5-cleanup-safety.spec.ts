@@ -20,7 +20,10 @@
 //   C10 批次原子性：同批第 N 个对象字段被改写 → reclaimer 整体预检失败关闭，第 1…N-1 个对象
 //      也不得被提前删除；恢复基线后可精确回收；
 //   C11 TOCTOU：阶段 A（只读预检）通过后改写字段 → 事务内完整 WHERE 命中 0 行、零写入失败关闭，
-//      目标与同批行保留；恢复基线后同一 binding 又能精确回收。
+//      目标与同批行保留；恢复基线后同一 binding 又能精确回收；
+//   C12 子回复 TOCTOU：阶段 A（携带完整回复 bindings 的父行只读预检）通过后改写**第 N 条**
+//      回复的 resolution_status → 父事务内逐条 7/7 复核失败关闭，父行 / 第 1…N-1 条回复 /
+//      目标回复 / 同批资料全部保留，外部改写值不变；恢复基线后可精确回收且无残留。
 //
 // 运行入口（npm script，授权变量由执行者显式设置，不写入 npm script）：
 //   E2E_ALLOW_PHYSICAL_CLEANUP=1 DB_NAME=lithography_e2e npm run test:e2e:pr5-cleanup-safety
@@ -51,6 +54,7 @@ import {
   resolvePr5CleanupSafetySeedContext,
   restorePr5CleanupSafetyRowToSnapshot,
   snapshotPr5CleanupSafetyExternalSentinel,
+  toPr5RepairRequestBinding,
 } from '../e2e/helpers/pr5-cleanup-safety';
 import {
   assertPr5RepairRequestBindingBound,
@@ -73,7 +77,7 @@ import { mysqlQuery } from '../e2e/helpers/real-backend';
 // 顶层：环境门 + 数据库执行锁（整组只执行一次；失败即硬失败，不 skip）
 // ---------------------------------------------------------------------------
 
-test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', () => {
+test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C12）', () => {
   // 释放会话把「是否已获取锁」与「释放」解耦：环境门 / schema / 获取锁阶段失败时
   // afterAll 的 release 是安全空操作，不会用二次异常覆盖根因（见 P2-3 / S3）。
   const lockSession: Pr5CleanupSafetyLockSession = createPr5CleanupSafetyLockSession();
@@ -111,7 +115,7 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
         customerAccountId: context.customerBetaAccountId,
         id: entry.id,
         requestNo: forgedRequestNo,
-        responseIds: [],
+        responses: [],
         snapshot: createPr5RowSnapshot('repair_request', {
           ...entry.snapshot.values,
           customer_account_id: String(context.customerBetaAccountId),
@@ -694,7 +698,7 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
         customerAccountId: context.customerAccountId,
         id: entry.id,
         requestNo: readPr5SnapshotColumn(entry.snapshot, 'request_no'),
-        responseIds: [],
+        responses: [],
       });
 
       assertPr5RepairRequestBindingBound(binding);
@@ -725,6 +729,89 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
     } finally {
       if (requestSnapshot !== null) {
         restorePr5CleanupSafetyRowToSnapshot(requestSnapshot);
+      }
+
+      reclaimPr5CleanupSafetyLedger(ledger);
+    }
+
+    expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(sentinelBeforeCreation);
+  });
+
+  test('C12 子回复 TOCTOU：阶段 A 通过后改第 N 条回复 resolution_status → 父事务逐条 7/7 复核失败关闭，先前回复不被提前删除', () => {
+    const runId = createPr5CleanupSafetyRunId();
+    const context = resolvePr5CleanupSafetySeedContext();
+    const ledger = createPr5CleanupSafetyLedger(runId, context.customerAccountId);
+    const sentinelBeforeCreation = snapshotPr5CleanupSafetyExternalSentinel();
+    const countRow = (table: string, id: number): number =>
+      Number(mysqlQuery(`SELECT COUNT(*) FROM ${table} WHERE id = ${id}`));
+    let targetResponseSnapshot: Pr5RowSnapshot | null = null;
+
+    try {
+      const entry = insertPr5CleanupSafetyRepairRequest(ledger, {
+        customerAccountId: context.customerAccountId,
+        equipmentModelId: context.equipmentModelId,
+        faultTag: buildPr5CleanupSafetyFaultTag(runId),
+      });
+      // 同一父申请下两条回复：只改写**第 2 条**，验证第 1 条不会被提前删除
+      const responseAId = insertPr5CleanupSafetyEngineerResponse(ledger, {
+        customerAccountId: context.customerAccountId,
+        engineerAccountId: context.engineerAccountId,
+        request: entry,
+      });
+      const responseBId = insertPr5CleanupSafetyEngineerResponse(ledger, {
+        customerAccountId: context.customerAccountId,
+        engineerAccountId: context.engineerAccountId,
+        request: entry,
+      });
+      const doc = insertPr5CleanupSafetyReferenceDocument(ledger, {
+        createdByAccountId: context.adminAccountId,
+        label: 'C12',
+      });
+
+      targetResponseSnapshot = entry.responses[1].snapshot;
+
+      // 阶段 A 产物：父 binding 直接携带两条回复的**完整 7/7 bindings**（不再退化为裸 ID 集合）
+      const binding = toPr5RepairRequestBinding(entry);
+
+      expect(binding.responses.map((response) => response.id)).toEqual([responseAId, responseBId]);
+      // 阶段 A：父行整行快照 + 子行闭包 + 每条回复 7/7 只读预检 → 通过
+      assertPr5RepairRequestBindingBound(binding);
+
+      // 阶段 A 与阶段 B 之间并发改写第 2 条回复的非五因子字段（TOCTOU 窗口）
+      mysqlQuery(
+        `UPDATE engineer_response SET resolution_status = 'RESOLVED' WHERE id = ${responseBId}`,
+      );
+
+      const sentinelAfterMutation = snapshotPr5CleanupSafetyExternalSentinel();
+
+      // 阶段 B：父事务内逐条 7/7 复核 → 第 2 条字段漂移即命中 0 行、失败关闭（哨兵含回复 ID），零删除
+      expect(() => deletePr5RepairRequestBound(binding)).toThrow(
+        new RegExp(
+          `pr5_engineer_response_child_pk_${responseBId}_full_snapshot_must_match_exactly_one`,
+        ),
+      );
+
+      // 父申请 / 第 1 条回复 / 第 2 条回复 / 同批资料全部保留（第 1 条未被提前删除）
+      expect(countRow('repair_request', entry.id)).toBe(1);
+      expect(countRow('engineer_response', responseAId)).toBe(1);
+      expect(countRow('engineer_response', responseBId)).toBe(1);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      // 外部改写值原样保留（失败关闭时绝不改写既有数据）
+      expect(
+        mysqlQuery(`SELECT resolution_status FROM engineer_response WHERE id = ${responseBId}`),
+      ).toBe('RESOLVED');
+      expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(sentinelAfterMutation);
+
+      // 恢复基线后同一 binding 又能精确命中 → 可回收且无残留
+      restorePr5CleanupSafetyRowToSnapshot(entry.responses[1].snapshot);
+      assertPr5RepairRequestBindingBound(binding);
+      reclaimPr5CleanupSafetyLedger(ledger);
+      assertPr5CleanupSafetyNoRunResidue(runId);
+      expect(countRow('engineer_response', responseAId)).toBe(0);
+      expect(countRow('engineer_response', responseBId)).toBe(0);
+    } finally {
+      if (targetResponseSnapshot !== null) {
+        restorePr5CleanupSafetyRowToSnapshot(targetResponseSnapshot);
       }
 
       reclaimPr5CleanupSafetyLedger(ledger);

@@ -276,8 +276,12 @@ export interface Pr5CleanupSafetyLedgerRequest {
   readonly id: number;
   /** 建行时数据库实际落库的整行快照（13/13 canonical 列，含默认与生命周期字段） */
   readonly snapshot: Pr5RowSnapshot;
-  /** 本轮为该申请创建的回复精确 ID（回收时按此集合绑定子行，不扩大删除外部回复） */
-  readonly responseIds: number[];
+  /**
+   * 本轮为该申请创建的回复**完整绑定**（每条含 7/7 canonical 整行快照）。
+   * 父申请回收事务内会逐条按完整 7/7 快照复核并失败关闭——禁止退回裸 ID 集合
+   * （裸 ID 无法发现「阶段 A 后回复字段被改写」的 TOCTOU）。
+   */
+  readonly responses: Pr5EngineerResponseBinding[];
 }
 
 /**
@@ -368,7 +372,7 @@ export function insertPr5CleanupSafetyRepairRequest(
 
   const entry: Pr5CleanupSafetyLedgerRequest = {
     id,
-    responseIds: [],
+    responses: [],
     // 整行快照的真源 = 数据库实际落库值（覆盖数据库默认与生命周期字段），不手写字段子集
     snapshot: readPr5FullRowSnapshot('repair_request', id),
   };
@@ -416,17 +420,18 @@ export function insertPr5CleanupSafetyEngineerResponse(
   }
 
   if (input.record !== false) {
-    request.responseIds.push(id);
-    // 完整 binding：读回数据库实际落库整行快照（7/7），不手写字段子集
-    ledger.engineerResponses.push(
-      readPr5EngineerResponseBindingFromDb({
-        customerAccountId,
-        engineerAccountId,
-        id,
-        requestId: request.id,
-        responseText,
-      }),
-    );
+    // 完整 binding：读回数据库实际落库整行快照（7/7），不手写字段子集；
+    // 同时挂到父申请条目上（阶段 A 产物直接携带完整回复 bindings，阶段 B 不得丢弃为 ID 数组）
+    const binding = readPr5EngineerResponseBindingFromDb({
+      customerAccountId,
+      engineerAccountId,
+      id,
+      requestId: request.id,
+      responseText,
+    });
+
+    request.responses.push(binding);
+    ledger.engineerResponses.push(binding);
   }
 
   return id;
@@ -486,13 +491,13 @@ export function insertPr5CleanupSafetyReferenceDocument(
  */
 export function toPr5RepairRequestBinding(
   entry: Pr5CleanupSafetyLedgerRequest,
-  responseIds: readonly number[] = entry.responseIds,
+  responses: readonly Pr5EngineerResponseBinding[] = entry.responses,
 ): Pr5RepairRequestBinding {
   return {
     customerAccountId: Number(readPr5SnapshotColumn(entry.snapshot, 'customer_account_id')),
     id: entry.id,
     requestNo: readPr5SnapshotColumn(entry.snapshot, 'request_no'),
-    responseIds: [...responseIds],
+    responses: [...responses],
     snapshot: entry.snapshot,
   };
 }
@@ -547,18 +552,16 @@ function planPr5CleanupSafetyReclaim(ledger: Pr5CleanupSafetyLedger): Pr5Cleanup
       readPr5FullRowSnapshot('repair_request', entry.id),
     );
 
-    // 先按 ledger 记录的回复集合做绑定核验（未知子行 → pr5_engineer_response_child_binding_must_match_this_run），
-    // 再由回复闭包逐字段核验每个子行；两步都在任何 DELETE 之前，发现冲突即零写入失败关闭
+    // 先按 ledger 记录的**完整回复 bindings**做父绑定只读预检（父行整行快照 + 子行闭包 +
+    // 每条回复 7/7）：未知子行 → pr5_engineer_response_child_binding_must_match_this_run，
+    // 任一字段漂移 → pr5_engineer_response_child_pk_<id>_full_snapshot_must_match_exactly_one。
+    // 预检通过后再读回本申请实际子行（再逐条与 ledger 完整 binding 核验），以「当前库行」
+    // 构造删除用绑定；全程零写入，任何冲突都在 DELETE 之前失败关闭。
     assertPr5RepairRequestBindingBound(toPr5RepairRequestBinding(entry));
 
     const responses = readPr5CleanupSafetyRunResponses(entry.id, ledger);
 
-    requests.push(
-      toPr5RepairRequestBinding(
-        entry,
-        responses.map((response) => response.id),
-      ),
-    );
+    requests.push(toPr5RepairRequestBinding(entry, responses));
   }
 
   const responses: Pr5EngineerResponseBinding[] = [];
@@ -970,7 +973,8 @@ export function locatePr5CleanupSafetyResidueByRunId(
         customerAccountId: customer,
         id,
         requestNo: readPr5SnapshotColumn(actual, 'request_no'),
-        responseIds: responses.map((response) => response.id),
+        // 子回复**完整 bindings** 直接进入父绑定（禁止退回裸 ID 集合）
+        responses,
         // 从数据库重建的完整行快照（已核验与 ledger 记录逐字段相等）
         snapshot: actual,
       },
