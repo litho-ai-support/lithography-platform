@@ -23,7 +23,7 @@
  * 多进程夹具见 `execution-lock-race-child.ts`（非 `*.spec.ts`，不被测试收集器执行）。
  */
 
-import { spawn, spawnSync } from 'node:child_process';
+import { type ChildProcess, fork, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -35,11 +35,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { acquireExecutionLockAt, readExecutionLockOwner } from './execution-lock';
+import type { ChildMessage, ParentCommand } from './execution-lock-race-child';
 
 const RACE_CHILD_PATH = fileURLToPath(new URL('./execution-lock-race-child.ts', import.meta.url));
 
@@ -206,29 +206,69 @@ describe('acquireExecutionLockAt 的失败关闭与归属校验', () => {
 
 interface RaceChild {
   readonly diagnostics: () => string;
-  readonly readLine: () => Promise<string>;
-  readonly send: (line: string) => void;
-  readonly exited: Promise<void>;
+  readonly disconnect: () => void;
+  readonly exited: Promise<number | null>;
+  readonly readMessage: () => Promise<ChildMessage>;
+  readonly send: (command: ParentCommand) => void;
+  readonly stdoutText: () => string;
+}
+
+/** 父侧对子进程消息做同等严格的 fail-closed 校验（消息来自另一进程，不可信） */
+function parseChildMessage(value: unknown): ChildMessage | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+
+  switch (record.type) {
+    case 'READY':
+    case 'RELEASED':
+      return Object.keys(record).length === 1 ? { type: record.type } : null;
+    case 'ACQUIRED':
+      return Object.keys(record).length === 2 && typeof record.token === 'string'
+        ? { type: 'ACQUIRED', token: record.token }
+        : null;
+    case 'FAILED':
+      return Object.keys(record).length === 2 && typeof record.message === 'string'
+        ? { type: 'FAILED', message: record.message }
+        : null;
+    default:
+      return null;
+  }
+}
+
+/** 诊断用的单行表示；与旧文本协议保持同形，方便读失败信息 */
+function formatChildMessage(message: ChildMessage): string {
+  switch (message.type) {
+    case 'ACQUIRED':
+      return `ACQUIRED:${message.token}`;
+    case 'FAILED':
+      return `FAILED:${message.message}`;
+    default:
+      return message.type;
+  }
 }
 
 /**
- * 把可读流切成「一行一次」的拉取接口。
+ * 把 IPC 消息切成「一条一次」的拉取接口。
  *
- * 流出错或子进程终止时，**挂起中的读取必须立即 reject**：否则子进程启动失败会被
+ * 通道出错或子进程终止时，**挂起中的读取必须立即 reject**：否则子进程启动失败会被
  * 父侧转译成一个 60 秒空等超时，真实原因（退出码与 stderr）随之丢失。
  *
  * 终态只由调用方在子进程 `close` 时触发（`fail()`）：`close` 必然晚于 `exit`，
- * 此时退出码已落定、stderr 已冲刷完毕。刻意**不监听 `stdout` 的 `end`**——管道
- * EOF 可能早于子进程 `exit` 事件，若在此处终结，诊断里的 `exit` 会仍是 `null`，
- * 与「必须带退出码与 stderr」的承诺不符。
+ * 此时退出码已落定、stderr 已冲刷完毕，诊断里的 `exit` 不会是 `null`。
  */
-function createLineReader(
-  stream: Readable,
+function createMessageReader(
+  child: ChildProcess,
   describe: (reason: string) => string,
-): { fail: (reason: string) => void; readLine: () => Promise<string> } {
-  const buffered: string[] = [];
-  const waiting: Array<{ reject: (error: Error) => void; resolve: (line: string) => void }> = [];
-  let pending = '';
+  observe: (message: ChildMessage) => void,
+): { fail: (reason: string) => void; readMessage: () => Promise<ChildMessage> } {
+  const buffered: ChildMessage[] = [];
+  const waiting: Array<{
+    reject: (error: Error) => void;
+    resolve: (message: ChildMessage) => void;
+  }> = [];
   let terminal: string | null = null;
 
   function rejectWaiting(): void {
@@ -248,39 +288,34 @@ function createLineReader(
     rejectWaiting();
   }
 
-  stream.on('data', (chunk: Buffer) => {
-    pending += chunk.toString('utf8');
+  child.on('message', (message) => {
+    const parsed = parseChildMessage(message);
 
-    let separator = pending.indexOf('\n');
+    if (parsed === null) {
+      fail(`子进程消息非法：${JSON.stringify(message)}`);
 
-    while (separator >= 0) {
-      const line = pending.slice(0, separator).trim();
-      pending = pending.slice(separator + 1);
-
-      const waiter = waiting.shift();
-
-      if (waiter === undefined) {
-        buffered.push(line);
-      } else {
-        waiter.resolve(line);
-      }
-
-      separator = pending.indexOf('\n');
+      return;
     }
-  });
 
-  stream.on('error', (error: Error) => {
-    fail(`stdout 出错：${error.message}`);
+    observe(parsed);
+
+    const waiter = waiting.shift();
+
+    if (waiter === undefined) {
+      buffered.push(parsed);
+    } else {
+      waiter.resolve(parsed);
+    }
   });
 
   return {
     fail,
-    readLine: () =>
-      new Promise<string>((resolve, reject) => {
-        const line = buffered.shift();
+    readMessage: () =>
+      new Promise<ChildMessage>((resolve, reject) => {
+        const message = buffered.shift();
 
-        if (line !== undefined) {
-          resolve(line);
+        if (message !== undefined) {
+          resolve(message);
 
           return;
         }
@@ -297,32 +332,44 @@ function createLineReader(
 }
 
 function startRaceChild(lockPath: string, scriptPath = RACE_CHILD_PATH): RaceChild {
-  const child = spawn(process.execPath, [scriptPath, lockPath], {
-    stdio: ['pipe', 'pipe', 'pipe'],
+  // 用 `fork` 而非 `spawn` + 文本管道：控制消息走 Node 原生 IPC，stdout/stderr 仅做诊断。
+  // `execArgv: []` 避免继承宿主（Vitest）的启动参数，插桩地加载 `.ts` 夹具。
+  const child = fork(scriptPath, [lockPath], {
+    execArgv: [],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
 
   // 子夹具 stderr 必须捕获并随失败一起抛出：设成 ignore 会让「子进程根本起不来」
   // 与「竞争断言不成立」在父侧长得一模一样（都是 60 秒超时）。
   const stderrChunks: string[] = [];
+  // stdout 只承载诊断（如断连/自毁时的单行状态）；持续消费可避免管道写满阻塞子进程
+  const stdoutChunks: string[] = [];
 
-  child.stderr.on('data', (chunk: Buffer) => {
+  child.stderr?.on('data', (chunk: Buffer) => {
     stderrChunks.push(chunk.toString('utf8'));
+  });
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdoutChunks.push(chunk.toString('utf8'));
   });
 
   let exit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let spawnError: Error | null = null;
+  let lastMessage = '(无)';
 
   function diagnostics(): string {
     return [
       `exit=${exit === null ? 'null' : `${String(exit.code)}/${exit.signal ?? '-'}`}`,
       `spawnError=${spawnError?.message ?? '-'}`,
+      `lastMessage=${lastMessage}`,
       `stderr=${stderrChunks.join('').trim() || '(空)'}`,
     ].join('；');
   }
 
   const describe = (reason: string): string =>
     `执行锁竞态子进程失败（${reason}）：${diagnostics()}`;
-  const { fail, readLine } = createLineReader(child.stdout, describe);
+  const { fail, readMessage } = createMessageReader(child, describe, (message) => {
+    lastMessage = formatChildMessage(message);
+  });
 
   child.on('error', (error: Error) => {
     spawnError = error;
@@ -337,43 +384,51 @@ function startRaceChild(lockPath: string, scriptPath = RACE_CHILD_PATH): RaceChi
 
   return {
     diagnostics,
-    exited: new Promise<void>((resolve) => {
-      child.once('exit', () => {
-        resolve();
+    disconnect: () => {
+      child.disconnect();
+    },
+    exited: new Promise<number | null>((resolve) => {
+      child.once('exit', (code) => {
+        resolve(code);
       });
     }),
-    readLine,
-    send: (line: string) => {
-      child.stdin.write(`${line}\n`);
+    readMessage,
+    send: (command: ParentCommand) => {
+      child.send(command);
     },
+    stdoutText: () => stdoutChunks.join(''),
   };
 }
 
 /**
  * 跑一轮「N 个真实子进程用 barrier 同时抢同一把废弃锁」的竞争。
  *
- * @returns 各子进程的最终回报行
+ * @returns 各子进程的最终回报消息
  */
-async function raceOnStaleLock(lockPath: string, childCount: number): Promise<string[]> {
+async function raceOnStaleLock(lockPath: string, childCount: number): Promise<ChildMessage[]> {
   const children = Array.from({ length: childCount }, () => startRaceChild(lockPath));
 
   // 屏障：所有子进程各自就绪后再一起发令，尽量让获取动作重叠
-  expect(await Promise.all(children.map((child) => child.readLine()))).toEqual(
-    Array.from({ length: childCount }, () => 'READY'),
+  expect(await Promise.all(children.map((child) => child.readMessage()))).toEqual(
+    Array.from({ length: childCount }, () => ({ type: 'READY' })),
   );
   for (const child of children) {
-    child.send('go');
+    child.send({ type: 'GO' });
   }
 
-  const results = await Promise.all(children.map((child) => child.readLine()));
-  const winnerIndex = results.findIndex((line) => line.startsWith('ACQUIRED:'));
-  const winnerToken = results[winnerIndex].slice('ACQUIRED:'.length);
+  const results = await Promise.all(children.map((child) => child.readMessage()));
+  const winnerIndex = results.findIndex((message) => message.type === 'ACQUIRED');
+  const winner = results[winnerIndex];
+
+  if (winner.type !== 'ACQUIRED') {
+    throw new Error(`本轮没有胜者：${results.map(formatChildMessage).join(' | ')}`);
+  }
 
   // 关键断言：胜者的锁必须仍在锁路径上（败者的接管 / 回滚不得把它删掉或搬走）
-  expect(readExecutionLockOwner(lockPath)?.token).toBe(winnerToken);
+  expect(readExecutionLockOwner(lockPath)?.token).toBe(winner.token);
 
-  children[winnerIndex].send('release');
-  expect(await children[winnerIndex].readLine()).toBe('RELEASED');
+  children[winnerIndex].send({ type: 'RELEASE' });
+  expect(await children[winnerIndex].readMessage()).toEqual({ type: 'RELEASED' });
 
   await Promise.all(children.map((child) => child.exited));
   expect(existsSync(lockPath)).toBe(false);
@@ -393,10 +448,10 @@ describe('执行锁的真实多进程竞争', () => {
       const results = await raceOnStaleLock(lockPath, 2);
 
       expect(
-        results.filter((line) => line.startsWith('ACQUIRED:')),
-        `第 ${round} 轮必须恰好一个进程进入临界区：${results.join(' | ')}`,
+        results.filter((message) => message.type === 'ACQUIRED'),
+        `第 ${round} 轮必须恰好一个进程进入临界区：${results.map(formatChildMessage).join(' | ')}`,
       ).toHaveLength(1);
-      expect(results.filter((line) => line.startsWith('FAILED:'))).toHaveLength(1);
+      expect(results.filter((message) => message.type === 'FAILED')).toHaveLength(1);
     }
   }, 60_000);
 
@@ -412,10 +467,10 @@ describe('执行锁的真实多进程竞争', () => {
 
       // 三进程交错（A 接管发布后、B 仍按旧观察动作、C 趁机插入）下仍必须只有一个胜者
       expect(
-        results.filter((line) => line.startsWith('ACQUIRED:')),
-        `第 ${round} 轮必须恰好一个进程进入临界区：${results.join(' | ')}`,
+        results.filter((message) => message.type === 'ACQUIRED'),
+        `第 ${round} 轮必须恰好一个进程进入临界区：${results.map(formatChildMessage).join(' | ')}`,
       ).toHaveLength(1);
-      expect(results.filter((line) => line.startsWith('FAILED:'))).toHaveLength(2);
+      expect(results.filter((message) => message.type === 'FAILED')).toHaveLength(2);
     }
   }, 60_000);
 
@@ -424,12 +479,119 @@ describe('执行锁的真实多进程竞争', () => {
   it('子进程无法启动时立即抛出含退出码与 stderr 的诊断，而不是等到超时', async () => {
     const missingScript = fileURLToPath(new URL('./race-child-missing.ts', import.meta.url));
     const child = startRaceChild(makeLockPath(), missingScript);
-    const failure = child.readLine();
+    const failure = child.readMessage();
 
     // 退出码必须已落定（不得是 `exit=null`：那说明在子进程退出前就终结了诊断）
     await expect(failure).rejects.toThrow(/exit=1\//);
     // stderr 原文必须随诊断带出，否则「起不来」与「断言不成立」在父侧无法区分
     await expect(failure).rejects.toThrow(/race-child-missing\.ts/);
     await child.exited;
+  });
+});
+
+/**
+ * IPC 控制协议的 fail-closed 回归（S2）。
+ *
+ * 协议：child→parent `READY | ACQUIRED(token) | FAILED(message) | RELEASED`，
+ * parent→child `GO | RELEASE`。任何非法/错序/重复/未知消息都必须在推进协议前被拒绝；
+ * 父侧断连必须在明确上限内收敛、归还自有锁并带可诊断状态退出。
+ */
+describe('执行锁 IPC 控制协议的 fail-closed 回归', () => {
+  it('READY 后延迟 500ms 发 GO：子进程仍存活并在收到 GO 后正常获取与释放', async () => {
+    const lockPath = makeLockPath();
+    const child = startRaceChild(lockPath);
+
+    expect(await child.readMessage()).toEqual({ type: 'READY' });
+
+    // 延迟发令：IPC 通道空闲期间子进程不得因「无活跃句柄」提前退出
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
+    child.send({ type: 'GO' });
+
+    expect((await child.readMessage()).type).toBe('ACQUIRED');
+
+    child.send({ type: 'RELEASE' });
+    expect(await child.readMessage()).toEqual({ type: 'RELEASED' });
+
+    expect(await child.exited).toBe(0);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('重复 GO：持锁后第二阶段收到 GO 被阶段校验拒绝，归还自有锁后失败关闭', async () => {
+    const lockPath = makeLockPath();
+    const child = startRaceChild(lockPath);
+
+    expect(await child.readMessage()).toEqual({ type: 'READY' });
+    child.send({ type: 'GO' });
+    child.send({ type: 'GO' });
+
+    expect((await child.readMessage()).type).toBe('ACQUIRED');
+
+    const failed = await child.readMessage();
+
+    expect(failed.type).toBe('FAILED');
+    expect(failed.type === 'FAILED' ? failed.message : '').toMatch(/阶段不符/);
+
+    expect(await child.exited).toBe(1);
+    // 失败关闭必须归还自有锁，不得把临界区留给已失联的进程
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('第一阶段收到晚到/错序的 RELEASE 时被拒绝，不进入临界区', async () => {
+    const lockPath = makeLockPath();
+    const child = startRaceChild(lockPath);
+
+    expect(await child.readMessage()).toEqual({ type: 'READY' });
+    child.send({ type: 'RELEASE' });
+
+    const failed = await child.readMessage();
+
+    expect(failed.type).toBe('FAILED');
+    expect(failed.type === 'FAILED' ? failed.message : '').toMatch(/阶段不符/);
+
+    expect(await child.exited).toBe(1);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('非法指令（未知类型/多余字段/空对象）一律 fail-closed，不进入临界区', async () => {
+    const invalidMessages: unknown[] = [{ type: 'BOGUS' }, { type: 'GO', extra: 1 }, {}];
+
+    for (const message of invalidMessages) {
+      const label = JSON.stringify(message);
+      const lockPath = makeLockPath();
+      const child = startRaceChild(lockPath);
+
+      expect(await child.readMessage()).toEqual({ type: 'READY' });
+
+      // 绕过类型系统发送脏消息：父侧协议层必须拒绝，不得把它当成指令推进
+      child.send(message as ParentCommand);
+
+      const failed = await child.readMessage();
+
+      expect(failed.type, label).toBe('FAILED');
+      expect(failed.type === 'FAILED' ? failed.message : '', label).toMatch(/非法指令/);
+
+      expect(await child.exited, label).toBe(1);
+      expect(existsSync(lockPath), label).toBe(false);
+    }
+  });
+
+  it('父侧断开 IPC：子进程归还自有锁并带可诊断状态退出，不留活锁', async () => {
+    const lockPath = makeLockPath();
+    const child = startRaceChild(lockPath);
+
+    expect(await child.readMessage()).toEqual({ type: 'READY' });
+    child.send({ type: 'GO' });
+    expect((await child.readMessage()).type).toBe('ACQUIRED');
+    // 此刻子进程真实持锁
+    expect(existsSync(lockPath)).toBe(true);
+
+    child.disconnect();
+
+    expect(await child.exited).toBe(4);
+    expect(child.stdoutText()).toContain('DISCONNECTED');
+    // 断连后必须归还锁：不得留下无人可释放的活锁
+    expect(existsSync(lockPath)).toBe(false);
   });
 });

@@ -19,6 +19,7 @@ import { DEDICATED_E2E_DB_NAME } from '../../e2e-real/dedicated-e2e-environment'
 
 import {
   assertPhysicalCleanupAllowed,
+  deleteE2EReferenceDocumentStorageFileByReference,
   mysqlQuery,
   readBackendEnv,
   REQUEST_NO_PATTERN,
@@ -482,4 +483,127 @@ export function readPr5ReferenceDocumentSnapshot(id: number): string | null {
   );
 
   return value.length > 0 ? value : null;
+}
+
+/**
+ * 按本轮记录的**精确 ID** 删除工程师回复行（清理安全组的子行回收原语）。
+ * 只删除调用方明确记录在手的本轮自建回复，绝不按申请批量删回复；ID 先过正整数白名单。
+ */
+export function deletePr5EngineerResponseRowsByIds(ids: readonly number[]): void {
+  if (ids.length === 0) {
+    return;
+  }
+
+  for (const id of ids) {
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error(`工程师回复清理目标 ID 未通过正整数校验：${JSON.stringify(id)}`);
+    }
+  }
+
+  assertPhysicalCleanupAllowed(readBackendEnv());
+
+  mysqlQuery(`DELETE FROM engineer_response WHERE id IN (${ids.join(', ')})`);
+}
+
+/** 物理文件删除器：显式注入，使「文件删除失败只留可回收孤儿」可被失败注入与断言 */
+export type Pr5StorageFileDeleter = (reference: string) => void;
+
+/**
+ * 可恢复残留回执（S4）：精确记录本轮清理中「已删 / 残留」的行与文件引用。
+ * 只含本轮 ID 与存储引用，不含连接串、账号、密码等任何凭据。
+ */
+export interface Pr5CleanupReceipt {
+  readonly deletedRowIds: readonly number[];
+  readonly deletedFileReferences: readonly string[];
+  readonly residualRowIds: readonly number[];
+  readonly residualFileReferences: readonly string[];
+  /** 逐项失败原因（来自受保护 helper 的脱敏错误文本），供调用方诊断且不吞错误 */
+  readonly failureMessages: readonly string[];
+}
+
+export interface Pr5DocumentCleanupOptions {
+  /** 行删除器（默认受保护的三因子绑定删除）；注入后可对指定行制造删除失败 */
+  readonly deleteRow?: (binding: Pr5ReferenceDocumentBinding) => void;
+  /** 文件删除器（默认真实存储文件删除）；注入后可对指定引用制造删除失败 */
+  readonly deleteFile?: Pr5StorageFileDeleter;
+}
+
+function failureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 本轮自建参考资料的统一清理编排（S4）：**全量预检 → 精确删行 → 按已核验引用删文件**。
+ *
+ * 1. 先对全部绑定做三因子归属核验并取精确存储引用：任一不唯一 / 引用非法即抛错，
+ *    此时行与文件均未改动（失败发生在任何 DELETE 之前）；
+ * 2. 再逐行精确删除，逐文件按已核验引用删除；
+ * 3. 任一行删除失败：该行计入残留，**并跳过其文件删除**（行未删即不得删文件），
+ *    不扩大删除范围；任一文件删除失败：该引用计入残留，只留下可被下一轮精确回收的孤儿文件；
+ * 4. 返回可恢复残留回执，绝不吞掉任何失败（调用方据回执或 assertPr5CleanupReceiptClean 判红）。
+ */
+export function cleanupPr5ReferenceDocumentsBound(
+  bindings: readonly Pr5ReferenceDocumentBinding[],
+  options: Pr5DocumentCleanupOptions = {},
+): Pr5CleanupReceipt {
+  const deleteRow = options.deleteRow ?? deletePr5ReferenceDocumentBound;
+  const deleteFile = options.deleteFile ?? deleteE2EReferenceDocumentStorageFileByReference;
+
+  // 第一步：全量预检（不通过即抛错，未删任何行/文件）
+  const resolved = bindings.map((binding) => ({
+    binding,
+    reference: readPr5ReferenceDocumentStorageReferenceBound(binding),
+  }));
+
+  const deletedRowIds: number[] = [];
+  const deletedFileReferences: string[] = [];
+  const residualRowIds: number[] = [];
+  const residualFileReferences: string[] = [];
+  const failureMessages: string[] = [];
+
+  // 第二步：逐行精确删行；第三步：按已核验引用删文件（只删成功删行的那一行文件）
+  for (const { binding, reference } of resolved) {
+    try {
+      deleteRow(binding);
+      deletedRowIds.push(binding.id);
+    } catch (error) {
+      residualRowIds.push(binding.id);
+      failureMessages.push(`删行失败 id=${binding.id}：${failureMessage(error)}`);
+      continue;
+    }
+
+    if (reference === null) {
+      continue;
+    }
+
+    try {
+      deleteFile(reference);
+      deletedFileReferences.push(reference);
+    } catch (error) {
+      residualFileReferences.push(reference);
+      failureMessages.push(`删文件失败 reference=${reference}：${failureMessage(error)}`);
+    }
+  }
+
+  return {
+    deletedFileReferences,
+    deletedRowIds,
+    failureMessages,
+    residualFileReferences,
+    residualRowIds,
+  };
+}
+
+/** 回执断言：存在任何行/文件残留即抛错（残留必须可观测，绝不静默通过） */
+export function assertPr5CleanupReceiptClean(receipt: Pr5CleanupReceipt): void {
+  if (receipt.residualRowIds.length === 0 && receipt.residualFileReferences.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    `PR5 清理存在残留：行=${JSON.stringify(receipt.residualRowIds)} 文件=${JSON.stringify(receipt.residualFileReferences)}` +
+      (receipt.failureMessages.length === 0
+        ? ''
+        : `；失败原因：${receipt.failureMessages.join('；')}`),
+  );
 }

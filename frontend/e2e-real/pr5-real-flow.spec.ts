@@ -25,12 +25,13 @@ import { readFileSync } from 'node:fs';
 import { assertApiSqlSameDatabase } from '../e2e/helpers/dedicated-account-cleanup';
 import { assertBrowserRequestsBoundToDedicatedOrigins } from '../e2e/helpers/dedicated-real-link-assertions';
 import {
+  assertPr5CleanupReceiptClean,
   assertPr5DedicatedEnvironment,
   assertPr5GeneratedId,
   assertPr5SeedDataReady,
   buildPr5DocKeyword,
+  cleanupPr5ReferenceDocumentsBound,
   countPr5ReferenceDocumentsByTitlePrefix,
-  deletePr5ReferenceDocumentBound,
   deletePr5RepairRequestBound,
   findPr5ReferenceDocumentIdsByKeyword,
   PR5_SEED_ACCEPTED_REQUEST_NO,
@@ -38,11 +39,9 @@ import {
   readPr5PrimaryKeySnapshot,
   readPr5ReferenceDocumentDeprecatedById,
   readPr5ReferenceDocumentSnapshot,
-  readPr5ReferenceDocumentStorageReferenceBound,
   readPr5RepairRequestState,
 } from '../e2e/helpers/pr5-real-flow';
 import {
-  deleteE2EReferenceDocumentStorageFileByReference,
   findRepairRequestByRequestNo,
   mysqlQuery,
   readBackendEnv,
@@ -333,10 +332,9 @@ function expectPr5RepairRequestReclaimed(binding: Pr5RepairRequestBinding | null
 }
 
 /**
- * 本轮自建资料按精确 ID 物理回收（P1-2 顺序）：
- * 1) 全部行先做三因子归属核验并取精确存储引用（任一不通过即抛错，此时行与文件均未改动）；
- * 2) 按核验通过的三因子精确删行；
- * 3) 按已核验的精确引用删物理文件（失败只留下可回收孤儿文件，绝不误删他人文件）。
+ * 本轮自建资料按精确 ID 物理回收（S4：编排抽取到共享 helper）：
+ * 「全量预检 → 精确删行 → 按已核验引用删文件」由 cleanupPr5ReferenceDocumentsBound 完成，
+ * 残留回执经 assertPr5CleanupReceiptClean 判红——任一行/文件残留即失败，绝不静默通过。
  */
 function cleanupPr5Documents(adminAccountId: number, capturedIds: readonly number[]): void {
   const ids = new Set<number>(capturedIds);
@@ -355,22 +353,7 @@ function cleanupPr5Documents(adminAccountId: number, capturedIds: readonly numbe
     titleKeyword: DOC_KEYWORD,
   }));
 
-  // 第一步：全部行先核验归属并取精确引用（不通过即抛错，未删任何行/文件）
-  const references = bindings.map((binding) =>
-    readPr5ReferenceDocumentStorageReferenceBound(binding),
-  );
-
-  // 第二步：按核验通过的三因子精确删行
-  for (const binding of bindings) {
-    deletePr5ReferenceDocumentBound(binding);
-  }
-
-  // 第三步：按已核验的精确引用删物理文件（失败只留下可回收孤儿文件）
-  for (const reference of references) {
-    if (reference !== null) {
-      deleteE2EReferenceDocumentStorageFileByReference(reference);
-    }
-  }
+  assertPr5CleanupReceiptClean(cleanupPr5ReferenceDocumentsBound(bindings));
 }
 
 test.describe('PR5 real link permission and business closure', () => {
