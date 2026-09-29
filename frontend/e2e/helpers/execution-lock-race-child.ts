@@ -12,10 +12,28 @@
 // 仅作为 Node 脚本按父进程指令执行一次「READY → GO → 获取 → 保持 → RELEASE → 释放」。
 // 由 `tsconfig.e2e.json` 的类型检查覆盖。
 
+import { appendFileSync } from 'node:fs';
+
 import { acquireExecutionLockAt, readExecutionLockOwner } from './execution-lock.ts';
 
 /** 兜底自尽：父进程若异常退出，子进程不得悬挂 */
 const SELF_DESTRUCT_TIMEOUT_MS = 20_000;
+
+/**
+ * 诊断落盘路径（可选 argv[3]）。stdout 是**管道**，父侧读取与子进程退出之间存在竞态
+ * （实测：父侧 `disconnect()` 后 Node 24 不再触发 `close`，stdout 数据可能晚于 `exit` 到达）；
+ * 因此断开/自毁这类终态诊断同步写入本文件，父侧在 `exit` 后读文件即可确定性获得，
+ * 与用例执行顺序、宿主调度无关。stdout 仍保留同一行，仅作人工辅助。
+ */
+const diagnosticPath = process.argv[3];
+
+function writeDiagnostic(line: string): void {
+  process.stdout.write(`${line}\n`);
+
+  if (diagnosticPath !== undefined && diagnosticPath !== '') {
+    appendFileSync(diagnosticPath, `${line}\n`);
+  }
+}
 
 /** 子进程 → 父进程的控制消息（显式判别联合） */
 export type ChildMessage =
@@ -204,7 +222,7 @@ async function main(): Promise<number> {
 // 刻意**不用 `unref()`**：该定时器必须真实持有句柄；正常路径由 `clearTimeout` 释放，
 // 不会拖满 20 秒。自尽仅作为「父进程失联」的最后兜底。
 const selfDestruct = setTimeout(() => {
-  process.stdout.write('FAILED:self-destruct-timeout\n');
+  writeDiagnostic('FAILED:self-destruct-timeout');
   process.exit(3);
 }, SELF_DESTRUCT_TIMEOUT_MS);
 
@@ -214,9 +232,9 @@ finished = true;
 clearTimeout(selfDestruct);
 
 if (disconnected) {
-  // 带可诊断状态退出：父侧据退出码与 stdout 区分「断连收尾」与「协议失败」
+  // 带可诊断状态退出：父侧据退出码 4 与落盘诊断区分「断连收尾」与「协议失败」
   process.exitCode = 4;
-  process.stdout.write('DISCONNECTED\n');
+  writeDiagnostic('DISCONNECTED');
 } else {
   process.exitCode = exitCode;
 }

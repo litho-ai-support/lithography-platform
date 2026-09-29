@@ -2,14 +2,18 @@
 //
 // PR5 清理安全集成组（Codex 结束报告复验计划 P2-2 / S3）：**无 TRUNCATE 的真实 MySQL 反例组**。
 //
-// 覆盖计划 §4.4 的 C1–C7：
+// 覆盖计划 §4.4 的 C1–C8：
 //   C1 同 ID 异主 / requestNo 或客户不符 → 首条 DELETE 前失败关闭，目标行逐字段不变；
 //   C2 同关键字但创建人不同的资料行 → 不删除任何行，明确报告归属冲突；
-//   C3 本轮申请被插入未记录的外部回复 → 父子集合核验失败，父行 / 本轮回复 / 外部回复全不变；
-//   C4 多资料清理在第 2 行删除处注入失败 → 不触及外部行；已删 / 未删有精确回执；下一轮可恢复；
+//   C3 本轮申请被插入未记录的外部回复 → 直接调用 reclaimer 整体失败关闭，父行 / 本轮回复 /
+//      外部回复 / 外部哨兵逐字段不变（不再先手工删外部回复绕开 reclaimer）；
+//   C4 多资料清理在第 2 行删除处注入失败 → 不触及外部行；已删 / 未删有精确回执；
+//      下一轮经 locator 从数据库重建完整 binding 后精确回收（真实跨轮恢复）；
 //   C5 文件删除器对指定本轮引用抛错 → 不误删其他文件；残留引用被记录且可经绑定重新验证、精确回收；
-//   C6 造数中途抛错 → 已记入 ledger 的部分被安全回收；外部哨兵前后快照相等；
-//   C7 禁用 TRUNCATE 连续两轮 → 第二轮启动前无上一轮残留；主键不复用；最终只剩预置 / 外部哨兵。
+//   C6 造数中途抛错 → 已记入 ledger 的部分被安全回收；外部哨兵前后完整快照相等；
+//   C7 禁用 TRUNCATE 连续两轮 → 第二轮启动前无上一轮残留；主键不复用；最终只剩预置 / 外部哨兵；
+//   C8 残留 locator 完整字段核验：同标识同 owner 但标题后缀 / 正文被改写、申请字段被改写、
+//      未知回复 → 分别零删除失败关闭，全部数据不变。
 //
 // 运行入口（npm script，授权变量由执行者显式设置，不写入 npm script）：
 //   E2E_ALLOW_PHYSICAL_CLEANUP=1 DB_NAME=lithography_e2e npm run test:e2e:pr5-cleanup-safety
@@ -27,6 +31,7 @@ import {
   buildPr5CleanupSafetyKeyword,
   countPr5CleanupSafetyRunRows,
   createPr5CleanupSafetyLedger,
+  createPr5CleanupSafetyLockSession,
   createPr5CleanupSafetyRunId,
   createPr5CleanupSafetyTempStorage,
   insertPr5CleanupSafetyEngineerResponse,
@@ -34,16 +39,17 @@ import {
   insertPr5CleanupSafetyRepairRequest,
   locatePr5CleanupSafetyResidueByRunId,
   type Pr5CleanupSafetyLedger,
+  type Pr5CleanupSafetyLockSession,
   reclaimPr5CleanupSafetyLedger,
   resolvePr5CleanupSafetySeedContext,
   snapshotPr5CleanupSafetyExternalSentinel,
-  toPr5RepairRequestBinding,
 } from '../e2e/helpers/pr5-cleanup-safety';
 import {
   cleanupPr5ReferenceDocumentsBound,
-  deletePr5EngineerResponseRowsByIds,
+  deletePr5EngineerResponseRowsBound,
   deletePr5ReferenceDocumentBound,
   deletePr5RepairRequestBound,
+  type Pr5EngineerResponseBinding,
   readPr5ReferenceDocumentSnapshot,
   readPr5ReferenceDocumentStorageReferenceBound,
 } from '../e2e/helpers/pr5-real-flow';
@@ -53,16 +59,18 @@ import { mysqlQuery } from '../e2e/helpers/real-backend';
 // 顶层：环境门 + 数据库执行锁（整组只执行一次；失败即硬失败，不 skip）
 // ---------------------------------------------------------------------------
 
-test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C7）', () => {
-  let releaseExecutionLock: () => void;
+test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C8）', () => {
+  // 释放会话把「是否已获取锁」与「释放」解耦：环境门 / schema / 获取锁阶段失败时
+  // afterAll 的 release 是安全空操作，不会用二次异常覆盖根因（见 P2-3 / S3）。
+  const lockSession: Pr5CleanupSafetyLockSession = createPr5CleanupSafetyLockSession();
 
   test.beforeAll(() => {
     assertPr5CleanupSafetyEnvironment();
-    releaseExecutionLock = acquirePr5CleanupSafetyExecutionLock();
+    lockSession.setRelease(acquirePr5CleanupSafetyExecutionLock());
   });
 
   test.afterAll(() => {
-    releaseExecutionLock();
+    lockSession.release();
   });
 
   test('C1 同 ID 异主 / 编号或客户不符：首条 DELETE 前失败关闭，目标行逐字段不变', () => {
@@ -128,6 +136,9 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C7）', 
         label: '本轮',
       });
 
+      // 造数完成后的**完整前后快照**基线：任何外部行字段改动 / 新增 / 删除都会破坏相等
+      const before = snapshotPr5CleanupSafetyExternalSentinel();
+
       // 用「管理员 ledger 归属」核验外部行：创建人不匹配 → 明确归属冲突，失败关闭
       expect(() =>
         readPr5ReferenceDocumentStorageReferenceBound({
@@ -136,7 +147,18 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C7）', 
           titleKeyword: keyword,
         }),
       ).toThrow(/归属核验未精确命中 1 行/);
-      // 外部行原样保留（字段级快照不变）
+
+      // 残留 locator 同样核验 owner：同关键字异主 → 零删除失败关闭
+      expect(() =>
+        locatePr5CleanupSafetyResidueByRunId(ledger, {
+          documentOwnerAccountId: context.adminAccountId,
+          requestCustomerAccountId: context.customerAccountId,
+        }),
+      ).toThrow(/创建人与预期不符/);
+
+      // 外部哨兵整表全字段快照前后相等：没有任何行被改动 / 删除 / 新增
+      expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(before);
+      // 外部行与本轮行都原样保留（字段级快照不变）
       expect(readPr5ReferenceDocumentSnapshot(externalId)).not.toBeNull();
       // 本轮行未被任何外部删除波及
       expect(
@@ -153,12 +175,12 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C7）', 
     }
   });
 
-  test('C3 本轮申请被插入未记录的外部回复：父子集合核验失败，父行 / 本轮回复 / 外部回复全不变', () => {
+  test('C3 本轮申请被插入未记录的外部回复：直接调用 reclaimer 整体失败关闭，父行 / 本轮回复 / 外部回复全不变', () => {
     const runId = createPr5CleanupSafetyRunId();
     const context = resolvePr5CleanupSafetySeedContext();
     const ledger = createPr5CleanupSafetyLedger(runId, context.customerAccountId);
-    // 在 finally 中需要按精确 ID 兜底清掉外部回复，故声明在 try 之外
-    let externalResponseId = 0;
+    // 外部回复的完整 binding：finally 中按完整字段（非裸 ID）精确清掉，恢复父子集合一致
+    let externalBinding: Pr5EngineerResponseBinding | null = null;
 
     try {
       const entry = insertPr5CleanupSafetyRepairRequest(ledger, {
@@ -172,20 +194,33 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C7）', 
         request: entry,
       });
       // 外部回复：**不记入 ledger**（模拟另一进程 / 另一轮插入的本轮外回复）
-      externalResponseId = insertPr5CleanupSafetyEngineerResponse(ledger, {
+      const externalText = '外部回复（未记录）';
+      const externalResponseId = insertPr5CleanupSafetyEngineerResponse(ledger, {
         customerAccountId: context.customerAccountId,
         engineerAccountId: context.engineerAccountId,
         record: false,
         request: entry,
-        responseText: '外部回复（未记录）',
+        responseText: externalText,
       });
+      externalBinding = {
+        customerAccountId: context.customerAccountId,
+        engineerAccountId: context.engineerAccountId,
+        id: externalResponseId,
+        requestId: entry.id,
+        responseText: externalText,
+      };
 
-      // ledger 只登记 ownResponseId；清理按绑定集合核验 → 子行总数与匹配数不符 → 失败关闭
-      expect(() => deletePr5RepairRequestBound(toPr5RepairRequestBinding(entry))).toThrow(
+      // 造数完成后的完整前后快照基线（父行 / 本轮回复 / 外部回复此刻都在库）
+      const before = snapshotPr5CleanupSafetyExternalSentinel();
+
+      // **直接调用回收器**（不再先手工删外部回复绕开该分支）：
+      // ledger 未记录外部回复 → 只读预检发现未知子行 → 在第一条 DELETE 前整体失败关闭
+      expect(() => reclaimPr5CleanupSafetyLedger(ledger)).toThrow(
         /pr5_engineer_response_child_binding_must_match_this_run/,
       );
 
-      // 父行、本轮回复、外部回复全部原样
+      // 失败关闭后：父行、本轮回复、外部回复、外部哨兵逐字段完全相等（零写入）
+      expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(before);
       expect(Number(mysqlQuery(`SELECT COUNT(*) FROM repair_request WHERE id = ${entry.id}`))).toBe(
         1,
       );
@@ -198,19 +233,21 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C7）', 
         ),
       ).toBe(1);
     } finally {
-      // 先按精确 ID 清掉「未记录的外部回复」，使父子集合核验恢复一致，再回收 ledger
-      // （外部回复未成功插入时其 ID 仍为 0，跳过删除避免误报）
-      if (externalResponseId > 0) {
-        deletePr5EngineerResponseRowsByIds([externalResponseId]);
+      // 先按**完整 binding**（非裸 ID）精确清掉「未记录的外部回复」，使父子集合核验恢复一致，
+      // 再回收 ledger（外部回复未成功插入时其 binding 仍为 null，跳过删除避免误报）
+      if (externalBinding !== null) {
+        deletePr5EngineerResponseRowsBound(externalBinding);
       }
       reclaimPr5CleanupSafetyLedger(ledger);
     }
   });
 
-  test('C4 多资料清理在第 2 行删除处注入失败：不触及外部行；回执精确；下一轮可恢复', () => {
+  test('C4 多资料清理在第 2 行删除处注入失败：不触及外部行；回执精确；下一轮经 locator 跨轮重建后精确回收', () => {
     const runId = createPr5CleanupSafetyRunId();
     const context = resolvePr5CleanupSafetySeedContext();
     const ledger = createPr5CleanupSafetyLedger(runId, context.adminAccountId);
+    // 造数前的完整外部哨兵基线：整个用例结束后必须逐字段恢复相等
+    const before = snapshotPr5CleanupSafetyExternalSentinel();
 
     try {
       const docA = insertPr5CleanupSafetyReferenceDocument(ledger, {
@@ -237,7 +274,7 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C7）', 
       expect(receipt.residualRowIds).toEqual([docB.id]);
       expect(receipt.failureMessages.join(';')).toContain('注入：第 2 行删除失败');
 
-      // 不触及任何外部行：外部哨兵在清理后除本轮外无变化（此处直接断言 B 仍存在）
+      // 不触及任何外部行：A 已删、B 仍在
       expect(
         Number(mysqlQuery(`SELECT COUNT(*) FROM reference_document WHERE id = ${docA.id}`)),
       ).toBe(0);
@@ -245,20 +282,183 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C7）', 
         Number(mysqlQuery(`SELECT COUNT(*) FROM reference_document WHERE id = ${docB.id}`)),
       ).toBe(1);
 
-      // 下一轮可恢复：残留 B 按「专属标识 + 字段核验」精确定位，再精确回收
-      const residue = locatePr5CleanupSafetyResidueByRunId(runId, {
+      // 真实跨轮恢复：丢弃上一轮的删除结果，改为经 locator 从数据库重建完整 binding 后再删
+      const residue = locatePr5CleanupSafetyResidueByRunId(ledger, {
         documentOwnerAccountId: context.adminAccountId,
         requestCustomerAccountId: context.customerAccountId,
       });
 
-      expect(residue.documentIds).toContain(docB.id);
-      expect(residue.requestIds).toEqual([]);
+      expect(residue.documents.map((binding) => binding.id)).toEqual([docB.id]);
+      expect(residue.requests).toEqual([]);
 
-      deletePr5ReferenceDocumentBound(docB);
+      const rebuilt = residue.documents.find((binding) => binding.id === docB.id);
+
+      if (rebuilt === undefined) {
+        throw new Error('locator 未能从数据库重建残留资料 binding');
+      }
+
+      deletePr5ReferenceDocumentBound(rebuilt);
       expect(
         Number(mysqlQuery(`SELECT COUNT(*) FROM reference_document WHERE id = ${docB.id}`)),
       ).toBe(0);
     } finally {
+      reclaimPr5CleanupSafetyLedger(ledger);
+    }
+
+    // 全流程未改动 / 删除 / 新增任何外部行
+    expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(before);
+  });
+
+  test('C8 残留 locator 完整字段核验：资料 / 申请 / 回复任一非 owner 字段被改写均零删除失败关闭', () => {
+    const runId = createPr5CleanupSafetyRunId();
+    const context = resolvePr5CleanupSafetySeedContext();
+    const ledger = createPr5CleanupSafetyLedger(runId, context.adminAccountId);
+    const expected = {
+      documentOwnerAccountId: context.adminAccountId,
+      requestCustomerAccountId: context.customerAccountId,
+    };
+    // 合法白名单格式的存储引用（后端存储目录内不存在该文件，回收期删除为幂等空操作）
+    const documentReference = '0123456789abcdef0123456789abcdef.md';
+    const documentTitle = `${ledger.keyword}（C8）`;
+    let documentId: number | null = null;
+    let requestId: number | null = null;
+    let externalResponseBinding: Pr5EngineerResponseBinding | null = null;
+
+    const locate = (): unknown => locatePr5CleanupSafetyResidueByRunId(ledger, expected);
+    const countRow = (table: string, id: number): number =>
+      Number(mysqlQuery(`SELECT COUNT(*) FROM ${table} WHERE id = ${id}`));
+
+    try {
+      const doc = insertPr5CleanupSafetyReferenceDocument(ledger, {
+        createdByAccountId: context.adminAccountId,
+        label: 'C8',
+        storageReference: documentReference,
+      });
+      const entry = insertPr5CleanupSafetyRepairRequest(ledger, {
+        customerAccountId: context.customerAccountId,
+        equipmentModelId: context.equipmentModelId,
+        faultTag: buildPr5CleanupSafetyFaultTag(runId),
+      });
+
+      documentId = doc.id;
+      requestId = entry.id;
+
+      const ownResponseId = insertPr5CleanupSafetyEngineerResponse(ledger, {
+        customerAccountId: context.customerAccountId,
+        engineerAccountId: context.engineerAccountId,
+        request: entry,
+      });
+
+      // 前置：未改写时 locator 能从数据库重建完整绑定（本轮资料 + 申请 + 回复均命中）
+      const clean = locatePr5CleanupSafetyResidueByRunId(ledger, expected);
+
+      expect(clean.documents.map((binding) => binding.id)).toEqual([doc.id]);
+      expect(clean.requests.map((item) => item.binding.id)).toEqual([entry.id]);
+      expect(clean.requests[0]?.responses.map((response) => response.id)).toEqual([ownResponseId]);
+
+      // 场景 1：同 runId 同 owner，但资料正文被改写 → 零删除失败关闭
+      mysqlQuery(`UPDATE reference_document SET content_text = '被改写正文' WHERE id = ${doc.id}`);
+      expect(locate).toThrow(/字段 content_text 与 ledger 记录不符/);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      mysqlQuery(`UPDATE reference_document SET content_text = '${runId}' WHERE id = ${doc.id}`);
+
+      // 场景 2：同 runId 同 owner，但资料标题被追加后缀 → 零删除失败关闭
+      mysqlQuery(
+        `UPDATE reference_document SET title = CONCAT(title, '·被改写后缀') WHERE id = ${doc.id}`,
+      );
+      expect(locate).toThrow(/字段 title 与 ledger 记录不符/);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      mysqlQuery(`UPDATE reference_document SET title = '${documentTitle}' WHERE id = ${doc.id}`);
+
+      // 场景 3：同 runId 同 owner，但资料存储引用被改写为非法值 → 零删除失败关闭
+      mysqlQuery(
+        `UPDATE reference_document SET storage_reference = '../被改写' WHERE id = ${doc.id}`,
+      );
+      expect(locate).toThrow(/字段 storage_reference 与 ledger 记录不符/);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      mysqlQuery(
+        `UPDATE reference_document SET storage_reference = '${documentReference}' WHERE id = ${doc.id}`,
+      );
+
+      // 场景 4：同 runId 同 owner，但资料设备型号被改写 → 零删除失败关闭
+      mysqlQuery(
+        `UPDATE reference_document SET equipment_model_id = ${context.equipmentModelId} WHERE id = ${doc.id}`,
+      );
+      expect(locate).toThrow(/字段 equipment_model_id 与 ledger 记录不符/);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      mysqlQuery(`UPDATE reference_document SET equipment_model_id = NULL WHERE id = ${doc.id}`);
+
+      // 场景 5：同 runId 同客户，但申请故障码被改写 → 零删除失败关闭
+      mysqlQuery(`UPDATE repair_request SET error_code = 'CS-被改写' WHERE id = ${entry.id}`);
+      expect(locate).toThrow(/字段 error_code 与 ledger 记录不符/);
+      expect(countRow('repair_request', entry.id)).toBe(1);
+      mysqlQuery(`UPDATE repair_request SET error_code = 'CS-${runId}' WHERE id = ${entry.id}`);
+
+      // 场景 6：同 runId 同客户，但申请设备型号被改写为另一合法型号 → 零删除失败关闭
+      const otherModelId = Number(
+        mysqlQuery(
+          `SELECT id FROM equipment_model WHERE id <> ${context.equipmentModelId} ORDER BY id LIMIT 1`,
+        ),
+      );
+
+      if (Number.isSafeInteger(otherModelId) && otherModelId > 0) {
+        mysqlQuery(
+          `UPDATE repair_request SET equipment_model_id = ${otherModelId} WHERE id = ${entry.id}`,
+        );
+        expect(locate).toThrow(/字段 equipment_model_id 与 ledger 记录不符/);
+        expect(countRow('repair_request', entry.id)).toBe(1);
+        mysqlQuery(
+          `UPDATE repair_request SET equipment_model_id = ${context.equipmentModelId} WHERE id = ${entry.id}`,
+        );
+      }
+
+      // 场景 7：申请下存在**未记录**的外部 / 异轮回复 → 零删除失败关闭
+      const externalText = 'C8外部异轮回复';
+      const externalResponseId = insertPr5CleanupSafetyEngineerResponse(ledger, {
+        customerAccountId: context.customerAccountId,
+        engineerAccountId: context.engineerAccountId,
+        record: false,
+        request: entry,
+        responseText: externalText,
+      });
+      externalResponseBinding = {
+        customerAccountId: context.customerAccountId,
+        engineerAccountId: context.engineerAccountId,
+        id: externalResponseId,
+        requestId: entry.id,
+        responseText: externalText,
+      };
+
+      expect(locate).toThrow(/未记录在本轮 ledger/);
+      // 零删除：资料 / 申请 / 本轮回复 / 外部回复都仍在
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      expect(countRow('repair_request', entry.id)).toBe(1);
+      expect(countRow('engineer_response', ownResponseId)).toBe(1);
+      expect(countRow('engineer_response', externalResponseId)).toBe(1);
+
+      // 清除外部回复后，locator 又能重建完整绑定（证明前一步失败确由该未记录子行引起）
+      deletePr5EngineerResponseRowsBound(externalResponseBinding);
+      externalResponseBinding = null;
+      expect(locatePr5CleanupSafetyResidueByRunId(ledger, expected).requests).toHaveLength(1);
+    } finally {
+      // 先把被改写的字段幂等恢复为 ledger 基线，再清外部回复、最后回收：
+      // 避免任一断言失败时 teardown 抛出二次异常覆盖真正根因（与 S3 生命周期同源教训）。
+      if (documentId !== null) {
+        mysqlQuery(
+          `UPDATE reference_document SET content_text = '${runId}', title = '${documentTitle}', storage_backend = 'local', storage_reference = '${documentReference}', equipment_model_id = NULL WHERE id = ${documentId}`,
+        );
+      }
+
+      if (requestId !== null) {
+        mysqlQuery(
+          `UPDATE repair_request SET error_code = 'CS-${runId}', equipment_model_id = ${context.equipmentModelId} WHERE id = ${requestId}`,
+        );
+      }
+
+      if (externalResponseBinding !== null) {
+        deletePr5EngineerResponseRowsBound(externalResponseBinding);
+      }
+
       reclaimPr5CleanupSafetyLedger(ledger);
     }
   });

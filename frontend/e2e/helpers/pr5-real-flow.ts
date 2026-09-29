@@ -232,7 +232,8 @@ export interface Pr5RepairRequestBinding {
  * → 再按同一三因子删主行 → 残留核对为 0。任一绑定断言失败会让 MySQL 客户端在 DELETE
  * 之前报错退出，事务自动回滚（连接关闭触发回滚）。
  */
-export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): void {
+/** 三因子 + 回复集合绑定参数白名单校验（删除原语与只读预检共用同一口径，杜绝两套校验漂移） */
+function assertPr5RepairRequestBindingParams(binding: Pr5RepairRequestBinding): void {
   const { id, requestNo, customerAccountId, responseIds } = binding;
 
   if (!Number.isSafeInteger(id) || id <= 0) {
@@ -254,6 +255,12 @@ export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): v
       throw new Error(`维修申请清理目标回复 ID 未通过正整数校验：${JSON.stringify(responseId)}`);
     }
   }
+}
+
+export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): void {
+  const { id, requestNo, customerAccountId, responseIds } = binding;
+
+  assertPr5RepairRequestBindingParams(binding);
 
   assertPhysicalCleanupAllowed(readBackendEnv());
 
@@ -285,6 +292,44 @@ export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): v
       'COMMIT',
     ].join('; '),
   );
+}
+
+/**
+ * 只读预检维修申请的三因子绑定与「本轮回复集合精确一致」（**不写库**）。
+ * 供清理编排在**任何 DELETE 之前**整体预检：发现未知子行 / 同标识异主即抛错，
+ * 保证「发现冲突后零写入失败关闭」；与 deletePr5RepairRequestBound 共用同一 where 口径。
+ */
+export function assertPr5RepairRequestBindingBound(binding: Pr5RepairRequestBinding): void {
+  assertPr5RepairRequestBindingParams(binding);
+
+  const { id, requestNo, customerAccountId, responseIds } = binding;
+  const where = `id = ${id} AND request_no = '${requestNo}' AND customer_account_id = ${customerAccountId}`;
+  const expectedResponseIds = responseIds.length === 0 ? '0' : responseIds.join(', ');
+  const raw = mysqlQuery(
+    'SELECT CONCAT(' +
+      `(SELECT COUNT(*) FROM repair_request WHERE ${where}), '|', ` +
+      `(SELECT COUNT(*) FROM engineer_response WHERE request_id = ${id}), '|', ` +
+      `(SELECT COUNT(*) FROM engineer_response WHERE request_id = ${id} AND id IN (${expectedResponseIds})))`,
+  ).trim();
+  const columns = raw.split('|');
+
+  if (columns.length !== 3) {
+    throw new Error(`维修申请只读预检结果异常：${JSON.stringify(raw)}`);
+  }
+
+  const [bound, childTotal, childMatched] = columns.map(Number);
+
+  if (bound !== 1) {
+    throw new Error(
+      `pr5_repair_request_binding_id_request_no_customer_must_match_exactly_one：维修申请三因子绑定未精确命中 1 行（实际 ${JSON.stringify(columns[0])}）：${JSON.stringify(binding)}`,
+    );
+  }
+
+  if (childTotal !== responseIds.length || childMatched !== responseIds.length) {
+    throw new Error(
+      `pr5_engineer_response_child_binding_must_match_this_run：本轮回复集合与父申请子行不一致（子行 ${childTotal} / 命中 ${childMatched} / 期望 ${responseIds.length}）：${JSON.stringify(binding)}`,
+    );
+  }
 }
 
 /** 只读读取维修申请状态三要素：用于「拒绝删除后数据不变」的前后快照比对（按编号 + 客户双重绑定） */
@@ -485,24 +530,106 @@ export function readPr5ReferenceDocumentSnapshot(id: number): string | null {
   return value.length > 0 ? value : null;
 }
 
-/**
- * 按本轮记录的**精确 ID** 删除工程师回复行（清理安全组的子行回收原语）。
- * 只删除调用方明确记录在手的本轮自建回复，绝不按申请批量删回复；ID 先过正整数白名单。
- */
-export function deletePr5EngineerResponseRowsByIds(ids: readonly number[]): void {
-  if (ids.length === 0) {
-    return;
+/** 回复正文白名单：非空、无引号/反斜杠/通配符/换行（正文同时是本轮正文绑定因子） */
+export const PR5_RESPONSE_TEXT_PATTERN = /^[^'\\%\r\n]{1,200}$/;
+
+export interface Pr5EngineerResponseBinding {
+  /** 工程师回复主键 */
+  readonly id: number;
+  /** 父维修申请主键 */
+  readonly requestId: number;
+  readonly engineerAccountId: number;
+  readonly customerAccountId: number;
+  /** 本轮写入的回复正文（白名单内；同时作为运行级正文绑定因子，按精确相等核验） */
+  readonly responseText: string;
+}
+
+/** 回复完整 binding 参数白名单校验（删除原语与只读预检共用，杜绝两套校验漂移） */
+function assertPr5EngineerResponseBindingParams(binding: Pr5EngineerResponseBinding): void {
+  const { id, requestId, engineerAccountId, customerAccountId, responseText } = binding;
+
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`工程师回复清理目标 ID 未通过正整数校验：${JSON.stringify(id)}`);
   }
 
-  for (const id of ids) {
-    if (!Number.isSafeInteger(id) || id <= 0) {
-      throw new Error(`工程师回复清理目标 ID 未通过正整数校验：${JSON.stringify(id)}`);
-    }
+  if (!Number.isSafeInteger(requestId) || requestId <= 0) {
+    throw new Error(`工程师回复父申请 ID 未通过正整数校验：${JSON.stringify(requestId)}`);
   }
+
+  if (!Number.isSafeInteger(engineerAccountId) || engineerAccountId <= 0) {
+    throw new Error(`工程师回复工程师账号未通过正整数校验：${JSON.stringify(engineerAccountId)}`);
+  }
+
+  if (!Number.isSafeInteger(customerAccountId) || customerAccountId <= 0) {
+    throw new Error(`工程师回复客户账号未通过正整数校验：${JSON.stringify(customerAccountId)}`);
+  }
+
+  if (!PR5_RESPONSE_TEXT_PATTERN.test(responseText)) {
+    throw new Error(`工程师回复正文未通过白名单校验：${JSON.stringify(responseText)}`);
+  }
+}
+
+/** 回复完整绑定 where 子句（删除与只读预检共用同一口径） */
+function buildPr5EngineerResponseBindingWhere(binding: Pr5EngineerResponseBinding): string {
+  const { id, requestId, engineerAccountId, customerAccountId, responseText } = binding;
+
+  return (
+    `id = ${id} AND request_id = ${requestId} AND engineer_account_id = ${engineerAccountId}` +
+    ` AND customer_account_id = ${customerAccountId} AND response_text = '${responseText}'`
+  );
+}
+
+/**
+ * 只读核验回复的完整 binding（**不写库**）：五因子必须精确命中 1 行，否则失败关闭。
+ * 供清理编排在**任何 DELETE 之前**做整体预检；发现同 ID 异主 / 正文不符即零写入抛错。
+ */
+export function assertPr5EngineerResponseBindingBound(binding: Pr5EngineerResponseBinding): void {
+  assertPr5EngineerResponseBindingParams(binding);
+
+  const where = buildPr5EngineerResponseBindingWhere(binding);
+  const raw = mysqlQuery(`SELECT COUNT(*) FROM engineer_response WHERE ${where}`).trim();
+  const matched = Number(raw);
+
+  if (!Number.isSafeInteger(matched) || matched !== 1) {
+    throw new Error(
+      `pr5_engineer_response_binding_must_match_exactly_one：回复完整绑定核验未精确命中 1 行（实际 ${JSON.stringify(raw)}）：${JSON.stringify(binding)}`,
+    );
+  }
+}
+
+/**
+ * 回复删除按**完整 binding** 绑定（id + request_id + engineer_account_id + customer_account_id
+ * + 本轮正文），事务内先断言精确命中 1 行，再删除并核对精确影响行数为 1；任一不符即失败关闭
+ * （无 DELETE 发生，连接关闭触发回滚）。**已不存在**（父行删除时已连带删除）视为幂等跳过。
+ * 拒绝任何「仅凭 ID」的兜底删除。
+ */
+export function deletePr5EngineerResponseRowsBound(binding: Pr5EngineerResponseBinding): void {
+  assertPr5EngineerResponseBindingParams(binding);
 
   assertPhysicalCleanupAllowed(readBackendEnv());
 
-  mysqlQuery(`DELETE FROM engineer_response WHERE id IN (${ids.join(', ')})`);
+  const { id } = binding;
+  const where = buildPr5EngineerResponseBindingWhere(binding);
+
+  mysqlQuery(
+    [
+      'START TRANSACTION',
+      `SET @pr5_er_present = (SELECT COUNT(*) FROM engineer_response WHERE id = ${id})`,
+      `SET @pr5_er_bound = (SELECT COUNT(*) FROM engineer_response WHERE ${where})`,
+      "SET @pr5_er_binding = IF(@pr5_er_present = 0 OR @pr5_er_bound = 1, 'SELECT 1', 'SELECT pr5_engineer_response_binding_must_match_exactly_one')",
+      'PREPARE pr5_er_binding_check FROM @pr5_er_binding',
+      'EXECUTE pr5_er_binding_check',
+      'DEALLOCATE PREPARE pr5_er_binding_check',
+      `DELETE FROM engineer_response WHERE ${where}`,
+      // 预检已保证 bound ∈ {0,1}，删除后按 id 残留必须为 0 ⇒ 精确影响行数等于 bound
+      `SET @pr5_er_residue = (SELECT COUNT(*) FROM engineer_response WHERE id = ${id})`,
+      "SET @pr5_er_assertion = IF(@pr5_er_residue = 0, 'SELECT 1', 'SELECT pr5_engineer_response_residue_must_be_zero')",
+      'PREPARE pr5_er_residue_check FROM @pr5_er_assertion',
+      'EXECUTE pr5_er_residue_check',
+      'DEALLOCATE PREPARE pr5_er_residue_check',
+      'COMMIT',
+    ].join('; '),
+  );
 }
 
 /** 物理文件删除器：显式注入，使「文件删除失败只留可回收孤儿」可被失败注入与断言 */

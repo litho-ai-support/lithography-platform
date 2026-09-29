@@ -205,6 +205,11 @@ describe('acquireExecutionLockAt 的失败关闭与归属校验', () => {
 });
 
 interface RaceChild {
+  /**
+   * 子进程终态诊断（文件落盘，非管道）。`exit` 只代表进程结束；stdout 管道在父侧
+   * `disconnect()` 后不再触发 `close`，数据可能晚于 `exit` 到达，故诊断必须走文件通道。
+   */
+  readonly diagnosticText: () => string;
   readonly diagnostics: () => string;
   readonly disconnect: () => void;
   readonly exited: Promise<number | null>;
@@ -332,9 +337,12 @@ function createMessageReader(
 }
 
 function startRaceChild(lockPath: string, scriptPath = RACE_CHILD_PATH): RaceChild {
+  // 终态诊断落盘路径：与锁文件同目录（由 makeLockPath 注册进 tempDirs，用例结束即清理），
+  // 作为**非管道**的确定性诊断通道（见 RaceChild.diagnosticText 注释）。
+  const diagnosticPath = path.join(path.dirname(lockPath), 'child-diagnostics.log');
   // 用 `fork` 而非 `spawn` + 文本管道：控制消息走 Node 原生 IPC，stdout/stderr 仅做诊断。
   // `execArgv: []` 避免继承宿主（Vitest）的启动参数，插桩地加载 `.ts` 夹具。
-  const child = fork(scriptPath, [lockPath], {
+  const child = fork(scriptPath, [lockPath, diagnosticPath], {
     execArgv: [],
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
@@ -383,6 +391,7 @@ function startRaceChild(lockPath: string, scriptPath = RACE_CHILD_PATH): RaceChi
   });
 
   return {
+    diagnosticText: () => (existsSync(diagnosticPath) ? readFileSync(diagnosticPath, 'utf8') : ''),
     diagnostics,
     disconnect: () => {
       child.disconnect();
@@ -590,7 +599,8 @@ describe('执行锁 IPC 控制协议的 fail-closed 回归', () => {
     child.disconnect();
 
     expect(await child.exited).toBe(4);
-    expect(child.stdoutText()).toContain('DISCONNECTED');
+    // 诊断经文件通道读取（父侧 disconnect 后 stdout 管道不触发 close，不能作为确定性依据）
+    expect(child.diagnosticText()).toContain('DISCONNECTED');
     // 断连后必须归还锁：不得留下无人可释放的活锁
     expect(existsSync(lockPath)).toBe(false);
   });
