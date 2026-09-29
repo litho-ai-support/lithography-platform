@@ -16,7 +16,11 @@
 //      未知回复 → 分别零删除失败关闭，全部数据不变；
 //   C9 **直接调用 reclaimer**（非 locator）：申请 error_code/content_md/equipment_model_id 与资料
 //      content_text/document_type/storage_reference/storage_backend/equipment_model_id 被改写
-//      → 预检零删除失败关闭，全部数据不变（P1-1：证明真正执行删除的路径同样安全）。
+//      → 预检零删除失败关闭，全部数据不变（P1-1：证明真正执行删除的路径同样安全）；
+//   C10 批次原子性：同批第 N 个对象字段被改写 → reclaimer 整体预检失败关闭，第 1…N-1 个对象
+//      也不得被提前删除；恢复基线后可精确回收；
+//   C11 TOCTOU：阶段 A（只读预检）通过后改写字段 → 事务内完整 WHERE 命中 0 行、零写入失败关闭，
+//      目标与同批行保留；恢复基线后同一 binding 又能精确回收。
 //
 // 运行入口（npm script，授权变量由执行者显式设置，不写入 npm script）：
 //   E2E_ALLOW_PHYSICAL_CLEANUP=1 DB_NAME=lithography_e2e npm run test:e2e:pr5-cleanup-safety
@@ -45,16 +49,23 @@ import {
   type Pr5CleanupSafetyLockSession,
   reclaimPr5CleanupSafetyLedger,
   resolvePr5CleanupSafetySeedContext,
+  restorePr5CleanupSafetyRowToSnapshot,
   snapshotPr5CleanupSafetyExternalSentinel,
 } from '../e2e/helpers/pr5-cleanup-safety';
 import {
+  assertPr5RepairRequestBindingBound,
   cleanupPr5ReferenceDocumentsBound,
+  createPr5RowSnapshot,
   deletePr5EngineerResponseRowsBound,
   deletePr5ReferenceDocumentBound,
   deletePr5RepairRequestBound,
   type Pr5EngineerResponseBinding,
+  type Pr5RowSnapshot,
+  readPr5EngineerResponseBindingFromDb,
   readPr5ReferenceDocumentSnapshot,
   readPr5ReferenceDocumentStorageReferenceBound,
+  readPr5RepairRequestBindingFromDb,
+  readPr5SnapshotColumn,
 } from '../e2e/helpers/pr5-real-flow';
 import { mysqlQuery } from '../e2e/helpers/real-backend';
 
@@ -82,23 +93,30 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
     const ledger = createPr5CleanupSafetyLedger(runId, context.customerAccountId);
 
     try {
-      // 造数：客户甲自建申请，创建人 / 客户均记入 ledger
       const entry = insertPr5CleanupSafetyRepairRequest(ledger, {
         customerAccountId: context.customerAccountId,
         equipmentModelId: context.equipmentModelId,
         faultTag: buildPr5CleanupSafetyFaultTag(runId),
       });
+      const realRequestNo = readPr5SnapshotColumn(entry.snapshot, 'request_no');
+      const forgedRequestNo = 'RR20260101000000ABCDEF';
       const originalState = mysqlQuery(
         `SELECT id, request_no, customer_account_id, equipment_model_id, error_code, fault_description, is_accepted, deprecated FROM repair_request WHERE id = ${entry.id}`,
       );
 
       // 把「外部行 ID」冒充本轮绑定：客户甲创建的行、但绑定声明客户乙 + 伪造 requestNo。
-      // 三因子任一不符都必须在首条 DELETE 前中止（事务回滚，行逐字段不变）。
+      // 整行快照与定位因子同步伪造（保持 binding 自洽），使事务内完整 WHERE 精确命中 0 行；
+      // 任一因子不符都必须在首条 DELETE 前中止（事务回滚，行逐字段不变）。
       const wrongBinding = {
         customerAccountId: context.customerBetaAccountId,
         id: entry.id,
-        requestNo: entry.requestNo.replace(/RR\d{14}/, 'RR00000000000000'),
+        requestNo: forgedRequestNo,
         responseIds: [],
+        snapshot: createPr5RowSnapshot('repair_request', {
+          ...entry.snapshot.values,
+          customer_account_id: String(context.customerBetaAccountId),
+          request_no: forgedRequestNo,
+        }),
       };
 
       expect(() => deletePr5RepairRequestBound(wrongBinding)).toThrow(
@@ -113,7 +131,7 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
       ).toBe(originalState);
       expect(
         Number(
-          mysqlQuery(`SELECT COUNT(*) FROM repair_request WHERE request_no = '${entry.requestNo}'`),
+          mysqlQuery(`SELECT COUNT(*) FROM repair_request WHERE request_no = '${realRequestNo}'`),
         ),
       ).toBe(1);
     } finally {
@@ -128,10 +146,11 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
     // 管理员自建资料（本轮 ledger 归属管理员）
     const ledger = createPr5CleanupSafetyLedger(runId, context.adminAccountId);
     // 客户甲自建「同关键字」资料（外部归属，不记入 ledger）
-    const externalId = insertPr5CleanupSafetyReferenceDocument(
+    const externalBinding = insertPr5CleanupSafetyReferenceDocument(
       createPr5CleanupSafetyLedger(runId, context.customerAccountId),
       { label: '外部同关键字', createdByAccountId: context.customerAccountId },
-    ).id;
+    );
+    const externalId = externalBinding.id;
 
     try {
       const doc = insertPr5CleanupSafetyReferenceDocument(ledger, {
@@ -142,11 +161,16 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
       // 造数完成后的**完整前后快照**基线：任何外部行字段改动 / 新增 / 删除都会破坏相等
       const before = snapshotPr5CleanupSafetyExternalSentinel();
 
-      // 用「管理员 ledger 归属」核验外部行：创建人不匹配 → 明确归属冲突，失败关闭
+      // 用「管理员归属 + 同 id / 关键字」的完整绑定核验客户甲的外部行：
+      // 快照自洽声明 owner=admin，但库中该行 owner=customer → 完整 WHERE 命中 0 行，归属核验失败关闭
       expect(() =>
         readPr5ReferenceDocumentStorageReferenceBound({
           createdByAccountId: context.adminAccountId,
           id: externalId,
+          snapshot: createPr5RowSnapshot('reference_document', {
+            ...externalBinding.snapshot.values,
+            created_by_account_id: String(context.adminAccountId),
+          }),
           titleKeyword: keyword,
         }),
       ).toThrow(/归属核验未精确命中 1 行/);
@@ -168,12 +192,9 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
         Number(mysqlQuery(`SELECT COUNT(*) FROM reference_document WHERE id = ${doc.id}`)),
       ).toBe(1);
     } finally {
-      // 外部行（客户甲归属）自创建后始终存在 → 按外部归属精确回收，避免残留；本轮 ledger 行随后回收
-      deletePr5ReferenceDocumentBound({
-        createdByAccountId: context.customerAccountId,
-        id: externalId,
-        titleKeyword: keyword,
-      });
+      // 外部行（客户甲归属）自创建后始终存在 → 按外部归属的**完整 binding**精确回收，避免残留；
+      // 本轮 ledger 行随后回收
+      deletePr5ReferenceDocumentBound(externalBinding);
       reclaimPr5CleanupSafetyLedger(ledger);
     }
   });
@@ -205,13 +226,14 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
         request: entry,
         responseText: externalText,
       });
-      externalBinding = {
+      // 外部回复的**完整行 binding**（读回数据库实值）：finally 中按完整字段（非裸 ID）精确清掉
+      externalBinding = readPr5EngineerResponseBindingFromDb({
         customerAccountId: context.customerAccountId,
         engineerAccountId: context.engineerAccountId,
         id: externalResponseId,
         requestId: entry.id,
         responseText: externalText,
-      };
+      });
 
       // 造数完成后的完整前后快照基线（父行 / 本轮回复 / 外部回复此刻都在库）
       const before = snapshotPr5CleanupSafetyExternalSentinel();
@@ -322,9 +344,9 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
     };
     // 合法白名单格式的存储引用（后端存储目录内不存在该文件，回收期删除为幂等空操作）
     const documentReference = '0123456789abcdef0123456789abcdef.md';
-    const documentTitle = `${ledger.keyword}（C8）`;
-    let documentId: number | null = null;
-    let requestId: number | null = null;
+    // 反例改写的恢复基线 = 建行时数据库落库的整行快照（含 updated_at，禁止只改回部分字段）
+    let documentSnapshot: Pr5RowSnapshot | null = null;
+    let requestSnapshot: Pr5RowSnapshot | null = null;
     let externalResponseBinding: Pr5EngineerResponseBinding | null = null;
 
     const locate = (): unknown => locatePr5CleanupSafetyResidueByRunId(ledger, expected);
@@ -343,8 +365,8 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
         faultTag: buildPr5CleanupSafetyFaultTag(runId),
       });
 
-      documentId = doc.id;
-      requestId = entry.id;
+      documentSnapshot = doc.snapshot;
+      requestSnapshot = entry.snapshot;
 
       const ownResponseId = insertPr5CleanupSafetyEngineerResponse(ledger, {
         customerAccountId: context.customerAccountId,
@@ -363,7 +385,7 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
       mysqlQuery(`UPDATE reference_document SET content_text = '被改写正文' WHERE id = ${doc.id}`);
       expect(locate).toThrow(/字段 content_text 与 ledger 记录不符/);
       expect(countRow('reference_document', doc.id)).toBe(1);
-      mysqlQuery(`UPDATE reference_document SET content_text = '${runId}' WHERE id = ${doc.id}`);
+      restorePr5CleanupSafetyRowToSnapshot(doc.snapshot);
 
       // 场景 2：同 runId 同 owner，但资料标题被追加后缀 → 零删除失败关闭
       mysqlQuery(
@@ -371,7 +393,7 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
       );
       expect(locate).toThrow(/字段 title 与 ledger 记录不符/);
       expect(countRow('reference_document', doc.id)).toBe(1);
-      mysqlQuery(`UPDATE reference_document SET title = '${documentTitle}' WHERE id = ${doc.id}`);
+      restorePr5CleanupSafetyRowToSnapshot(doc.snapshot);
 
       // 场景 3：同 runId 同 owner，但资料存储引用被改写为非法值 → 零删除失败关闭
       mysqlQuery(
@@ -379,9 +401,7 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
       );
       expect(locate).toThrow(/字段 storage_reference 与 ledger 记录不符/);
       expect(countRow('reference_document', doc.id)).toBe(1);
-      mysqlQuery(
-        `UPDATE reference_document SET storage_reference = '${documentReference}' WHERE id = ${doc.id}`,
-      );
+      restorePr5CleanupSafetyRowToSnapshot(doc.snapshot);
 
       // 场景 4：同 runId 同 owner，但资料设备型号被改写 → 零删除失败关闭
       mysqlQuery(
@@ -389,13 +409,13 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
       );
       expect(locate).toThrow(/字段 equipment_model_id 与 ledger 记录不符/);
       expect(countRow('reference_document', doc.id)).toBe(1);
-      mysqlQuery(`UPDATE reference_document SET equipment_model_id = NULL WHERE id = ${doc.id}`);
+      restorePr5CleanupSafetyRowToSnapshot(doc.snapshot);
 
       // 场景 5：同 runId 同客户，但申请故障码被改写 → 零删除失败关闭
       mysqlQuery(`UPDATE repair_request SET error_code = 'CS-被改写' WHERE id = ${entry.id}`);
       expect(locate).toThrow(/字段 error_code 与 ledger 记录不符/);
       expect(countRow('repair_request', entry.id)).toBe(1);
-      mysqlQuery(`UPDATE repair_request SET error_code = 'CS-${runId}' WHERE id = ${entry.id}`);
+      restorePr5CleanupSafetyRowToSnapshot(entry.snapshot);
 
       // 场景 6：同 runId 同客户，但申请设备型号被改写为另一合法型号 → 零删除失败关闭
       const otherModelId = Number(
@@ -410,9 +430,7 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
         );
         expect(locate).toThrow(/字段 equipment_model_id 与 ledger 记录不符/);
         expect(countRow('repair_request', entry.id)).toBe(1);
-        mysqlQuery(
-          `UPDATE repair_request SET equipment_model_id = ${context.equipmentModelId} WHERE id = ${entry.id}`,
-        );
+        restorePr5CleanupSafetyRowToSnapshot(entry.snapshot);
       }
 
       // 场景 7：申请下存在**未记录**的外部 / 异轮回复 → 零删除失败关闭
@@ -424,13 +442,13 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
         request: entry,
         responseText: externalText,
       });
-      externalResponseBinding = {
+      externalResponseBinding = readPr5EngineerResponseBindingFromDb({
         customerAccountId: context.customerAccountId,
         engineerAccountId: context.engineerAccountId,
         id: externalResponseId,
         requestId: entry.id,
         responseText: externalText,
-      };
+      });
 
       expect(locate).toThrow(/未记录在本轮 ledger/);
       // 零删除：资料 / 申请 / 本轮回复 / 外部回复都仍在
@@ -444,18 +462,14 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
       externalResponseBinding = null;
       expect(locatePr5CleanupSafetyResidueByRunId(ledger, expected).requests).toHaveLength(1);
     } finally {
-      // 先把被改写的字段幂等恢复为 ledger 基线，再清外部回复、最后回收：
+      // 先用整行快照把被改写的字段（含 updated_at）幂等恢复为 ledger 基线，再清外部回复、最后回收：
       // 避免任一断言失败时 teardown 抛出二次异常覆盖真正根因（与 S3 生命周期同源教训）。
-      if (documentId !== null) {
-        mysqlQuery(
-          `UPDATE reference_document SET content_text = '${runId}', title = '${documentTitle}', storage_backend = 'local', storage_reference = '${documentReference}', equipment_model_id = NULL WHERE id = ${documentId}`,
-        );
+      if (documentSnapshot !== null) {
+        restorePr5CleanupSafetyRowToSnapshot(documentSnapshot);
       }
 
-      if (requestId !== null) {
-        mysqlQuery(
-          `UPDATE repair_request SET error_code = 'CS-${runId}', equipment_model_id = ${context.equipmentModelId} WHERE id = ${requestId}`,
-        );
+      if (requestSnapshot !== null) {
+        restorePr5CleanupSafetyRowToSnapshot(requestSnapshot);
       }
 
       if (externalResponseBinding !== null) {
@@ -472,12 +486,12 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
     const ledger = createPr5CleanupSafetyLedger(runId, context.adminAccountId);
     // 合法白名单格式的存储引用（后端存储目录内不存在该文件，回收期删除为幂等空操作）
     const documentReference = 'fedcba9876543210fedcba9876543210.md';
-    const documentTitle = `${ledger.keyword}（C9）`;
     const faultTag = buildPr5CleanupSafetyFaultTag(runId);
     // 造数前的完整外部哨兵基线：整个用例结束后必须逐字段恢复相等
     const before = snapshotPr5CleanupSafetyExternalSentinel();
-    let documentId: number | null = null;
-    let requestId: number | null = null;
+    // 反例改写的恢复基线 = 建行时数据库落库的整行快照（含 updated_at，禁止只改回部分字段）
+    let documentSnapshot: Pr5RowSnapshot | null = null;
+    let requestSnapshot: Pr5RowSnapshot | null = null;
 
     // 本用例的**被测对象是真正执行删除的 reclaimer**，不是 locator（P1-1 覆辙修复）
     const reclaim = (): unknown => reclaimPr5CleanupSafetyLedger(ledger);
@@ -496,20 +510,20 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
         faultTag,
       });
 
-      documentId = doc.id;
-      requestId = entry.id;
+      documentSnapshot = doc.snapshot;
+      requestSnapshot = entry.snapshot;
 
       // 场景 1：申请故障码被改写（三因子与回复集合不变）→ reclaimer 预检零删除失败关闭
       mysqlQuery(`UPDATE repair_request SET error_code = 'CS-被改写' WHERE id = ${entry.id}`);
       expect(reclaim).toThrow(/字段 error_code 与 ledger 记录不符/);
       expect(countRow('repair_request', entry.id)).toBe(1);
-      mysqlQuery(`UPDATE repair_request SET error_code = 'CS-${runId}' WHERE id = ${entry.id}`);
+      restorePr5CleanupSafetyRowToSnapshot(entry.snapshot);
 
       // 场景 2：申请正文被改写 → 零删除失败关闭
       mysqlQuery(`UPDATE repair_request SET content_md = '被改写正文' WHERE id = ${entry.id}`);
       expect(reclaim).toThrow(/字段 content_md 与 ledger 记录不符/);
       expect(countRow('repair_request', entry.id)).toBe(1);
-      mysqlQuery(`UPDATE repair_request SET content_md = '${faultTag}' WHERE id = ${entry.id}`);
+      restorePr5CleanupSafetyRowToSnapshot(entry.snapshot);
 
       // 场景 3：申请设备型号被改写为另一合法型号 → 零删除失败关闭
       const otherModelId = Number(
@@ -524,22 +538,20 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
         );
         expect(reclaim).toThrow(/字段 equipment_model_id 与 ledger 记录不符/);
         expect(countRow('repair_request', entry.id)).toBe(1);
-        mysqlQuery(
-          `UPDATE repair_request SET equipment_model_id = ${context.equipmentModelId} WHERE id = ${entry.id}`,
-        );
+        restorePr5CleanupSafetyRowToSnapshot(entry.snapshot);
       }
 
       // 场景 4：资料正文被改写 → 零删除失败关闭
       mysqlQuery(`UPDATE reference_document SET content_text = '被改写正文' WHERE id = ${doc.id}`);
       expect(reclaim).toThrow(/字段 content_text 与 ledger 记录不符/);
       expect(countRow('reference_document', doc.id)).toBe(1);
-      mysqlQuery(`UPDATE reference_document SET content_text = '${runId}' WHERE id = ${doc.id}`);
+      restorePr5CleanupSafetyRowToSnapshot(doc.snapshot);
 
       // 场景 5：资料文档类型被改写 → 零删除失败关闭
       mysqlQuery(`UPDATE reference_document SET document_type = 'OTHER' WHERE id = ${doc.id}`);
       expect(reclaim).toThrow(/字段 document_type 与 ledger 记录不符/);
       expect(countRow('reference_document', doc.id)).toBe(1);
-      mysqlQuery(`UPDATE reference_document SET document_type = 'CHECKLIST' WHERE id = ${doc.id}`);
+      restorePr5CleanupSafetyRowToSnapshot(doc.snapshot);
 
       // 场景 6：资料存储引用被改写为非法值 → 零删除失败关闭
       mysqlQuery(
@@ -547,9 +559,7 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
       );
       expect(reclaim).toThrow(/字段 storage_reference 与 ledger 记录不符/);
       expect(countRow('reference_document', doc.id)).toBe(1);
-      mysqlQuery(
-        `UPDATE reference_document SET storage_reference = '${documentReference}' WHERE id = ${doc.id}`,
-      );
+      restorePr5CleanupSafetyRowToSnapshot(doc.snapshot);
 
       // 场景 7：资料存储后端与引用被同时清空（仍满足表 CHECK 约束 storage pair）→ 零删除失败关闭
       mysqlQuery(
@@ -557,9 +567,7 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
       );
       expect(reclaim).toThrow(/字段 storage_backend 与 ledger 记录不符/);
       expect(countRow('reference_document', doc.id)).toBe(1);
-      mysqlQuery(
-        `UPDATE reference_document SET storage_backend = 'local', storage_reference = '${documentReference}' WHERE id = ${doc.id}`,
-      );
+      restorePr5CleanupSafetyRowToSnapshot(doc.snapshot);
 
       // 场景 8：资料设备型号被改写 → 零删除失败关闭
       mysqlQuery(
@@ -567,23 +575,20 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
       );
       expect(reclaim).toThrow(/字段 equipment_model_id 与 ledger 记录不符/);
       expect(countRow('reference_document', doc.id)).toBe(1);
-      mysqlQuery(`UPDATE reference_document SET equipment_model_id = NULL WHERE id = ${doc.id}`);
+      restorePr5CleanupSafetyRowToSnapshot(doc.snapshot);
 
       // 屏幕上的关键对照：C8 证明 locator 安全，C9 证明**真正执行删除的 reclaimer** 对同一反例同样安全
       expect(countRow('repair_request', entry.id)).toBe(1);
       expect(countRow('reference_document', doc.id)).toBe(1);
     } finally {
-      // 先把被改写的字段幂等恢复为 ledger 基线，再回收：避免 teardown 抛出二次异常覆盖真正根因（S3 同源教训）
-      if (documentId !== null) {
-        mysqlQuery(
-          `UPDATE reference_document SET content_text = '${runId}', title = '${documentTitle}', document_type = 'CHECKLIST', storage_backend = 'local', storage_reference = '${documentReference}', equipment_model_id = NULL WHERE id = ${documentId}`,
-        );
+      // 先用整行快照把被改写的字段（含 updated_at）幂等恢复为 ledger 基线，再回收：
+      // 避免 teardown 抛出二次异常覆盖真正根因（S3 同源教训）
+      if (documentSnapshot !== null) {
+        restorePr5CleanupSafetyRowToSnapshot(documentSnapshot);
       }
 
-      if (requestId !== null) {
-        mysqlQuery(
-          `UPDATE repair_request SET error_code = 'CS-${runId}', fault_description = '${faultTag}', content_md = '${faultTag}', equipment_model_id = ${context.equipmentModelId} WHERE id = ${requestId}`,
-        );
+      if (requestSnapshot !== null) {
+        restorePr5CleanupSafetyRowToSnapshot(requestSnapshot);
       }
 
       reclaimPr5CleanupSafetyLedger(ledger);
@@ -591,6 +596,141 @@ test.describe('PR5 清理安全集成组（无 TRUNCATE 真实反例 C1-C9）', 
 
     // 全流程未改动 / 删除 / 新增任何外部行（字段恢复 + 回收后与造数前逐字段相等）
     expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(before);
+  });
+
+  test('C10 批次原子性：同批第 N 个对象字段被改写 → reclaimer 整体零删除失败关闭，同批先前对象不被提前删除', () => {
+    const runId = createPr5CleanupSafetyRunId();
+    const context = resolvePr5CleanupSafetySeedContext();
+    const ledger = createPr5CleanupSafetyLedger(runId, context.adminAccountId);
+    // 造数前的完整外部哨兵基线：最终必须逐字段恢复相等
+    const sentinelBeforeCreation = snapshotPr5CleanupSafetyExternalSentinel();
+    const countRow = (table: string, id: number): number =>
+      Number(mysqlQuery(`SELECT COUNT(*) FROM ${table} WHERE id = ${id}`));
+    let mutatedSnapshot: Pr5RowSnapshot | null = null;
+
+    try {
+      const entry = insertPr5CleanupSafetyRepairRequest(ledger, {
+        customerAccountId: context.customerAccountId,
+        equipmentModelId: context.equipmentModelId,
+        faultTag: buildPr5CleanupSafetyFaultTag(runId),
+      });
+      const docA = insertPr5CleanupSafetyReferenceDocument(ledger, {
+        createdByAccountId: context.adminAccountId,
+        label: 'C10-A',
+      });
+      const docB = insertPr5CleanupSafetyReferenceDocument(ledger, {
+        createdByAccountId: context.adminAccountId,
+        label: 'C10-B',
+      });
+
+      mutatedSnapshot = docB.snapshot;
+
+      // 只改写「同批最后一个对象」的非三因子字段（description）→ 阶段 A 整体预检失败，
+      // 批次原子性要求：第 1…N-1 个对象（申请 / 资料 A）也不得被提前删除。
+      mysqlQuery(`UPDATE reference_document SET description = '被外部改写' WHERE id = ${docB.id}`);
+
+      // 外部改写完成后的哨兵基线：reclaimer 失败关闭必须是**零写入**，
+      // 因此失败前后哨兵应逐字段相等（不再回退到改写前，否则会把外部改写本身当成写入）。
+      const sentinelAfterMutation = snapshotPr5CleanupSafetyExternalSentinel();
+
+      expect(() => reclaimPr5CleanupSafetyLedger(ledger)).toThrow(
+        new RegExp(`残留资料 ${docB.id} 字段 description 与 ledger 记录不符`),
+      );
+
+      // 零写入：申请 / 资料 A / 冲突资料 B 全部仍在（没有任何对象被提前删除）
+      expect(countRow('repair_request', entry.id)).toBe(1);
+      expect(countRow('reference_document', docA.id)).toBe(1);
+      expect(countRow('reference_document', docB.id)).toBe(1);
+      // 冲突行的外部改写值原样保留（reclaimer 失败关闭时绝不改写既有数据）
+      expect(mysqlQuery(`SELECT description FROM reference_document WHERE id = ${docB.id}`)).toBe(
+        '被外部改写',
+      );
+      // 外部哨兵整表全字段快照与失败前逐字段相等（reclaimer 零写入，未删除也未改写任何行）
+      expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(sentinelAfterMutation);
+
+      // 恢复基线后可精确回收：只消失本轮数据库生成 ID 的记录，且无残留
+      restorePr5CleanupSafetyRowToSnapshot(docB.snapshot);
+      reclaimPr5CleanupSafetyLedger(ledger);
+      assertPr5CleanupSafetyNoRunResidue(runId);
+      expect(countRow('repair_request', entry.id)).toBe(0);
+      expect(countRow('reference_document', docA.id)).toBe(0);
+      expect(countRow('reference_document', docB.id)).toBe(0);
+    } finally {
+      if (mutatedSnapshot !== null) {
+        restorePr5CleanupSafetyRowToSnapshot(mutatedSnapshot);
+      }
+
+      reclaimPr5CleanupSafetyLedger(ledger);
+    }
+
+    // 最终只剩预置 / 外部哨兵：与造数前逐字段相等
+    expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(sentinelBeforeCreation);
+  });
+
+  test('C11 TOCTOU：阶段 A 通过后改写字段 → 事务内完整 WHERE 命中 0 行、目标与同批行保留', () => {
+    const runId = createPr5CleanupSafetyRunId();
+    const context = resolvePr5CleanupSafetySeedContext();
+    const ledger = createPr5CleanupSafetyLedger(runId, context.customerAccountId);
+    const sentinelBeforeCreation = snapshotPr5CleanupSafetyExternalSentinel();
+    const countRow = (table: string, id: number): number =>
+      Number(mysqlQuery(`SELECT COUNT(*) FROM ${table} WHERE id = ${id}`));
+    let requestSnapshot: Pr5RowSnapshot | null = null;
+
+    try {
+      const entry = insertPr5CleanupSafetyRepairRequest(ledger, {
+        customerAccountId: context.customerAccountId,
+        equipmentModelId: context.equipmentModelId,
+        faultTag: buildPr5CleanupSafetyFaultTag(runId),
+      });
+      const doc = insertPr5CleanupSafetyReferenceDocument(ledger, {
+        createdByAccountId: context.adminAccountId,
+        label: 'C11',
+      });
+
+      requestSnapshot = entry.snapshot;
+
+      // 阶段 A：按完整行 binding 的**只读预检**（与 reclaimer 预检同一实现）精确命中 1 行 → 通过
+      const binding = readPr5RepairRequestBindingFromDb({
+        customerAccountId: context.customerAccountId,
+        id: entry.id,
+        requestNo: readPr5SnapshotColumn(entry.snapshot, 'request_no'),
+        responseIds: [],
+      });
+
+      assertPr5RepairRequestBindingBound(binding);
+
+      // 阶段 A 与阶段 B 之间发生并发改写（TOCTOU 窗口）
+      mysqlQuery(`UPDATE repair_request SET content_md = '并发改写' WHERE id = ${entry.id}`);
+
+      const sentinelAfterMutation = snapshotPr5CleanupSafetyExternalSentinel();
+
+      // 阶段 B：事务内使用与预检**完全相同的完整 WHERE** → 命中 0 行，哨兵报错、零删除
+      expect(() => deletePr5RepairRequestBound(binding)).toThrow(
+        /pr5_repair_request_binding_id_request_no_customer_must_match_exactly_one/,
+      );
+
+      // 目标行与同批行保留，且并发改写值原样保留（事务回滚，未改写既有数据）
+      expect(countRow('repair_request', entry.id)).toBe(1);
+      expect(countRow('reference_document', doc.id)).toBe(1);
+      expect(mysqlQuery(`SELECT content_md FROM repair_request WHERE id = ${entry.id}`)).toBe(
+        '并发改写',
+      );
+      expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(sentinelAfterMutation);
+
+      // 恢复基线后，同一 binding 的完整 WHERE 又能精确命中 → 可回收（证明失败确由该字段改写引起）
+      restorePr5CleanupSafetyRowToSnapshot(entry.snapshot);
+      assertPr5RepairRequestBindingBound(binding);
+      reclaimPr5CleanupSafetyLedger(ledger);
+      assertPr5CleanupSafetyNoRunResidue(runId);
+    } finally {
+      if (requestSnapshot !== null) {
+        restorePr5CleanupSafetyRowToSnapshot(requestSnapshot);
+      }
+
+      reclaimPr5CleanupSafetyLedger(ledger);
+    }
+
+    expect(snapshotPr5CleanupSafetyExternalSentinel()).toBe(sentinelBeforeCreation);
   });
 
   test('C5 文件删除器对指定本轮引用抛错：不误删其他文件；残留引用可精确回收', () => {

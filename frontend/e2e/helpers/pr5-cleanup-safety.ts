@@ -30,18 +30,30 @@ import {
   assertPr5DedicatedEnvironment,
   assertPr5EngineerResponseBindingBound,
   assertPr5RepairRequestBindingBound,
+  assertPr5RowSnapshotShape,
+  buildPr5ColumnAssignment,
   buildPr5DocKeyword,
+  createPr5RowSnapshot,
   deletePr5EngineerResponseRowsBound,
   deletePr5ReferenceDocumentBound,
   deletePr5RepairRequestBound,
+  diffPr5ColumnSets,
   findPr5ReferenceDocumentIdsByKeyword,
   PR5_DOC_KEYWORD_PATTERN,
   PR5_RESPONSE_TEXT_PATTERN,
   PR5_SEED_LOGIN_NAMES,
+  type Pr5CleanupTable,
   type Pr5EngineerResponseBinding,
   type Pr5ReferenceDocumentBinding,
   type Pr5RepairRequestBinding,
+  type Pr5RowSnapshot,
+  readPr5CanonicalColumns,
+  readPr5ColumnSpecs,
+  readPr5EngineerResponseBindingFromDb,
+  readPr5FullRowSnapshot,
+  readPr5ReferenceDocumentBindingFromDb,
   readPr5ReferenceDocumentStorageReferenceBound,
+  readPr5SnapshotColumn,
 } from './pr5-real-flow';
 import {
   deleteE2EReferenceDocumentStorageFileByReference,
@@ -140,6 +152,9 @@ export function assertPr5CleanupSafetyEnvironment(): void {
         `\n  cd backend && DB_NAME=${DEDICATED_E2E_DB_NAME} npm run migration:drill:empty-db && DB_NAME=${DEDICATED_E2E_DB_NAME} npm run seed:mock`,
     );
   }
+
+  // canonical 列清单必须与真实库 information_schema 完全一致（多列 / 缺列 / 重复即失败，杜绝字段集漂移）
+  assertPr5CleanupSafetySchemaMatchesCanonical();
 }
 
 /** 数据库执行锁（计划 §4.2 第 4 项）：与既有真实 E2E 同名，禁止与全表 drill 并行 */
@@ -259,31 +274,21 @@ export function snapshotPr5CleanupSafetyExternalSentinel(): string {
 
 export interface Pr5CleanupSafetyLedgerRequest {
   readonly id: number;
-  readonly requestNo: string;
-  readonly customerAccountId: number;
-  /** 本轮建行时写入的设备型号（残留核验时逐字段比对基线） */
-  readonly equipmentModelId: number;
-  /** 本轮建行时写入的故障码 / 故障描述 / 正文（残留核验时逐字段比对基线） */
-  readonly errorCode: string;
-  readonly faultDescription: string;
-  readonly contentMd: string;
-  /** 本轮为该申请创建的回复精确 ID（回收时按此集合绑定子行） */
+  /** 建行时数据库实际落库的整行快照（13/13 canonical 列，含默认与生命周期字段） */
+  readonly snapshot: Pr5RowSnapshot;
+  /** 本轮为该申请创建的回复精确 ID（回收时按此集合绑定子行，不扩大删除外部回复） */
   readonly responseIds: number[];
 }
 
 /**
- * 本轮自建资料的**完整可重建字段绑定**（P2-2）：除归属外还记录建行时写入的全部字段，
- * 供下一轮从数据库重建残留绑定前逐字段核验；任一字段与库中不符即零删除失败关闭。
+ * 本轮自建资料的**完整行绑定**（P1-1）：只记录 `id` 与建行时数据库实际落库的整行快照
+ * （15/15 canonical 列）。残留重建、只读预检与事务内 DELETE 都只使用这一份快照，
+ * 不再维护任何手写字段子集。
  */
 export interface Pr5CleanupSafetyLedgerDocument {
   readonly id: number;
-  readonly createdByAccountId: number;
-  readonly title: string;
-  readonly documentType: string;
-  readonly contentText: string;
-  readonly storageBackend: string | null;
-  readonly storageReference: string | null;
-  readonly equipmentModelId: number | null;
+  /** 建行时数据库实际落库的整行快照（15/15 canonical 列） */
+  readonly snapshot: Pr5RowSnapshot;
 }
 
 export interface Pr5CleanupSafetyLedger {
@@ -362,14 +367,10 @@ export function insertPr5CleanupSafetyRepairRequest(
   }
 
   const entry: Pr5CleanupSafetyLedgerRequest = {
-    contentMd: faultTag,
-    customerAccountId,
-    equipmentModelId,
-    errorCode,
-    faultDescription: faultTag,
     id,
-    requestNo,
     responseIds: [],
+    // 整行快照的真源 = 数据库实际落库值（覆盖数据库默认与生命周期字段），不手写字段子集
+    snapshot: readPr5FullRowSnapshot('repair_request', id),
   };
 
   ledger.repairRequests.push(entry);
@@ -416,13 +417,16 @@ export function insertPr5CleanupSafetyEngineerResponse(
 
   if (input.record !== false) {
     request.responseIds.push(id);
-    ledger.engineerResponses.push({
-      customerAccountId,
-      engineerAccountId,
-      id,
-      requestId: request.id,
-      responseText,
-    });
+    // 完整 binding：读回数据库实际落库整行快照（7/7），不手写字段子集
+    ledger.engineerResponses.push(
+      readPr5EngineerResponseBindingFromDb({
+        customerAccountId,
+        engineerAccountId,
+        id,
+        requestId: request.id,
+        responseText,
+      }),
+    );
   }
 
   return id;
@@ -462,59 +466,46 @@ export function insertPr5CleanupSafetyReferenceDocument(
     throw new Error(`清理安全组资料主键读取异常：${JSON.stringify(id)}`);
   }
 
-  ledger.documents.push({
-    contentText: ledger.runId,
+  // 完整 binding：读回数据库实际落库整行快照（15/15，含 storage_* / deprecated / created_at / updated_at）
+  const binding = readPr5ReferenceDocumentBindingFromDb({
     createdByAccountId,
-    documentType: 'CHECKLIST',
-    equipmentModelId: input.equipmentModelId ?? null,
     id,
-    storageBackend: storageReference === null ? null : 'local',
-    storageReference,
-    title,
+    titleKeyword: ledger.keyword,
   });
 
-  return { createdByAccountId, id, titleKeyword: ledger.keyword };
+  ledger.documents.push({ id, snapshot: binding.snapshot });
+
+  return binding;
 }
 
 /**
- * ledger 申请条目 → **完整字段绑定**（P1-1）：除三因子与回复集合外，同时携带 ledger 记录的
- * `equipment_model_id / error_code / fault_description / content_md` 完整预期；回收的只读预检
- * 与事务内 DELETE 都会按这些字段精确匹配，任一字段被外部改写即零写入失败关闭。
+ * ledger 申请条目 → **完整行绑定**（P1-1）：定位因子（id / request_no / customer_account_id）
+ * 全部从建行时数据库落库快照派生，并原样携带该整行快照；回收的只读预检与事务内 DELETE
+ * 都由这一份快照生成同一 WHERE，任一非三因子字段被外部改写即零写入失败关闭。
+ * 不再存在「三因子 + 部分字段 expectation」的第二套口径。
  */
 export function toPr5RepairRequestBinding(
   entry: Pr5CleanupSafetyLedgerRequest,
   responseIds: readonly number[] = entry.responseIds,
 ): Pr5RepairRequestBinding {
   return {
-    customerAccountId: entry.customerAccountId,
-    expectation: {
-      contentMd: entry.contentMd,
-      equipmentModelId: entry.equipmentModelId,
-      errorCode: entry.errorCode,
-      faultDescription: entry.faultDescription,
-    },
+    customerAccountId: Number(readPr5SnapshotColumn(entry.snapshot, 'customer_account_id')),
     id: entry.id,
-    requestNo: entry.requestNo,
+    requestNo: readPr5SnapshotColumn(entry.snapshot, 'request_no'),
     responseIds: [...responseIds],
+    snapshot: entry.snapshot,
   };
 }
 
-/** ledger 资料条目 → **完整字段绑定**（P1-1）：与 locator / 回收预检 / 事务内 DELETE 共用同一预期 */
+/** ledger 资料条目 → **完整行绑定**（P1-1）：与 locator / 回收预检 / 事务内 DELETE 共用同一份整行快照 */
 export function toPr5ReferenceDocumentBinding(
   document: Pr5CleanupSafetyLedgerDocument,
   titleKeyword: string,
 ): Pr5ReferenceDocumentBinding {
   return {
-    createdByAccountId: document.createdByAccountId,
-    expectation: {
-      contentText: document.contentText,
-      documentType: document.documentType,
-      equipmentModelId: document.equipmentModelId,
-      storageBackend: document.storageBackend,
-      storageReference: document.storageReference,
-      title: document.title,
-    },
+    createdByAccountId: Number(readPr5SnapshotColumn(document.snapshot, 'created_by_account_id')),
     id: document.id,
+    snapshot: document.snapshot,
     titleKeyword,
   };
 }
@@ -550,8 +541,11 @@ function planPr5CleanupSafetyReclaim(ledger: Pr5CleanupSafetyLedger): Pr5Cleanup
       continue;
     }
 
-    // 完整字段核验（P1-1）：与 locator **共用同一断言**，任一非三因子字段被外部改写即零写入失败关闭
-    assertPr5CleanupSafetyRequestRowMatches(entry, readPr5CleanupSafetyRequestRow(entry.id));
+    // 完整行核验（P1-1）：与 locator **共用同一断言**，任一字段（含非三因子）被外部改写即零写入失败关闭
+    assertPr5CleanupSafetyRowSnapshotMatches(
+      entry.snapshot,
+      readPr5FullRowSnapshot('repair_request', entry.id),
+    );
 
     // 先按 ledger 记录的回复集合做绑定核验（未知子行 → pr5_engineer_response_child_binding_must_match_this_run），
     // 再由回复闭包逐字段核验每个子行；两步都在任何 DELETE 之前，发现冲突即零写入失败关闭
@@ -585,10 +579,10 @@ function planPr5CleanupSafetyReclaim(ledger: Pr5CleanupSafetyLedger): Pr5Cleanup
       continue;
     }
 
-    // 完整字段核验（P1-1）：与 locator 共用同一断言；标题 / 类型 / 正文 / 存储 / 型号任一被改写即失败关闭
-    assertPr5CleanupSafetyDocumentRowMatches(
-      document,
-      readPr5CleanupSafetyDocumentRow(document.id),
+    // 完整行核验（P1-1）：与 locator 共用同一断言；标题 / 类型 / 正文 / 存储 / 型号 / 时间戳任一被改写即失败关闭
+    assertPr5CleanupSafetyRowSnapshotMatches(
+      document.snapshot,
+      readPr5FullRowSnapshot('reference_document', document.id),
     );
 
     const binding = toPr5ReferenceDocumentBinding(document, ledger.keyword);
@@ -693,167 +687,84 @@ export interface Pr5CleanupSafetyResidue {
   }>;
 }
 
-/** mysql -N -B 的 NULL 列以字面量 `NULL` 返回；其余值原样返回 */
-function parsePr5CleanupSafetyNullableText(raw: string): string | null {
-  return raw === 'NULL' ? null : raw;
-}
+/** 表名 → 失败信息中的中文标签（统一断言与恢复原语共用） */
+const PR5_CLEANUP_SAFETY_TABLE_LABELS: Readonly<Record<Pr5CleanupTable, string>> = {
+  engineer_response: '残留回复',
+  reference_document: '残留资料',
+  repair_request: '残留维修申请',
+};
 
-function parsePr5CleanupSafetyNullablePositiveInteger(raw: string, context: string): number | null {
-  if (raw === 'NULL') {
-    return null;
-  }
-
-  const value = Number(raw);
-
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`${context}字段解析异常：${JSON.stringify(raw)}`);
-  }
-
-  return value;
-}
-
-interface Pr5CleanupSafetyDocumentRow {
-  readonly createdByAccountId: number;
-  readonly contentText: string;
-  readonly title: string;
-  readonly documentType: string;
-  readonly storageBackend: string | null;
-  readonly storageReference: string | null;
-  readonly equipmentModelId: number | null;
-}
-
-/** 只读读取资料行的**全部归属字段**（静态白名单列，非按需子集） */
-function readPr5CleanupSafetyDocumentRow(id: number): Pr5CleanupSafetyDocumentRow {
-  const raw = mysqlQuery(
-    'SELECT created_by_account_id, content_text, title, document_type, storage_backend, storage_reference, equipment_model_id' +
-      ` FROM reference_document WHERE id = ${id}`,
-  ).trim();
-  const columns = raw.split('\t');
-
-  if (columns.length !== 7) {
-    throw new Error(`残留资料 ${id} 字段读取异常：${JSON.stringify(raw)}`);
-  }
-
-  const [
-    ownerRaw,
-    contentText,
-    title,
-    documentType,
-    storageBackendRaw,
-    storageReferenceRaw,
-    equipmentModelRaw,
-  ] = columns;
-  const createdByAccountId = Number(ownerRaw);
-
-  if (!Number.isSafeInteger(createdByAccountId) || createdByAccountId <= 0) {
-    throw new Error(`残留资料 ${id} 创建人字段解析异常：${JSON.stringify(raw)}`);
-  }
-
-  return {
-    contentText,
-    createdByAccountId,
-    documentType,
-    equipmentModelId: parsePr5CleanupSafetyNullablePositiveInteger(
-      equipmentModelRaw,
-      `残留资料 ${id} 设备型号`,
-    ),
-    storageBackend: parsePr5CleanupSafetyNullableText(storageBackendRaw),
-    storageReference: parsePr5CleanupSafetyNullableText(storageReferenceRaw),
-    title,
-  };
-}
-
-function assertPr5CleanupSafetyDocumentRowMatches(
-  recorded: Pr5CleanupSafetyLedgerDocument,
-  actual: Pr5CleanupSafetyDocumentRow,
+/**
+ * **唯一**的「ledger 记录快照 vs 数据库当前整行快照」逐字段核验原语（P1-1 共用口径）：
+ * locator 与 reclaimer 只读预检都调用本函数，覆盖**全部 canonical 列**（13/7/15，含主键与时间戳），
+ * 不再存在「locator 核验 A 组字段、reclaimer 核验 B 组字段」的两套口径。
+ *
+ * 失败信息含表标签 / 主键 / 字段名 / 期望值 / 实际值，且在任何 DELETE 之前抛出（零写入失败关闭）。
+ */
+export function assertPr5CleanupSafetyRowSnapshotMatches(
+  recorded: Pr5RowSnapshot,
+  actual: Pr5RowSnapshot,
 ): void {
-  const pairs: ReadonlyArray<readonly [string, unknown, unknown]> = [
-    ['created_by_account_id', recorded.createdByAccountId, actual.createdByAccountId],
-    ['title', recorded.title, actual.title],
-    ['document_type', recorded.documentType, actual.documentType],
-    ['content_text', recorded.contentText, actual.contentText],
-    ['storage_backend', recorded.storageBackend, actual.storageBackend],
-    ['storage_reference', recorded.storageReference, actual.storageReference],
-    ['equipment_model_id', recorded.equipmentModelId, actual.equipmentModelId],
-  ];
+  if (recorded.table !== actual.table) {
+    throw new Error(
+      `清理安全组快照表名不一致：ledger ${JSON.stringify(recorded.table)} 实际 ${JSON.stringify(actual.table)}`,
+    );
+  }
 
-  for (const [field, expected, value] of pairs) {
+  assertPr5RowSnapshotShape(recorded);
+  assertPr5RowSnapshotShape(actual);
+
+  const label = PR5_CLEANUP_SAFETY_TABLE_LABELS[recorded.table];
+  const id = readPr5SnapshotColumn(recorded, 'id');
+
+  for (const spec of readPr5ColumnSpecs(recorded.table)) {
+    const expected = readPr5SnapshotColumn(recorded, spec.name);
+    const value = readPr5SnapshotColumn(actual, spec.name);
+
     if (expected !== value) {
       throw new Error(
-        `残留资料 ${recorded.id} 字段 ${field} 与 ledger 记录不符（疑似被外部改写），失败关闭，拒绝删除：期望 ${JSON.stringify(expected)} 实际 ${JSON.stringify(value)}`,
+        `${label} ${id} 字段 ${spec.name} 与 ledger 记录不符（疑似被外部改写），失败关闭，拒绝删除：期望 ${JSON.stringify(expected)} 实际 ${JSON.stringify(value)}`,
       );
     }
   }
 }
 
-interface Pr5CleanupSafetyRequestRow {
-  readonly id: number;
-  readonly requestNo: string;
-  readonly customerAccountId: number;
-  readonly equipmentModelId: number | null;
-  readonly errorCode: string;
-  readonly faultDescription: string;
-  readonly contentMd: string;
+/**
+ * 按整行快照**全列恢复**目标行（含显式恢复 `updated_at`）：用于反例用例在改写字段后把基线还原，
+ * 使后续精确回收可命中同一 WHERE。仅用于测试反例的 teardown，绝不用于生产清理路径。
+ */
+export function restorePr5CleanupSafetyRowToSnapshot(snapshot: Pr5RowSnapshot): void {
+  assertPr5RowSnapshotShape(snapshot);
+
+  const id = readPr5SnapshotColumn(snapshot, 'id');
+  const assignments = readPr5ColumnSpecs(snapshot.table)
+    .filter((spec) => spec.name !== 'id')
+    .map((spec) => buildPr5ColumnAssignment(spec, readPr5SnapshotColumn(snapshot, spec.name)));
+
+  mysqlQuery(`UPDATE ${snapshot.table} SET ${assignments.join(', ')} WHERE id = ${id}`);
 }
 
 /**
- * 按主键只读读取维修申请**完整行字段**（P1-1 共用原语）：locator 与 reclaimer 预检都经由此读取，
- * 再交由同一断言比对，避免「locator 一套口径、reclaimer 另一套口径」。
+ * schema 双向差集（计划 §S0 第 4 项）：canonical 列清单必须与专用库 information_schema 完全一致，
+ * 多列 / 缺列 / canonical 内重复任一出现即失败，杜绝「代码字段集与真实库漂移」。
  */
-function readPr5CleanupSafetyRequestRow(id: number): Pr5CleanupSafetyRequestRow {
-  const raw = mysqlQuery(
-    `SELECT id, request_no, customer_account_id, equipment_model_id, error_code, fault_description, content_md FROM repair_request WHERE id = ${id}`,
-  ).trim();
-  const columns = raw.split('\t');
+export function assertPr5CleanupSafetySchemaMatchesCanonical(): void {
+  for (const table of PR5_CLEANUP_SAFETY_TABLES) {
+    const actual = mysqlQuery(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' ORDER BY ORDINAL_POSITION`,
+    )
+      .split('\n')
+      .map((value) => value.trim())
+      .filter((value) => value !== '');
+    const diff = diffPr5ColumnSets(actual, readPr5CanonicalColumns(table));
 
-  if (columns.length !== 7) {
-    throw new Error(`残留维修申请字段读取异常：${JSON.stringify(raw)}`);
-  }
-
-  const [idRaw, requestNo, customerRaw, equipmentModelRaw, errorCode, faultDescription, contentMd] =
-    columns;
-  const parsedId = Number(idRaw);
-  const customerAccountId = Number(customerRaw);
-
-  if (!Number.isSafeInteger(parsedId) || parsedId !== id) {
-    throw new Error(`残留维修申请 ID 解析异常：${JSON.stringify(raw)}`);
-  }
-
-  if (!Number.isSafeInteger(customerAccountId) || customerAccountId <= 0) {
-    throw new Error(`残留维修申请客户账号解析异常：${JSON.stringify(raw)}`);
-  }
-
-  return {
-    contentMd,
-    customerAccountId,
-    equipmentModelId: parsePr5CleanupSafetyNullablePositiveInteger(
-      equipmentModelRaw,
-      `残留维修申请 ${id} 设备型号`,
-    ),
-    errorCode,
-    faultDescription,
-    id,
-    requestNo,
-  };
-}
-
-function assertPr5CleanupSafetyRequestRowMatches(
-  recorded: Pr5CleanupSafetyLedgerRequest,
-  actual: Pr5CleanupSafetyRequestRow,
-): void {
-  const pairs: ReadonlyArray<readonly [string, unknown, unknown]> = [
-    ['request_no', recorded.requestNo, actual.requestNo],
-    ['customer_account_id', recorded.customerAccountId, actual.customerAccountId],
-    ['equipment_model_id', recorded.equipmentModelId, actual.equipmentModelId],
-    ['error_code', recorded.errorCode, actual.errorCode],
-    ['fault_description', recorded.faultDescription, actual.faultDescription],
-    ['content_md', recorded.contentMd, actual.contentMd],
-  ];
-
-  for (const [field, expected, value] of pairs) {
-    if (expected !== value) {
+    if (
+      diff.duplicatesInCanonical.length > 0 ||
+      diff.missingInActual.length > 0 ||
+      diff.unexpectedInActual.length > 0
+    ) {
       throw new Error(
-        `残留维修申请 ${recorded.id} 字段 ${field} 与 ledger 记录不符（疑似被外部改写），失败关闭，拒绝删除：期望 ${JSON.stringify(expected)} 实际 ${JSON.stringify(value)}`,
+        `PR5 canonical 列清单与库 schema 漂移（${table}）：缺 ${JSON.stringify(diff.missingInActual)} / 多 ${JSON.stringify(diff.unexpectedInActual)} / canonical 重复 ${JSON.stringify(diff.duplicatesInCanonical)}`,
       );
     }
   }
@@ -868,36 +779,32 @@ function readPr5CleanupSafetyRunResponses(
   requestId: number,
   ledger: Pr5CleanupSafetyLedger,
 ): Pr5EngineerResponseBinding[] {
+  const columns = readPr5CanonicalColumns('engineer_response');
   const rows = mysqlQuery(
-    `SELECT id, request_id, engineer_account_id, customer_account_id, response_text FROM engineer_response WHERE request_id = ${requestId}`,
+    `SELECT ${columns.join(', ')} FROM engineer_response WHERE request_id = ${requestId}`,
   )
     .split('\n')
-    .map((value) => value.trim())
+    .map((value) => value.replace(/\r$/, ''))
     .filter((value) => value !== '');
 
   const recordedById = new Map(ledger.engineerResponses.map((binding) => [binding.id, binding]));
   const responses: Pr5EngineerResponseBinding[] = [];
 
   for (const raw of rows) {
-    const columns = raw.split('\t');
+    const rawValues = raw.split('\t');
 
-    if (columns.length !== 5) {
+    if (rawValues.length !== columns.length) {
       throw new Error(`残留回复字段读取异常：${JSON.stringify(raw)}`);
     }
 
-    const [idRaw, requestIdRaw, engineerRaw, customerRaw, responseText] = columns;
-    const id = Number(idRaw);
-    const rowRequestId = Number(requestIdRaw);
-    const engineerAccountId = Number(engineerRaw);
-    const customerAccountId = Number(customerRaw);
+    const values: Record<string, string> = {};
+    columns.forEach((column, index) => {
+      values[column] = rawValues[index] ?? 'NULL';
+    });
 
-    if (
-      ![id, rowRequestId, engineerAccountId, customerAccountId].every(
-        (v) => Number.isSafeInteger(v) && v > 0,
-      )
-    ) {
-      throw new Error(`残留回复字段解析异常：${JSON.stringify(raw)}`);
-    }
+    const actual = createPr5RowSnapshot('engineer_response', values);
+    const id = Number(readPr5SnapshotColumn(actual, 'id'));
+    const rowRequestId = Number(readPr5SnapshotColumn(actual, 'request_id'));
 
     if (rowRequestId !== requestId) {
       throw new Error(`残留回复 ${id} 父申请不符：期望 ${requestId} 实际 ${rowRequestId}`);
@@ -907,22 +814,22 @@ function readPr5CleanupSafetyRunResponses(
 
     if (recorded === undefined) {
       throw new Error(
-        `残留回复 ${id} 未记录在本轮 ledger（疑似外部 / 异轮回复），失败关闭，拒绝删除：${JSON.stringify(responseText)}`,
+        `残留回复 ${id} 未记录在本轮 ledger（疑似外部 / 异轮回复），失败关闭，拒绝删除：${JSON.stringify(readPr5SnapshotColumn(actual, 'response_text'))}`,
       );
     }
 
-    if (
-      recorded.requestId !== rowRequestId ||
-      recorded.engineerAccountId !== engineerAccountId ||
-      recorded.customerAccountId !== customerAccountId ||
-      recorded.responseText !== responseText
-    ) {
-      throw new Error(
-        `残留回复 ${id} 字段与 ledger 记录不符（疑似被外部改写），失败关闭，拒绝删除：${JSON.stringify({ customer_account_id: customerAccountId, engineer_account_id: engineerAccountId, response_text: responseText })}`,
-      );
-    }
+    // 完整行核验（与 reclaimer 预检 / locator 共用同一断言）：含 resolution_status / created_at
+    assertPr5CleanupSafetyRowSnapshotMatches(recorded.snapshot, actual);
 
-    responses.push({ customerAccountId, engineerAccountId, id, requestId, responseText });
+    responses.push({
+      customerAccountId: Number(readPr5SnapshotColumn(actual, 'customer_account_id')),
+      engineerAccountId: Number(readPr5SnapshotColumn(actual, 'engineer_account_id')),
+      id,
+      requestId,
+      responseText: readPr5SnapshotColumn(actual, 'response_text'),
+      // 绑定使用数据库当前整行快照（已与 ledger 记录逐字段核验相等），保证 DELETE WHERE 精确命中
+      snapshot: actual,
+    });
   }
 
   for (const recorded of ledger.engineerResponses) {
@@ -971,13 +878,14 @@ export function locatePr5CleanupSafetyResidueByRunId(
   const foundDocumentIds = new Set<number>();
 
   for (const id of findPr5ReferenceDocumentIdsByKeyword(keyword)) {
-    const actual = readPr5CleanupSafetyDocumentRow(id);
+    const actual = readPr5FullRowSnapshot('reference_document', id);
+    const owner = Number(readPr5SnapshotColumn(actual, 'created_by_account_id'));
 
     foundDocumentIds.add(id);
 
-    if (actual.createdByAccountId !== expected.documentOwnerAccountId) {
+    if (owner !== expected.documentOwnerAccountId) {
       throw new Error(
-        `残留资料 ${id} 创建人与预期不符（同标识异主），失败关闭，拒绝删除：期望 ${expected.documentOwnerAccountId} 实际 ${actual.createdByAccountId}`,
+        `残留资料 ${id} 创建人与预期不符（同标识异主），失败关闭，拒绝删除：期望 ${expected.documentOwnerAccountId} 实际 ${owner}`,
       );
     }
 
@@ -989,9 +897,14 @@ export function locatePr5CleanupSafetyResidueByRunId(
       );
     }
 
-    assertPr5CleanupSafetyDocumentRowMatches(recorded, actual);
-    // 与 reclaimer 预检 / 事务内 DELETE 共用同一完整字段绑定（P1-1：不产生两套口径）
-    documents.push(toPr5ReferenceDocumentBinding(recorded, keyword));
+    // 完整行核验（P1-1）：与 reclaimer 预检共用同一断言；返回**从数据库重建**的完整 binding
+    assertPr5CleanupSafetyRowSnapshotMatches(recorded.snapshot, actual);
+    documents.push({
+      createdByAccountId: owner,
+      id,
+      snapshot: actual,
+      titleKeyword: keyword,
+    });
   }
 
   // 闭包：ledger 记录的资料若仍在库，必须能按本轮标识定位到（标题标识被移除时同样失败关闭）
@@ -1008,7 +921,7 @@ export function locatePr5CleanupSafetyResidueByRunId(
   }
 
   const requestRows = mysqlQuery(
-    `SELECT id, request_no, customer_account_id, equipment_model_id, error_code, fault_description, content_md FROM repair_request WHERE fault_description LIKE '%${runId}%'`,
+    `SELECT id FROM repair_request WHERE fault_description LIKE '%${runId}%'`,
   )
     .split('\n')
     .map((value) => value.trim())
@@ -1021,28 +934,15 @@ export function locatePr5CleanupSafetyResidueByRunId(
   }> = [];
   const foundRequestIds = new Set<number>();
 
-  for (const raw of requestRows) {
-    const columns = raw.split('\t');
-
-    if (columns.length !== 7) {
-      throw new Error(`残留维修申请字段读取异常：${JSON.stringify(raw)}`);
-    }
-
-    const [
-      idRaw,
-      requestNo,
-      customerRaw,
-      equipmentModelRaw,
-      errorCode,
-      faultDescription,
-      contentMd,
-    ] = columns;
-    const id = Number(idRaw);
-    const customer = Number(customerRaw);
+  for (const rawId of requestRows) {
+    const id = Number(rawId);
 
     if (!Number.isSafeInteger(id) || id <= 0) {
-      throw new Error(`残留维修申请 ID 解析异常：${JSON.stringify(raw)}`);
+      throw new Error(`残留维修申请 ID 解析异常：${JSON.stringify(rawId)}`);
     }
+
+    const actual = readPr5FullRowSnapshot('repair_request', id);
+    const customer = Number(readPr5SnapshotColumn(actual, 'customer_account_id'));
 
     foundRequestIds.add(id);
 
@@ -1060,29 +960,20 @@ export function locatePr5CleanupSafetyResidueByRunId(
       );
     }
 
-    const actual: Pr5CleanupSafetyRequestRow = {
-      contentMd,
-      customerAccountId: customer,
-      equipmentModelId: parsePr5CleanupSafetyNullablePositiveInteger(
-        equipmentModelRaw,
-        `残留维修申请 ${id} 设备型号`,
-      ),
-      errorCode,
-      faultDescription,
-      id,
-      requestNo,
-    };
-
-    assertPr5CleanupSafetyRequestRowMatches(recorded, actual);
+    // 完整行核验（P1-1）：与 reclaimer 预检共用同一断言
+    assertPr5CleanupSafetyRowSnapshotMatches(recorded.snapshot, actual);
 
     const responses = readPr5CleanupSafetyRunResponses(id, ledger);
 
     requests.push({
-      // 与 reclaimer 预检 / 事务内 DELETE 共用同一完整字段绑定（P1-1：不产生两套口径）
-      binding: toPr5RepairRequestBinding(
-        recorded,
-        responses.map((response) => response.id),
-      ),
+      binding: {
+        customerAccountId: customer,
+        id,
+        requestNo: readPr5SnapshotColumn(actual, 'request_no'),
+        responseIds: responses.map((response) => response.id),
+        // 从数据库重建的完整行快照（已核验与 ledger 记录逐字段相等）
+        snapshot: actual,
+      },
       responses,
     });
   }

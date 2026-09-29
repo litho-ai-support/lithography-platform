@@ -35,10 +35,13 @@ import {
   deletePr5RepairRequestBound,
   findPr5ReferenceDocumentIdsByKeyword,
   PR5_SEED_ACCEPTED_REQUEST_NO,
+  type Pr5ReferenceDocumentBinding,
   type Pr5RepairRequestBinding,
   readPr5PrimaryKeySnapshot,
+  readPr5ReferenceDocumentBindingFromDb,
   readPr5ReferenceDocumentDeprecatedById,
   readPr5ReferenceDocumentSnapshot,
+  readPr5RepairRequestBindingFromDb,
   readPr5RepairRequestState,
 } from '../e2e/helpers/pr5-real-flow';
 import {
@@ -332,9 +335,41 @@ function expectPr5RepairRequestReclaimed(binding: Pr5RepairRequestBinding | null
 }
 
 /**
+ * 本轮自建维修申请的物理回收（P1-1）：teardown 时**按当前库行重新读取整行快照**再删除——
+ * 本轮自建行会被 UI 合法软删 / 接单 / 追加回复，创建时快照已不再等于当前行；
+ * 用「主键 + 三因子 + 本轮回复集合」定位，但 WHERE 仍是当下完整行快照（口径不降低）。
+ * 行已不存在（重入）则幂等跳过。
+ */
+function reclaimPr5RepairRequestBound(binding: Pr5RepairRequestBinding | null): void {
+  if (binding === null) {
+    return;
+  }
+
+  const present = Number(
+    mysqlQuery(`SELECT COUNT(*) FROM repair_request WHERE id = ${binding.id}`),
+  );
+
+  if (present === 0) {
+    return;
+  }
+
+  deletePr5RepairRequestBound(
+    readPr5RepairRequestBindingFromDb({
+      customerAccountId: binding.customerAccountId,
+      id: binding.id,
+      requestNo: binding.requestNo,
+      responseIds: binding.responseIds,
+    }),
+  );
+}
+
+/**
  * 本轮自建资料按精确 ID 物理回收（S4：编排抽取到共享 helper）：
  * 「全量预检 → 精确删行 → 按已核验引用删文件」由 cleanupPr5ReferenceDocumentsBound 完成，
  * 残留回执经 assertPr5CleanupReceiptClean 判红——任一行/文件残留即失败，绝不静默通过。
+ *
+ * P1-1：teardown 时**按当前库行重新读取整行快照**再删除（本轮自建资料可能已被 UI 合法编辑 /
+ * 软删，创建时快照不再等于当前行）；行已不存在则跳过。禁止用部分字段绑定冒充完整行。
  */
 function cleanupPr5Documents(adminAccountId: number, capturedIds: readonly number[]): void {
   const ids = new Set<number>(capturedIds);
@@ -343,15 +378,25 @@ function cleanupPr5Documents(adminAccountId: number, capturedIds: readonly numbe
     ids.add(id);
   }
 
-  if (ids.size === 0) {
-    return;
+  const bindings: Pr5ReferenceDocumentBinding[] = [];
+
+  for (const id of ids) {
+    if (Number(mysqlQuery(`SELECT COUNT(*) FROM reference_document WHERE id = ${id}`)) === 0) {
+      continue;
+    }
+
+    bindings.push(
+      readPr5ReferenceDocumentBindingFromDb({
+        createdByAccountId: adminAccountId,
+        id,
+        titleKeyword: DOC_KEYWORD,
+      }),
+    );
   }
 
-  const bindings = [...ids].map((id) => ({
-    createdByAccountId: adminAccountId,
-    id,
-    titleKeyword: DOC_KEYWORD,
-  }));
+  if (bindings.length === 0) {
+    return;
+  }
 
   assertPr5CleanupReceiptClean(cleanupPr5ReferenceDocumentsBound(bindings));
 }
@@ -424,7 +469,12 @@ test.describe('PR5 real link permission and business closure', () => {
         // S5-7：落库主键由数据库生成（不命中创建前快照）
         const generatedId = Number(findRepairRequestByRequestNo(requestNo, 'id'));
         assertPr5GeneratedId(generatedId, primaryKeySnapshot, '维修申请');
-        binding = { customerAccountId, id: generatedId, requestNo, responseIds: [] };
+        binding = readPr5RepairRequestBindingFromDb({
+          customerAccountId,
+          id: generatedId,
+          requestNo,
+          responseIds: [],
+        });
 
         // 成功页 → 列表：新申请按 createdAt DESC 置顶且为待接单
         await page.getByRole('button', { name: '查看维修申请' }).click();
@@ -461,9 +511,7 @@ test.describe('PR5 real link permission and business closure', () => {
         assertBrowserRequestsBoundToDedicatedOrigins(browserRequestUrls);
       },
       () => {
-        if (binding !== null) {
-          deletePr5RepairRequestBound(binding);
-        }
+        reclaimPr5RepairRequestBound(binding);
       },
     );
 
@@ -486,12 +534,12 @@ test.describe('PR5 real link permission and business closure', () => {
       async () => {
         const created = await createPr5RepairRequestViaApi(env, `已接单拒绝链路：${FAULT_TAG}`);
         assertPr5GeneratedId(created.id, primaryKeySnapshot, '维修申请');
-        binding = {
+        binding = readPr5RepairRequestBindingFromDb({
           customerAccountId,
           id: created.id,
           requestNo: created.requestNo,
           responseIds: [],
-        };
+        });
 
         // 真实接单（工程师身份）
         await acceptPr5RepairRequestViaApi(env, created.id);
@@ -535,9 +583,7 @@ test.describe('PR5 real link permission and business closure', () => {
         });
       },
       () => {
-        if (binding !== null) {
-          deletePr5RepairRequestBound(binding);
-        }
+        reclaimPr5RepairRequestBound(binding);
       },
     );
   });
@@ -558,12 +604,14 @@ test.describe('PR5 real link permission and business closure', () => {
       async () => {
         const created = await createPr5RepairRequestViaApi(env, `回复模块链路：${FAULT_TAG}`);
         assertPr5GeneratedId(created.id, primaryKeySnapshot, '维修申请');
-        binding = {
+        const createdBinding = readPr5RepairRequestBindingFromDb({
           customerAccountId,
           id: created.id,
           requestNo: created.requestNo,
           responseIds: [],
-        };
+        });
+
+        binding = createdBinding;
 
         // D1-1 消费：Seed 预置「已接单且有回复」申请作为真实数据正控（只读，不写入）
         expect(
@@ -602,7 +650,7 @@ test.describe('PR5 real link permission and business closure', () => {
         }
 
         // P1-3：记录本轮回复 ID，清理时按该集合精确绑定子行（外部回复会使清理失败关闭）
-        binding = { ...binding, responseIds: [response.id] };
+        binding = { ...createdBinding, responseIds: [response.id] };
 
         // 有回复：计数、工程师昵称、状态标签与正文全部可见；已接单故无删除入口
         await page.reload();
@@ -613,9 +661,7 @@ test.describe('PR5 real link permission and business closure', () => {
         await expect(page.getByRole('button', { name: '删除申请' })).toHaveCount(0);
       },
       () => {
-        if (binding !== null) {
-          deletePr5RepairRequestBound(binding);
-        }
+        reclaimPr5RepairRequestBound(binding);
       },
     );
   });

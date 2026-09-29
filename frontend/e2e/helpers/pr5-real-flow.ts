@@ -54,17 +54,388 @@ export const PR5_DOC_KEYWORD_PATTERN = /^PR5真实链路验收行·[a-z0-9]{8,32
  */
 const PR5_DOC_TITLE_PREFIX_PATTERN = /^PR5真实链路验收行·[a-z0-9]{8,32}（[^%_\\'"\s]{0,32}$/;
 
-/** 资料行快照列白名单（代码内静态；任何列变更须同步阅读端前后比对断言） */
-const PR5_REFERENCE_DOCUMENT_SNAPSHOT_COLUMNS = [
-  'title',
-  'document_type',
-  'equipment_model_id',
-  'description',
-  'content_text',
-  'original_filename',
-  'mime_type',
-  'deprecated',
-] as const;
+// ---------------------------------------------------------------------------
+// 完整行 canonical 列定义（P1-1 / 计划 §3.1、§3.2）
+//
+// 每张表**只保留一份** canonical 列清单，由它统一派生：
+//   1) 行读取 SELECT 的列顺序；2) 快照解析顺序；3) 只读预检的逐字段比较；
+//   4) 事务内精确 WHERE；5) schema 差集测试的预期集合；6) 失败信息中的字段名。
+// 禁止 locator / reclaimer / delete helper 各自维护字段子集。
+// ---------------------------------------------------------------------------
+
+/** 本组清理与快照涉及的三张表（唯一表白名单） */
+export type Pr5CleanupTable = 'engineer_response' | 'reference_document' | 'repair_request';
+
+/** 每个 canonical 列的解析类型（正整数 / nullable 正整数 / 枚举 / 文本 / tinyint / timestamp） */
+export type Pr5ColumnKind =
+  | 'enumResolutionStatus'
+  | 'nullablePositiveInteger'
+  | 'nullableText'
+  | 'nullableTimestamp'
+  | 'positiveInteger'
+  | 'text'
+  | 'timestamp'
+  | 'tinyint';
+
+export interface Pr5ColumnSpec {
+  readonly kind: Pr5ColumnKind;
+  readonly name: string;
+}
+
+/** repair_request 13 列（与 1775201000000-create-repair-request-table.migration.ts 一致） */
+export const PR5_REPAIR_REQUEST_COLUMN_SPECS = [
+  { kind: 'positiveInteger', name: 'id' },
+  { kind: 'text', name: 'request_no' },
+  { kind: 'positiveInteger', name: 'customer_account_id' },
+  { kind: 'positiveInteger', name: 'equipment_model_id' },
+  { kind: 'text', name: 'error_code' },
+  { kind: 'text', name: 'fault_description' },
+  { kind: 'text', name: 'content_md' },
+  { kind: 'timestamp', name: 'created_at' },
+  { kind: 'tinyint', name: 'is_accepted' },
+  { kind: 'nullablePositiveInteger', name: 'accepted_by_engineer_account_id' },
+  { kind: 'nullableTimestamp', name: 'accepted_at' },
+  { kind: 'tinyint', name: 'deprecated' },
+  { kind: 'nullableTimestamp', name: 'deleted_at' },
+] as const satisfies readonly Pr5ColumnSpec[];
+
+/** engineer_response 7 列（与 1775201400000-create-engineer-response-table.migration.ts 一致） */
+export const PR5_ENGINEER_RESPONSE_COLUMN_SPECS = [
+  { kind: 'positiveInteger', name: 'id' },
+  { kind: 'positiveInteger', name: 'request_id' },
+  { kind: 'positiveInteger', name: 'engineer_account_id' },
+  { kind: 'positiveInteger', name: 'customer_account_id' },
+  { kind: 'enumResolutionStatus', name: 'resolution_status' },
+  { kind: 'text', name: 'response_text' },
+  { kind: 'timestamp', name: 'created_at' },
+] as const satisfies readonly Pr5ColumnSpec[];
+
+/** reference_document 15 列（与 1775201500000-create-reference-document-table.migration.ts 一致） */
+export const PR5_REFERENCE_DOCUMENT_COLUMN_SPECS = [
+  { kind: 'positiveInteger', name: 'id' },
+  { kind: 'text', name: 'title' },
+  { kind: 'text', name: 'document_type' },
+  { kind: 'nullablePositiveInteger', name: 'equipment_model_id' },
+  { kind: 'nullableText', name: 'description' },
+  { kind: 'nullableText', name: 'original_filename' },
+  { kind: 'nullableText', name: 'mime_type' },
+  { kind: 'nullableText', name: 'content_text' },
+  { kind: 'nullableText', name: 'storage_backend' },
+  { kind: 'nullableText', name: 'storage_reference' },
+  { kind: 'positiveInteger', name: 'created_by_account_id' },
+  { kind: 'tinyint', name: 'deprecated' },
+  { kind: 'nullableTimestamp', name: 'deleted_at' },
+  { kind: 'timestamp', name: 'created_at' },
+  { kind: 'timestamp', name: 'updated_at' },
+] as const satisfies readonly Pr5ColumnSpec[];
+
+const PR5_TABLE_COLUMN_SPECS: Readonly<Record<Pr5CleanupTable, readonly Pr5ColumnSpec[]>> = {
+  engineer_response: PR5_ENGINEER_RESPONSE_COLUMN_SPECS,
+  reference_document: PR5_REFERENCE_DOCUMENT_COLUMN_SPECS,
+  repair_request: PR5_REPAIR_REQUEST_COLUMN_SPECS,
+};
+
+export function assertPr5CleanupTable(table: string): asserts table is Pr5CleanupTable {
+  if (!(table in PR5_TABLE_COLUMN_SPECS)) {
+    throw new Error(`PR5 完整行目标表未通过白名单校验，拒绝查询：${JSON.stringify(table)}`);
+  }
+}
+
+/** 该表的 canonical 列定义（顺序即 SELECT / WHERE 顺序） */
+export function readPr5ColumnSpecs(table: Pr5CleanupTable): readonly Pr5ColumnSpec[] {
+  return PR5_TABLE_COLUMN_SPECS[table];
+}
+
+/** 该表的 canonical 列名清单（schema 差集测试的预期集合） */
+export function readPr5CanonicalColumns(table: Pr5CleanupTable): readonly string[] {
+  return PR5_TABLE_COLUMN_SPECS[table].map((spec) => spec.name);
+}
+
+export interface Pr5ColumnSetDiff {
+  readonly duplicatesInCanonical: readonly string[];
+  readonly missingInActual: readonly string[];
+  readonly unexpectedInActual: readonly string[];
+}
+
+/**
+ * canonical 与 information_schema 的**双向差集**（计划 §S0 第 4 项）。
+ *
+ * 纯函数：真实库比对与 unit 红/绿对照（故意删掉一个 canonical 字段）共用同一实现，
+ * 避免「测试声称覆盖 schema 漂移、实际另有口径」。
+ */
+export function diffPr5ColumnSets(
+  actual: readonly string[],
+  canonical: readonly string[],
+): Pr5ColumnSetDiff {
+  const actualSet = new Set(actual);
+  const canonicalSet = new Set(canonical);
+  const seen = new Set<string>();
+  const duplicatesInCanonical: string[] = [];
+
+  for (const column of canonical) {
+    if (seen.has(column)) {
+      duplicatesInCanonical.push(column);
+    }
+
+    seen.add(column);
+  }
+
+  return {
+    duplicatesInCanonical,
+    missingInActual: canonical.filter((column) => !actualSet.has(column)),
+    unexpectedInActual: actual.filter((column) => !canonicalSet.has(column)),
+  };
+}
+
+const PR5_POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
+const PR5_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/;
+const PR5_RESOLUTION_STATUSES = ['PENDING', 'RESOLVED'] as const;
+
+/**
+ * 数据库读回文本的形态校验（P1-1）。
+ *
+ * 快照文本来自 `mysql -B` 的**单行**输出：TAB / LF / CR / NUL 已被 batch 模式转义为
+ * `\t` / `\n` / `\r` / `\0`，因此合法的回读值**不得**含原始控制字符。出现原始 CR / LF /
+ * TAB / NUL 说明取值不是规范回读结果，直接拒绝，避免悄悄破坏后续按行/制表符解析。
+ *
+ * 引号与反斜杠**允许**存在：它们由 batch 转义与 `encodePr5SqlStringLiteral` 一一对应地
+ * 安全编码（计划 §3.3「安全编码」）。不再用窄白名单把真实业务文本（多行 Markdown 正文、
+ * 历史资料说明等）误判为非法。
+ */
+export const PR5_BATCH_TEXT_PATTERN = /^[^\0\r\n\t]*$/;
+
+/**
+ * 把「数据库读回的文本」编码为安全 SQL 字符串字面量（计划 §3.3）。
+ *
+ * `mysql -B` 已把值中的 TAB / LF / CR / NUL / 反斜杠转义为 `\t` / `\n` / `\r` / `\0` / `\\`，
+ * 这些序列正是 MySQL 字符串字面量的合法转义且与回读值一一对应，**再次转义会造成二次转义**。
+ * 唯一需要处理的是 batch 模式**原样输出**的单引号：转义为 `\'` 后，字面量解析结果与数据库
+ * 原值逐字节相等，杜绝拼接逃逸（已用真实 MySQL 往返验证）。
+ */
+export function encodePr5SqlStringLiteral(raw: string): string {
+  return `'${raw.replace(/'/g, "\\'")}'`;
+}
+
+function isPr5NullableKind(kind: Pr5ColumnKind): boolean {
+  return (
+    kind === 'nullablePositiveInteger' || kind === 'nullableText' || kind === 'nullableTimestamp'
+  );
+}
+
+/** 逐列的解析类型校验（快照取值合法性的唯一入口） */
+export function assertPr5ColumnValueValid(spec: Pr5ColumnSpec, raw: string, context: string): void {
+  const fail = (): never => {
+    throw new Error(`${context} 字段 ${spec.name}（${spec.kind}）取值非法：${JSON.stringify(raw)}`);
+  };
+
+  switch (spec.kind) {
+    case 'enumResolutionStatus':
+      if (!(PR5_RESOLUTION_STATUSES as readonly string[]).includes(raw)) {
+        fail();
+      }
+
+      return;
+    case 'nullablePositiveInteger':
+      if (raw === 'NULL') {
+        return;
+      }
+
+      if (!PR5_POSITIVE_INTEGER_PATTERN.test(raw) || !Number.isSafeInteger(Number(raw))) {
+        fail();
+      }
+
+      return;
+    case 'nullableText':
+      if (raw === 'NULL' || PR5_BATCH_TEXT_PATTERN.test(raw)) {
+        return;
+      }
+
+      fail();
+
+      return;
+    case 'nullableTimestamp':
+      if (raw === 'NULL' || PR5_TIMESTAMP_PATTERN.test(raw)) {
+        return;
+      }
+
+      fail();
+
+      return;
+    case 'positiveInteger':
+      if (!PR5_POSITIVE_INTEGER_PATTERN.test(raw) || !Number.isSafeInteger(Number(raw))) {
+        fail();
+      }
+
+      return;
+    case 'text':
+      if (raw === 'NULL' || !PR5_BATCH_TEXT_PATTERN.test(raw)) {
+        fail();
+      }
+
+      return;
+    case 'timestamp':
+      if (!PR5_TIMESTAMP_PATTERN.test(raw)) {
+        fail();
+      }
+
+      return;
+    case 'tinyint':
+      if (raw !== '0' && raw !== '1') {
+        fail();
+      }
+
+      return;
+    default:
+      fail();
+  }
+}
+
+/**
+ * 整行 canonical 快照：`values` 以 canonical 列名为键、以**数据库读回的规范字符串**为值
+ * （SQL NULL 保持字面量 `NULL`，timestamp(3) 保持毫秒精度字符串）。
+ */
+export interface Pr5RowSnapshot {
+  readonly table: Pr5CleanupTable;
+  readonly values: Readonly<Record<string, string>>;
+}
+
+/** 快照结构校验：列名集合必须与 canonical 完全一致（不多、不少），且每列取值合法 */
+export function assertPr5RowSnapshotShape(snapshot: Pr5RowSnapshot): void {
+  const specs = readPr5ColumnSpecs(snapshot.table);
+  const expected = new Set(specs.map((spec) => spec.name));
+
+  for (const key of Object.keys(snapshot.values)) {
+    if (!expected.has(key)) {
+      throw new Error(`完整行快照含非 canonical 字段 ${snapshot.table}.${key}，拒绝使用`);
+    }
+  }
+
+  for (const spec of specs) {
+    const raw = snapshot.values[spec.name];
+
+    if (raw === undefined) {
+      throw new Error(
+        `完整行快照缺少 canonical 字段 ${snapshot.table}.${spec.name}（禁止只绑定字段子集）`,
+      );
+    }
+
+    assertPr5ColumnValueValid(spec, raw, `完整行快照 ${snapshot.table}`);
+  }
+}
+
+/** 构造并校验整行快照（造数端与 unit 用例共用） */
+export function createPr5RowSnapshot(
+  table: Pr5CleanupTable,
+  values: Readonly<Record<string, string>>,
+): Pr5RowSnapshot {
+  const snapshot: Pr5RowSnapshot = { table, values: { ...values } };
+  assertPr5RowSnapshotShape(snapshot);
+
+  return snapshot;
+}
+
+/** 读取快照某一 canonical 列（缺失即抛错，绝不静默当成空值） */
+export function readPr5SnapshotColumn(snapshot: Pr5RowSnapshot, column: string): string {
+  const value = snapshot.values[column];
+
+  if (value === undefined) {
+    throw new Error(`快照 ${snapshot.table}.${column} 不存在（非 canonical 列）`);
+  }
+
+  return value;
+}
+
+function buildPr5ColumnValueLiteral(spec: Pr5ColumnSpec, raw: string): string {
+  switch (spec.kind) {
+    case 'nullablePositiveInteger':
+    case 'positiveInteger':
+    case 'tinyint':
+      return raw;
+    default:
+      // 文本 / 枚举 / 时间戳统一走安全编码（单引号转义），杜绝真实业务文本的拼接逃逸
+      return encodePr5SqlStringLiteral(raw);
+  }
+}
+
+/** 单列 WHERE 条件：nullable 列的 `NULL` 用 `IS NULL`，其余按类型生成字面量（白名单已校验） */
+export function buildPr5ColumnCondition(spec: Pr5ColumnSpec, raw: string): string {
+  if (isPr5NullableKind(spec.kind) && raw === 'NULL') {
+    return `${spec.name} IS NULL`;
+  }
+
+  return `${spec.name} = ${buildPr5ColumnValueLiteral(spec, raw)}`;
+}
+
+/** 整行 WHERE 条件（canonical 顺序；只读预检与事务内 DELETE 的唯一口径） */
+export function buildPr5RowConditions(snapshot: Pr5RowSnapshot): string {
+  assertPr5RowSnapshotShape(snapshot);
+
+  return readPr5ColumnSpecs(snapshot.table)
+    .map((spec) => buildPr5ColumnCondition(spec, readPr5SnapshotColumn(snapshot, spec.name)))
+    .join(' AND ');
+}
+
+/** 单列赋值（`UPDATE ... SET` 用；nullable 列显式 `= NULL`） */
+export function buildPr5ColumnAssignment(spec: Pr5ColumnSpec, raw: string): string {
+  return `${spec.name} = ${raw === 'NULL' ? 'NULL' : buildPr5ColumnValueLiteral(spec, raw)}`;
+}
+
+/**
+ * 断言「显式定位因子」与「整行快照」一致：定位因子只用于参数白名单与失败信息，
+ * 快照才是 WHERE 的唯一口径；两者不一致即拒绝（避免出现两套可漂移的口径）。
+ */
+export function assertPr5SnapshotFactorMatches(
+  snapshot: Pr5RowSnapshot,
+  column: string,
+  expected: string,
+  label: string,
+): void {
+  const actual = readPr5SnapshotColumn(snapshot, column);
+
+  if (actual !== expected) {
+    throw new Error(
+      `${label} 定位因子与整行快照不一致（${snapshot.table}.${column}）：快照 ${JSON.stringify(actual)} 定位 ${JSON.stringify(expected)}`,
+    );
+  }
+}
+
+/**
+ * 按主键读取**整行 canonical 快照**（真源 = 数据库实际落库值，覆盖数据库默认与生命周期字段）。
+ * 期望精确命中 1 行且列数等于 canonical 列数，否则抛错（不返回半残快照）。
+ */
+export function readPr5FullRowSnapshot(table: Pr5CleanupTable, id: number): Pr5RowSnapshot {
+  assertPr5CleanupTable(table);
+
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`完整行快照目标 ID 未通过正整数校验：${JSON.stringify(id)}`);
+  }
+
+  const columns = readPr5CanonicalColumns(table);
+  const rows = mysqlQuery(`SELECT ${columns.join(', ')} FROM ${table} WHERE id = ${id}`)
+    .split('\n')
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line !== '');
+
+  if (rows.length !== 1) {
+    throw new Error(`完整行快照期望精确命中 1 行，实际 ${rows.length} 行（${table} id=${id}）`);
+  }
+
+  const rawValues = rows[0].split('\t');
+
+  if (rawValues.length !== columns.length) {
+    throw new Error(
+      `完整行快照列数不符：期望 ${columns.length} 列，实际 ${rawValues.length} 列（${table} id=${id}）`,
+    );
+  }
+
+  const values: Record<string, string> = {};
+
+  columns.forEach((column, index) => {
+    values[column] = rawValues[index] ?? 'NULL';
+  });
+
+  return createPr5RowSnapshot(table, values);
+}
 
 export function buildPr5DocKeyword(runId: string): string {
   return `${PR5_DOC_TITLE_PREFIX}·${runId}`;
@@ -216,64 +587,13 @@ export function assertPr5GeneratedId(
 }
 
 /**
- * SQL 字符串字面量白名单（P1-1）：完整字段绑定要内联进 WHERE，值来自 ledger / 数据库回读，
- * 拒绝引号、反斜杠、LIKE 通配符与换行，杜绝字面量逃逸。空串非法（本轮所有绑定字段均非空）。
+ * 维修申请**完整行绑定**（P1-1）：除三因子与本轮回复集合外，必须提供数据库读回的整行
+ * canonical 快照（13/13 列）。只读预检、残留定位与事务内 DELETE 都由该快照生成同一 WHERE——
+ * 任一非三因子字段（含 `created_at` / `is_accepted` / `accepted_by_engineer_account_id` /
+ * `accepted_at` / `deprecated` / `deleted_at`）被外部改写即精确命中 0 行 → 零写入失败关闭。
+ *
+ * 快照为**必填**：类型系统直接阻止「缺完整快照仍走破坏性三因子删除」的误传路径。
  */
-export const PR5_SQL_LITERAL_PATTERN = /^[^'\\%\r\n]{1,300}$/;
-
-function assertPr5SqlLiteral(label: string, value: string): void {
-  if (!PR5_SQL_LITERAL_PATTERN.test(value)) {
-    throw new Error(`${label}未通过 SQL 字面量白名单校验：${JSON.stringify(value)}`);
-  }
-}
-
-function buildPr5NullableTextCondition(column: string, value: string | null): string {
-  if (value === null || value === 'NULL') {
-    return `${column} IS NULL`;
-  }
-
-  assertPr5SqlLiteral(`完整绑定字段 ${column}`, value);
-
-  return `${column} = '${value}'`;
-}
-
-function buildPr5NullableIntegerCondition(column: string, value: number | null): string {
-  if (value === null) {
-    return `${column} IS NULL`;
-  }
-
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`完整绑定字段 ${column} 未通过正整数校验：${JSON.stringify(value)}`);
-  }
-
-  return `${column} = ${value}`;
-}
-
-/**
- * 维修申请的**完整字段预期**（P1-1）：提供后，只读预检与事务内 DELETE 都会按这些字段
- * 精确匹配（等同 `AND` 追加到 where），任一字段被外部改写即精确命中 0 行 → 零写入失败关闭；
- * 同时也关闭「只读预检通过、DELETE 前字段被改写」的 TOCTOU 窗口。
- */
-export interface Pr5RepairRequestExpectation {
-  readonly equipmentModelId: number | null;
-  readonly errorCode: string;
-  readonly faultDescription: string;
-  readonly contentMd: string;
-}
-
-function buildPr5RepairRequestFullConditions(expectation: Pr5RepairRequestExpectation): string {
-  assertPr5SqlLiteral('维修申请完整绑定故障码', expectation.errorCode);
-  assertPr5SqlLiteral('维修申请完整绑定故障描述', expectation.faultDescription);
-  assertPr5SqlLiteral('维修申请完整绑定正文', expectation.contentMd);
-
-  return [
-    buildPr5NullableIntegerCondition('equipment_model_id', expectation.equipmentModelId),
-    `error_code = '${expectation.errorCode}'`,
-    `fault_description = '${expectation.faultDescription}'`,
-    `content_md = '${expectation.contentMd}'`,
-  ].join(' AND ');
-}
-
 export interface Pr5RepairRequestBinding {
   /** 数据库生成的维修申请主键 */
   readonly id: number;
@@ -281,29 +601,30 @@ export interface Pr5RepairRequestBinding {
   readonly customerAccountId: number;
   /** 本轮为该申请创建的工程师回复 ID（清理时按此集合精确绑定子行，不扩大删除外部回复） */
   readonly responseIds: readonly number[];
-  /** 完整字段预期（可选）：ledger 回收 / 残留恢复必须提供；提供后预检与 DELETE 都按全字段精确匹配 */
-  readonly expectation?: Pr5RepairRequestExpectation;
+  /** 建行时数据库实际落库的整行快照（13/13 列） */
+  readonly snapshot: Pr5RowSnapshot;
 }
 
-/** 维修申请绑定 where 子句（三因子必选 + 可选完整字段预期；预检与 DELETE 共用同一口径） */
+/** 维修申请绑定 where 子句：canonical 整行快照（无字段子集、无三因子退回路径） */
 function buildPr5RepairRequestWhere(binding: Pr5RepairRequestBinding): string {
-  const { id, requestNo, customerAccountId } = binding;
-  const base = `id = ${id} AND request_no = '${requestNo}' AND customer_account_id = ${customerAccountId}`;
+  if (binding.snapshot.table !== 'repair_request') {
+    throw new Error(
+      `维修申请绑定快照表名不符：期望 repair_request，实际 ${JSON.stringify(binding.snapshot.table)}`,
+    );
+  }
 
-  return binding.expectation === undefined
-    ? base
-    : `${base} AND ${buildPr5RepairRequestFullConditions(binding.expectation)}`;
+  return buildPr5RowConditions(binding.snapshot);
 }
 
 /**
  * 归属核验后物理删除本轮自建维修申请（含其本轮工程师回复）。
  *
- * 事务内顺序：父行三因子绑定唯一断言 → 子行集合精确断言（实际回复集合必须与本轮
+ * 事务内顺序：父行**整行快照**绑定唯一断言 → 子行集合精确断言（实际回复集合必须与本轮
  * responseIds 完全一致，多一条外部回复即失败关闭）→ 按 request_id + id IN (...) 精确删子行
- * → 再按同一三因子删主行 → 残留核对为 0。任一绑定断言失败会让 MySQL 客户端在 DELETE
+ * → 再按同一整行快照删主行 → 残留核对为 0。任一绑定断言失败会让 MySQL 客户端在 DELETE
  * 之前报错退出，事务自动回滚（连接关闭触发回滚）。
  */
-/** 三因子 + 回复集合绑定参数白名单校验（删除原语与只读预检共用同一口径，杜绝两套校验漂移） */
+/** 绑定参数白名单校验（删除原语、只读预检与 locator 共用同一口径，杜绝两套校验漂移） */
 function assertPr5RepairRequestBindingParams(binding: Pr5RepairRequestBinding): void {
   const { id, requestNo, customerAccountId, responseIds } = binding;
 
@@ -327,10 +648,33 @@ function assertPr5RepairRequestBindingParams(binding: Pr5RepairRequestBinding): 
     }
   }
 
-  // 完整字段预期若存在，先行校验（内联进 where 前的白名单门槛，杜绝字面量逃逸）
-  if (binding.expectation !== undefined) {
-    buildPr5RepairRequestFullConditions(binding.expectation);
-  }
+  // 整行快照：列名集合与取值类型必须完整合法（缺任一 canonical 列即拒绝，杜绝字面量逃逸）
+  assertPr5RowSnapshotShape(binding.snapshot);
+  assertPr5SnapshotFactorMatches(binding.snapshot, 'id', String(id), '维修申请');
+  assertPr5SnapshotFactorMatches(binding.snapshot, 'request_no', requestNo, '维修申请');
+  assertPr5SnapshotFactorMatches(
+    binding.snapshot,
+    'customer_account_id',
+    String(customerAccountId),
+    '维修申请',
+  );
+}
+
+/** 按主键读取当前行并构造**完整行绑定**（S5 真实链路删除自建行时使用；不降低清理安全组口径） */
+export function readPr5RepairRequestBindingFromDb(input: {
+  id: number;
+  requestNo: string;
+  customerAccountId: number;
+  responseIds: readonly number[];
+}): Pr5RepairRequestBinding {
+  const binding: Pr5RepairRequestBinding = {
+    ...input,
+    snapshot: readPr5FullRowSnapshot('repair_request', input.id),
+  };
+
+  assertPr5RepairRequestBindingParams(binding);
+
+  return binding;
 }
 
 export function deletePr5RepairRequestBound(binding: Pr5RepairRequestBinding): void {
@@ -442,72 +786,37 @@ export function readPr5RepairRequestState(
   return { deletedAtIsNotNull: columns[2], deprecated: columns[1], isAccepted: columns[0] };
 }
 
+/**
+ * 参考资料**完整行绑定**（P1-1）：除三因子外必须提供数据库读回的整行 canonical 快照（15/15 列）。
+ * 只读预检、存储引用读取与事务内 DELETE 都由该快照生成同一 WHERE——
+ * 任一非三因子字段（含 `description` / `original_filename` / `mime_type` / `content_text` /
+ * `equipment_model_id` / `storage_*` / `deprecated` / `deleted_at` / `created_at` / `updated_at`）
+ * 被外部改写即精确命中 0 行 → 零写入失败关闭（`updated_at` 亦用于识别「改动后又改回」）。
+ *
+ * 快照为**必填**：类型系统直接阻止「缺完整快照仍走破坏性三因子删除」的误传路径。
+ */
 export interface Pr5ReferenceDocumentBinding {
   /** 数据库生成的参考资料主键 */
   readonly id: number;
   readonly createdByAccountId: number;
-  /** 本轮运行唯一标题关键字（并入三因子绑定，避免误删他人同 ID 数据） */
+  /** 本轮运行唯一标题关键字（残留反查 locator 使用；不再单独参与破坏性 WHERE） */
   readonly titleKeyword: string;
-  /** 完整字段预期（可选）：ledger 回收 / 残留恢复必须提供；提供后预检与 DELETE 都按全字段精确匹配 */
-  readonly expectation?: Pr5ReferenceDocumentExpectation;
+  /** 建行时数据库实际落库的整行快照（15/15 列） */
+  readonly snapshot: Pr5RowSnapshot;
 }
 
-/**
- * 参考资料（除三因子外）的**完整字段预期**（P1-1）：提供后，只读预检与事务内 DELETE 都会按
- * 这些字段精确匹配，任一字段被外部改写即零写入失败关闭，同时关闭 TOCTOU 窗口。
- */
-export interface Pr5ReferenceDocumentExpectation {
-  readonly title: string;
-  readonly documentType: string;
-  readonly contentText: string;
-  readonly storageBackend: string | null;
-  readonly storageReference: string | null;
-  readonly equipmentModelId: number | null;
-}
-
-function buildPr5ReferenceDocumentFullConditions(
-  expectation: Pr5ReferenceDocumentExpectation,
-): string {
-  assertPr5SqlLiteral('资料完整绑定标题', expectation.title);
-  assertPr5SqlLiteral('资料完整绑定类型', expectation.documentType);
-  assertPr5SqlLiteral('资料完整绑定正文', expectation.contentText);
-
-  if (expectation.storageBackend !== null && expectation.storageBackend !== 'local') {
-    throw new Error(
-      `资料完整绑定存储后端未通过白名单校验：${JSON.stringify(expectation.storageBackend)}`,
-    );
-  }
-
-  if (
-    expectation.storageReference !== null &&
-    !STORAGE_REFERENCE_PATTERN.test(expectation.storageReference)
-  ) {
-    throw new Error(
-      `资料完整绑定存储引用未通过白名单校验：${JSON.stringify(expectation.storageReference)}`,
-    );
-  }
-
-  return [
-    `title = '${expectation.title}'`,
-    `document_type = '${expectation.documentType}'`,
-    `content_text = '${expectation.contentText}'`,
-    buildPr5NullableTextCondition('storage_backend', expectation.storageBackend),
-    buildPr5NullableTextCondition('storage_reference', expectation.storageReference),
-    buildPr5NullableIntegerCondition('equipment_model_id', expectation.equipmentModelId),
-  ].join(' AND ');
-}
-
-/** 资料绑定 where 子句（三因子必选 + 可选完整字段预期；预检、引用读取与 DELETE 共用同一口径） */
+/** 资料绑定 where 子句：canonical 整行快照（无字段子集、无三因子退回路径） */
 function buildPr5ReferenceDocumentWhere(binding: Pr5ReferenceDocumentBinding): string {
-  const { id, createdByAccountId, titleKeyword } = binding;
-  const base = `id = ${id} AND created_by_account_id = ${createdByAccountId} AND title LIKE '%${titleKeyword}%'`;
+  if (binding.snapshot.table !== 'reference_document') {
+    throw new Error(
+      `参考资料绑定快照表名不符：期望 reference_document，实际 ${JSON.stringify(binding.snapshot.table)}`,
+    );
+  }
 
-  return binding.expectation === undefined
-    ? base
-    : `${base} AND ${buildPr5ReferenceDocumentFullConditions(binding.expectation)}`;
+  return buildPr5RowConditions(binding.snapshot);
 }
 
-/** 三因子绑定参数白名单校验（删除与只读核验共用同一口径，杜绝两套校验漂移） */
+/** 绑定参数白名单校验（删除原语、只读核验与 locator 共用同一口径，杜绝两套校验漂移） */
 function assertPr5ReferenceDocumentBinding(binding: Pr5ReferenceDocumentBinding): void {
   const { id, createdByAccountId, titleKeyword } = binding;
 
@@ -525,10 +834,38 @@ function assertPr5ReferenceDocumentBinding(binding: Pr5ReferenceDocumentBinding)
     throw new Error(`参考资料清理目标标题关键字未通过白名单校验：${JSON.stringify(titleKeyword)}`);
   }
 
-  // 完整字段预期若存在，先行校验（内联进 where 前的白名单门槛，杜绝字面量逃逸）
-  if (binding.expectation !== undefined) {
-    buildPr5ReferenceDocumentFullConditions(binding.expectation);
+  // 整行快照：列名集合与取值类型必须完整合法（缺任一 canonical 列即拒绝，杜绝字面量逃逸）
+  assertPr5RowSnapshotShape(binding.snapshot);
+  assertPr5SnapshotFactorMatches(binding.snapshot, 'id', String(id), '参考资料');
+  assertPr5SnapshotFactorMatches(
+    binding.snapshot,
+    'created_by_account_id',
+    String(createdByAccountId),
+    '参考资料',
+  );
+
+  // 残留 locator 仍按本轮标题关键字反查，故快照标题必须包含该关键字
+  if (!readPr5SnapshotColumn(binding.snapshot, 'title').includes(titleKeyword)) {
+    throw new Error(
+      `参考资料快照标题未包含本轮标题关键字（${titleKeyword}）：${JSON.stringify(readPr5SnapshotColumn(binding.snapshot, 'title'))}`,
+    );
   }
+}
+
+/** 按主键读取当前行并构造**完整行绑定**（S5 真实链路清理自建资料时使用；不降低清理安全组口径） */
+export function readPr5ReferenceDocumentBindingFromDb(input: {
+  id: number;
+  createdByAccountId: number;
+  titleKeyword: string;
+}): Pr5ReferenceDocumentBinding {
+  const binding: Pr5ReferenceDocumentBinding = {
+    ...input,
+    snapshot: readPr5FullRowSnapshot('reference_document', input.id),
+  };
+
+  assertPr5ReferenceDocumentBinding(binding);
+
+  return binding;
 }
 
 /**
@@ -652,17 +989,16 @@ export function readPr5ReferenceDocumentDeprecatedById(id: number): string | nul
 }
 
 /**
- * 按精确 ID 读取资料行完整字段快照（P2-3/D2-1）：用于「越权写被拒后目标行未被改写」的前后比对。
- * 列集合为代码内静态白名单，不拼接外部输入；无行返回 null。
+ * 按精确 ID 读取资料行**整行 canonical 快照**（P2-3/D2-1）：用于「越权写被拒后目标行未被改写」的
+ * 前后比对。列集合即 canonical 列清单（唯一口径，不再维护第二份静态字段子集）；无行返回 null。
  */
 export function readPr5ReferenceDocumentSnapshot(id: number): string | null {
   if (!Number.isSafeInteger(id) || id <= 0) {
     throw new Error(`资料快照查询目标 ID 未通过正整数校验：${JSON.stringify(id)}`);
   }
 
-  const value = mysqlQuery(
-    `SELECT ${PR5_REFERENCE_DOCUMENT_SNAPSHOT_COLUMNS.join(', ')} FROM reference_document WHERE id = ${id}`,
-  );
+  const columns = readPr5CanonicalColumns('reference_document');
+  const value = mysqlQuery(`SELECT ${columns.join(', ')} FROM reference_document WHERE id = ${id}`);
 
   return value.length > 0 ? value : null;
 }
@@ -670,6 +1006,13 @@ export function readPr5ReferenceDocumentSnapshot(id: number): string | null {
 /** 回复正文白名单：非空、无引号/反斜杠/通配符/换行（正文同时是本轮正文绑定因子） */
 export const PR5_RESPONSE_TEXT_PATTERN = /^[^'\\%\r\n]{1,200}$/;
 
+/**
+ * 工程师回复**完整行绑定**（P1-1）：除五因子外必须提供数据库读回的整行 canonical 快照（7/7 列）。
+ * 只读预检与事务内 DELETE 都由该快照生成同一 WHERE——任一非五因子字段（含 `resolution_status` /
+ * `created_at`）被外部改写即精确命中 0 行 → 零写入失败关闭。
+ *
+ * 快照为**必填**：类型系统直接阻止「缺完整快照仍走破坏性五因子删除」的误传路径。
+ */
 export interface Pr5EngineerResponseBinding {
   /** 工程师回复主键 */
   readonly id: number;
@@ -679,9 +1022,11 @@ export interface Pr5EngineerResponseBinding {
   readonly customerAccountId: number;
   /** 本轮写入的回复正文（白名单内；同时作为运行级正文绑定因子，按精确相等核验） */
   readonly responseText: string;
+  /** 建行时数据库实际落库的整行快照（7/7 列） */
+  readonly snapshot: Pr5RowSnapshot;
 }
 
-/** 回复完整 binding 参数白名单校验（删除原语与只读预检共用，杜绝两套校验漂移） */
+/** 回复绑定参数白名单校验（删除原语、只读预检与 locator 共用，杜绝两套校验漂移） */
 function assertPr5EngineerResponseBindingParams(binding: Pr5EngineerResponseBinding): void {
   const { id, requestId, engineerAccountId, customerAccountId, responseText } = binding;
 
@@ -704,16 +1049,53 @@ function assertPr5EngineerResponseBindingParams(binding: Pr5EngineerResponseBind
   if (!PR5_RESPONSE_TEXT_PATTERN.test(responseText)) {
     throw new Error(`工程师回复正文未通过白名单校验：${JSON.stringify(responseText)}`);
   }
+
+  // 整行快照：列名集合与取值类型必须完整合法（缺任一 canonical 列即拒绝）
+  assertPr5RowSnapshotShape(binding.snapshot);
+  assertPr5SnapshotFactorMatches(binding.snapshot, 'id', String(id), '工程师回复');
+  assertPr5SnapshotFactorMatches(binding.snapshot, 'request_id', String(requestId), '工程师回复');
+  assertPr5SnapshotFactorMatches(
+    binding.snapshot,
+    'engineer_account_id',
+    String(engineerAccountId),
+    '工程师回复',
+  );
+  assertPr5SnapshotFactorMatches(
+    binding.snapshot,
+    'customer_account_id',
+    String(customerAccountId),
+    '工程师回复',
+  );
+  assertPr5SnapshotFactorMatches(binding.snapshot, 'response_text', responseText, '工程师回复');
 }
 
-/** 回复完整绑定 where 子句（删除与只读预检共用同一口径） */
+/** 回复绑定 where 子句：canonical 整行快照（删除与只读预检共用同一口径） */
 function buildPr5EngineerResponseBindingWhere(binding: Pr5EngineerResponseBinding): string {
-  const { id, requestId, engineerAccountId, customerAccountId, responseText } = binding;
+  if (binding.snapshot.table !== 'engineer_response') {
+    throw new Error(
+      `工程师回复绑定快照表名不符：期望 engineer_response，实际 ${JSON.stringify(binding.snapshot.table)}`,
+    );
+  }
 
-  return (
-    `id = ${id} AND request_id = ${requestId} AND engineer_account_id = ${engineerAccountId}` +
-    ` AND customer_account_id = ${customerAccountId} AND response_text = '${responseText}'`
-  );
+  return buildPr5RowConditions(binding.snapshot);
+}
+
+/** 按主键读取当前行并构造**完整行绑定**（本轮外回复的精确回收也用此构造，非裸 ID） */
+export function readPr5EngineerResponseBindingFromDb(input: {
+  id: number;
+  requestId: number;
+  engineerAccountId: number;
+  customerAccountId: number;
+  responseText: string;
+}): Pr5EngineerResponseBinding {
+  const binding: Pr5EngineerResponseBinding = {
+    ...input,
+    snapshot: readPr5FullRowSnapshot('engineer_response', input.id),
+  };
+
+  assertPr5EngineerResponseBindingParams(binding);
+
+  return binding;
 }
 
 /**
