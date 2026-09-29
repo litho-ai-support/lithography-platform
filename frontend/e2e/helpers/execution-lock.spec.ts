@@ -205,16 +205,38 @@ describe('acquireExecutionLockAt 的失败关闭与归属校验', () => {
 });
 
 interface RaceChild {
+  readonly diagnostics: () => string;
   readonly readLine: () => Promise<string>;
   readonly send: (line: string) => void;
   readonly exited: Promise<void>;
 }
 
-/** 把可读流切成「一行一次」的拉取接口 */
-function createLineReader(stream: Readable): () => Promise<string> {
+/**
+ * 把可读流切成「一行一次」的拉取接口。
+ *
+ * 流结束、流出错或子进程提前退出时，**挂起中的读取必须立即 reject**：否则
+ * 子进程启动失败会被父侧转译成一个 60 秒空等超时，真实原因（退出码与 stderr）
+ * 随之丢失。`fail()` 由调用方在检测到子进程终止时触发。
+ */
+function createLineReader(
+  stream: Readable,
+  describe: (reason: string) => string,
+): { fail: (reason: string) => void; readLine: () => Promise<string> } {
   const buffered: string[] = [];
-  const waiting: Array<(line: string) => void> = [];
+  const waiting: Array<{ reject: (error: Error) => void; resolve: (line: string) => void }> = [];
   let pending = '';
+  let terminal: string | null = null;
+
+  function rejectWaiting(): void {
+    while (waiting.length > 0) {
+      waiting.shift()?.reject(new Error(describe(terminal ?? '子进程已终止')));
+    }
+  }
+
+  function fail(reason: string): void {
+    terminal = reason;
+    rejectWaiting();
+  }
 
   stream.on('data', (chunk: Buffer) => {
     pending += chunk.toString('utf8');
@@ -225,39 +247,89 @@ function createLineReader(stream: Readable): () => Promise<string> {
       const line = pending.slice(0, separator).trim();
       pending = pending.slice(separator + 1);
 
-      const resolve = waiting.shift();
+      const waiter = waiting.shift();
 
-      if (resolve === undefined) {
+      if (waiter === undefined) {
         buffered.push(line);
       } else {
-        resolve(line);
+        waiter.resolve(line);
       }
 
       separator = pending.indexOf('\n');
     }
   });
 
-  return () =>
-    new Promise<string>((resolve) => {
-      const line = buffered.shift();
-
-      if (line !== undefined) {
-        resolve(line);
-
-        return;
-      }
-
-      waiting.push(resolve);
-    });
-}
-
-function startRaceChild(lockPath: string): RaceChild {
-  const child = spawn(process.execPath, [RACE_CHILD_PATH, lockPath], {
-    stdio: ['pipe', 'pipe', 'ignore'],
+  stream.on('end', () => {
+    fail('stdout 已结束');
   });
-  const readLine = createLineReader(child.stdout);
+  stream.on('error', (error: Error) => {
+    fail(`stdout 出错：${error.message}`);
+  });
 
   return {
+    fail,
+    readLine: () =>
+      new Promise<string>((resolve, reject) => {
+        const line = buffered.shift();
+
+        if (line !== undefined) {
+          resolve(line);
+
+          return;
+        }
+
+        if (terminal !== null) {
+          reject(new Error(describe(terminal)));
+
+          return;
+        }
+
+        waiting.push({ reject, resolve });
+      }),
+  };
+}
+
+function startRaceChild(lockPath: string, scriptPath = RACE_CHILD_PATH): RaceChild {
+  const child = spawn(process.execPath, [scriptPath, lockPath], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  // 子夹具 stderr 必须捕获并随失败一起抛出：设成 ignore 会让「子进程根本起不来」
+  // 与「竞争断言不成立」在父侧长得一模一样（都是 60 秒超时）。
+  const stderrChunks: string[] = [];
+
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrChunks.push(chunk.toString('utf8'));
+  });
+
+  let exit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  let spawnError: Error | null = null;
+
+  function diagnostics(): string {
+    return [
+      `exit=${exit === null ? 'null' : `${String(exit.code)}/${exit.signal ?? '-'}`}`,
+      `spawnError=${spawnError?.message ?? '-'}`,
+      `stderr=${stderrChunks.join('').trim() || '(空)'}`,
+    ].join('；');
+  }
+
+  const describe = (reason: string): string =>
+    `执行锁竞态子进程失败（${reason}）：${diagnostics()}`;
+  const { fail, readLine } = createLineReader(child.stdout, describe);
+
+  child.on('error', (error: Error) => {
+    spawnError = error;
+    fail('启动失败');
+  });
+  child.once('exit', (code, signal) => {
+    exit = { code, signal };
+  });
+  child.once('close', () => {
+    fail(exit === null ? '未正常退出' : '提前退出');
+  });
+
+  return {
+    diagnostics,
     exited: new Promise<void>((resolve) => {
       child.once('exit', () => {
         resolve();
@@ -339,4 +411,14 @@ describe('执行锁的真实多进程竞争', () => {
       expect(results.filter((line) => line.startsWith('FAILED:'))).toHaveLength(2);
     }
   }, 60_000);
+
+  // 失败传播回归：子进程起不来时必须「秒级」抛出退出码与 stderr，不得退化成 60 秒空等。
+  // 本用例刻意不设 60s 超时，用的是 vitest 默认超时——一旦退回旧行为，这里会直接超时失败。
+  it('子进程无法启动时立即抛出含退出码与 stderr 的诊断，而不是等到超时', async () => {
+    const missingScript = fileURLToPath(new URL('./race-child-missing.ts', import.meta.url));
+    const child = startRaceChild(makeLockPath(), missingScript);
+
+    await expect(child.readLine()).rejects.toThrow(/race-child-missing\.ts/);
+    await child.exited;
+  });
 });

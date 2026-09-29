@@ -464,11 +464,13 @@ describe('ReferenceDocumentList', () => {
       expect(cells[2].textContent).toContain('2 个型号');
     });
 
-    it('加载态：总数与型号均显示加载状态，不伪造数字', () => {
+    it('加载态：总数与型号均显示加载状态，不伪造数字', async () => {
       fetchListMock.mockReturnValue(new Promise<ReferenceDocumentListPage>(() => {}));
       fetchModelsMock.mockReturnValue(new Promise<never>(() => {}));
 
-      render(<ReferenceDocumentList />);
+      await act(async () => {
+        render(<ReferenceDocumentList />);
+      });
 
       const cells = document.querySelectorAll('.reference-library-summary-cell');
       expect(cells).toHaveLength(3);
