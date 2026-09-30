@@ -13,18 +13,50 @@
 //   否则新增请求、拼错 operationName 或漏登记状态会被静默吞掉（假绿）；
 // - 失败态有两种：`abort`（网络中失败 → GraphQLIngressError → 共享错误模型文案）
 //   与 GraphQL errors 响应（业务拒绝与 NOT_FOUND 防探测口径）；
-// - `pending` 表示永不应答（挂起），用于验证加载态与提交中态，不产生真实网络流量。
+// - `pending` 表示永不应答（挂起），用于验证加载态与提交中态；换 mock（unroute）前
+//   必须调用 `abortSuspendedCustomerRepairRequestMocks` 显式中止：unroute 会把仍
+//   挂起的请求释放到真实网络，dev server 代理可达后端时会收到 UNAUTHENTICATED，
+//   触发全局清会话与跳登录，污染后续断言（2026-09-30 zoom 200% 用例实锤）。
 
-import type { Page } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
 
 export const CUSTOMER_MOCK_ROUTES = '**/graphql';
 
 /** 按 page 记录未登记的 operationName（spec 在 afterEach 断言为空）。 */
 const unregisteredOperationsByPage = new WeakMap<Page, string[]>();
 
+/** 按 page 记录仍处于挂起（未收敛）状态的拦截路由：换 mock 前必须显式中止。 */
+const suspendedRoutesByPage = new WeakMap<Page, Set<Route>>();
+
 /** 读取该 page 出现过的未登记 operationName（测试用）。 */
 export function readUnregisteredOperations(page: Page): string[] {
   return unregisteredOperationsByPage.get(page) ?? [];
+}
+
+/**
+ * 中止该 page 上所有仍挂起的 mock 请求（换 mock / `page.unroute` 之前调用）。
+ * 不中止时：unroute 会把未收敛的挂起请求释放到真实网络；dev server 代理可达真实
+ * 后端时，测试会话占位 token 会收到 UNAUTHENTICATED，触发全局清会话跳登录，
+ * 使后续断言落在登录页（2026-09-30 zoom 200% 用例实锤）。
+ */
+export async function abortSuspendedCustomerRepairRequestMocks(page: Page): Promise<void> {
+  const suspended = suspendedRoutesByPage.get(page);
+
+  if (!suspended || suspended.size === 0) {
+    return;
+  }
+
+  suspendedRoutesByPage.delete(page);
+
+  await Promise.all(
+    [...suspended].map(async (route) => {
+      try {
+        await route.abort();
+      } catch {
+        // 路由可能已因页面关闭等被收敛；忽略即可，不阻断换 mock 流程。
+      }
+    }),
+  );
 }
 
 /** 申请编号 / 错误码的长连续文本（长文本不换行时必然撑破表格与页面）。 */
@@ -332,7 +364,12 @@ export async function installCustomerRepairRequestMocks(
     const response = resolveResponse(requestBody?.operationName, requestBody?.variables, options);
 
     if (response === null) {
-      // 挂起：不 fulfill 也不 abort，用真实「未返回」验证加载态与提交中态
+      // 挂起：不 fulfill 也不 abort，用真实「未返回」验证加载态与提交中态。
+      // 同时登记未收敛路由：unroute 时 Playwright 会把这些请求释放到真实网络，
+      // 换 mock 前必须用 abortSuspendedCustomerRepairRequestMocks 显式中止。
+      const suspended = suspendedRoutesByPage.get(page) ?? new Set<Route>();
+      suspended.add(route);
+      suspendedRoutesByPage.set(page, suspended);
       return;
     }
 

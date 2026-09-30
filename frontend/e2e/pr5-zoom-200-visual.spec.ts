@@ -30,6 +30,7 @@ import path from 'node:path';
 
 import { seedAuthSession } from './helpers/auth-session-seed';
 import {
+  abortSuspendedCustomerRepairRequestMocks,
   CUSTOMER_MOCK_ROUTES,
   installCustomerRepairRequestMocks,
   LONG_ERROR_CODE,
@@ -72,8 +73,11 @@ async function openPage(page: Page, options: MockOptions, targetPath: string): P
   await waitForFontsReady(page);
 }
 
-/** 换 mock 后整体导航（同 URL goto = 全量重载，状态不残留）。 */
+/** 换 mock 后整体导航（同 URL goto = 全量重载，状态不残留）。
+ *  换 mock 前先显式中止挂起请求：unroute 会把未收敛的挂起请求释放到真实网络，
+ *  dev server 代理可达后端时会收到 UNAUTHENTICATED，触发全局清会话跳登录。 */
 async function remockAndGoto(page: Page, options: MockOptions, targetPath: string): Promise<void> {
+  await abortSuspendedCustomerRepairRequestMocks(page);
   await page.unroute(CUSTOMER_MOCK_ROUTES);
   await installCustomerRepairRequestMocks(page, options);
   await page.goto(targetPath);
