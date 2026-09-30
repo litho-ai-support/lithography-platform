@@ -800,6 +800,34 @@ body {
   outline-offset: 2px;
 }
 
+/* 条目两列结构（2026-09-30「状态/操作栏统一布局」）：左列主选择按钮消费全部剩余宽度
+   （minmax(0, 1fr) 防止长编号/型号/错误码撑破列表），右列固定宽 rail —— 待接单与
+   已接单共用同一套列宽，主内容宽度、状态胶囊水平位置不随接单状态变化。
+   rail 宽度 4.5rem（rem 随根字号缩放）：S/M/L 三档均容纳三字状态胶囊与小型删除
+   按钮（含 AntD 内边距）的实际最大宽度，不凭感觉留大空白；已接单 rail 无删除 DOM。
+   仅客户工作台条目消费本组类，不改全局 .activity-item 与工程师工作台条目。 */
+.customer-workspace-item {
+  --customer-workspace-item-rail-width: 4.5rem;
+  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--customer-workspace-item-rail-width);
+}
+
+/* rail：顶部状态胶囊与主按钮首行同顶（padding 与主按钮 py-[11px] 对齐）；
+   删除操作在状态下方向下 6px（AntD paddingXS 尺寸语言），内容左对齐-顶部对齐 */
+.customer-workspace-item-rail {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-block: 11px;
+  padding-inline-end: 6px;
+}
+
+.customer-workspace-item-status {
+  display: inline-flex;
+}
+
 /* create 态右栏：主表单 + 约 230px 填写提示（960px 以下单列，提示落在表单下方） */
 .customer-create-grid {
   display: grid;

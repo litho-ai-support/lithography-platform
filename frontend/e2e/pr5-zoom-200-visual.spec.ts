@@ -402,6 +402,21 @@ test.describe('列表态：就绪、长文本与三态（200%）', () => {
     await expectHeaderAccessible(page);
     await expect(page.locator('.activity-item')).toHaveCount(2);
 
+    // 状态/操作栏统一布局（200%）：未接单条目删除按钮仍可见、可点；
+    // 已接单条目不出现删除按钮（无删除 DOM，非禁用占位）
+    const pendingDeleteButton = page
+      .locator('.activity-item')
+      .filter({ hasText: 'MOCK-RR-2026-0001' })
+      .getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' });
+    await expectReachableVertical(pendingDeleteButton, '200% 列表未接单条目删除按钮');
+    await expect(pendingDeleteButton, '200% 列表删除按钮应可点').toBeEnabled();
+    await expect(
+      page
+        .locator('.activity-item')
+        .filter({ hasText: 'MOCK-RR-2026-0002' })
+        .getByRole('button', { name: /^删除申请 / }),
+    ).toHaveCount(0);
+
     const readyOverflow = await measurePageOverflow(page);
     expect(readyOverflow, '列表就绪态 200% 下不应出现整页横滚').toBeLessThanOrEqual(0);
     await capture(page, testInfo, 'customer-repair-request-list-ready', capturedAt, evidence, {
@@ -413,18 +428,34 @@ test.describe('列表态：就绪、长文本与三态（200%）', () => {
     await expect(page.getByText(LONG_REQUEST_NO)).toBeVisible();
 
     const wrapping = await page.evaluate(() => {
+      const round = (value: number) => Math.round(value * 100) / 100;
       const item = document.querySelector<HTMLElement>(
         '.customer-workspace-list-pane .activity-item',
       );
       const code = item?.querySelector<HTMLElement>('.activity-item-code');
       const error = item?.querySelector<HTMLElement>('span.break-words');
-      if (!item || !code || !error) {
+      const main = item?.querySelector<HTMLElement>('.customer-workspace-item-main');
+      const rail = item?.querySelector<HTMLElement>('.customer-workspace-item-rail');
+      const pill = rail?.querySelector<HTMLElement>('.status-pill');
+      if (!item || !code || !error || !main || !rail || !pill) {
         throw new Error('长文本条目节点缺失');
       }
+
+      const itemRect = item.getBoundingClientRect();
+      const mainRect = main.getBoundingClientRect();
+      const railRect = rail.getBoundingClientRect();
+      const pillRect = pill.getBoundingClientRect();
 
       return {
         codeText: code.textContent ?? '',
         codeWordBreak: getComputedStyle(code).wordBreak,
+        columns: {
+          itemRight: round(itemRect.right),
+          mainRight: round(mainRect.right),
+          pillRight: round(pillRect.right),
+          railLeft: round(railRect.left),
+          railRight: round(railRect.right),
+        },
         errorText: error.textContent ?? '',
         errorWrap: getComputedStyle(error).overflowWrap,
         item: { clientWidth: item.clientWidth, scrollWidth: item.scrollWidth },
@@ -436,6 +467,14 @@ test.describe('列表态：就绪、长文本与三态（200%）', () => {
     expect(wrapping.errorWrap, '型号·错误码行 computed overflow-wrap').toBe('break-word');
     expect(wrapping.item.scrollWidth, '条目容器不得横向溢出').toBeLessThanOrEqual(
       wrapping.item.clientWidth + 1,
+    );
+    // 长连续文本不得压住状态/操作栏：rail 起点不早于主内容终点（1px 容差），
+    // 状态胶囊完整落在条目右边界内（200% 下保持同一两列结构）
+    expect(wrapping.columns.railLeft, 'rail 不得被长文本主内容压占').toBeGreaterThanOrEqual(
+      wrapping.columns.mainRight - 1,
+    );
+    expect(wrapping.columns.pillRight, '状态胶囊不得越出条目右边界').toBeLessThanOrEqual(
+      wrapping.columns.itemRight + 1,
     );
 
     const longTextOverflow = await measurePageOverflow(page);

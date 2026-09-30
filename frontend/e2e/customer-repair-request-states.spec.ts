@@ -367,6 +367,76 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
     await expect(page.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' })).toBeVisible();
     await expect(page.getByRole('button', { name: '删除申请 MOCK-RR-2026-0002' })).toHaveCount(0);
 
+    // 状态/操作栏统一布局（2026-09-30）：两态条目共用同一套两列网格 —— 主内容右边界、
+    // rail 左边界与宽度、状态胶囊右边界必须一致（1px 渲染容差）；已接单 rail 内不得
+    // 存在可聚焦元素（不可访问、不可触发删除），也不得出现删除文案
+    const alignment = await page.evaluate(() => {
+      const round = (value: number) => Math.round(value * 100) / 100;
+      const items = Array.from(
+        document.querySelectorAll<HTMLElement>('.customer-workspace-list-pane .activity-item'),
+      );
+
+      if (items.length !== 2) {
+        throw new Error(`应存在两条活动条目，实际 ${items.length}`);
+      }
+
+      return items.map((item) => {
+        const main = item.querySelector<HTMLElement>('.customer-workspace-item-main');
+        const rail = item.querySelector<HTMLElement>('.customer-workspace-item-rail');
+        const status = item.querySelector<HTMLElement>('.customer-workspace-item-status');
+        const pill = status?.querySelector<HTMLElement>('.status-pill');
+
+        if (!main || !rail || !status || !pill) {
+          throw new Error('条目两列结构或状态胶囊缺失');
+        }
+
+        const mainRect = main.getBoundingClientRect();
+        const railRect = rail.getBoundingClientRect();
+        const pillRect = pill.getBoundingClientRect();
+
+        return {
+          deleteTextCount: Array.from(rail.querySelectorAll('*')).filter(
+            (node) => node.textContent === '删除',
+          ).length,
+          mainRight: round(mainRect.right),
+          pillLeft: round(pillRect.left),
+          pillRight: round(pillRect.right),
+          railFocusableCount: rail.querySelectorAll('button, a, [tabindex]').length,
+          railLeft: round(railRect.left),
+          railWidth: round(railRect.width),
+          statusText: status.textContent?.trim() ?? '',
+        };
+      });
+    });
+
+    const [pendingItem, acceptedItem] = alignment;
+
+    expect(pendingItem.statusText, '首条为待接单').toBe('待接单');
+    expect(acceptedItem.statusText, '第二条为已接单').toBe('已接单');
+    expect(
+      Math.abs(pendingItem.mainRight - pendingItem.railLeft),
+      '主内容右边界应与 rail 左边界相切',
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(pendingItem.mainRight - acceptedItem.mainRight),
+      '两态主内容右边界应一致',
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(pendingItem.railLeft - acceptedItem.railLeft),
+      '两态 rail 左边界应一致',
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(pendingItem.railWidth - acceptedItem.railWidth),
+      '两态 rail 宽度应一致',
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(pendingItem.pillRight - acceptedItem.pillRight),
+      '两态状态胶囊右边界应一致',
+    ).toBeLessThanOrEqual(1);
+    expect(pendingItem.railFocusableCount, '待接单 rail 应有删除可聚焦元素').toBeGreaterThan(0);
+    expect(acceptedItem.railFocusableCount, '已接单 rail 不得有可聚焦元素').toBe(0);
+    expect(acceptedItem.deleteTextCount, '已接单 rail 不得出现删除文案').toBe(0);
+
     // 右栏默认详情（列表态以第一项为默认目标）异步就绪，避免截图落在骨架态
     await expect(page.locator('.customer-workspace-detail-pane .ant-skeleton')).toHaveCount(0);
 
@@ -381,6 +451,7 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
       capturedAt,
       evidence,
       {
+        alignment,
         overflow: readyOverflow,
       },
     );
@@ -418,18 +489,34 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
     // 注：编号 span 为行内元素时 clientWidth 恒为 0（CSSOM 对行内非替换元素如此），
     // 几何不变量改在块级条目容器上断言。
     const wrapping = await page.evaluate(() => {
+      const round = (value: number) => Math.round(value * 100) / 100;
       const item = document.querySelector<HTMLElement>(
         '.customer-workspace-list-pane .activity-item',
       );
       const code = item?.querySelector<HTMLElement>('.activity-item-code');
       const error = item?.querySelector<HTMLElement>('span.break-words');
-      if (!item || !code || !error) {
+      const main = item?.querySelector<HTMLElement>('.customer-workspace-item-main');
+      const rail = item?.querySelector<HTMLElement>('.customer-workspace-item-rail');
+      const pill = rail?.querySelector<HTMLElement>('.status-pill');
+      if (!item || !code || !error || !main || !rail || !pill) {
         throw new Error('长文本条目节点缺失');
       }
+
+      const itemRect = item.getBoundingClientRect();
+      const mainRect = main.getBoundingClientRect();
+      const railRect = rail.getBoundingClientRect();
+      const pillRect = pill.getBoundingClientRect();
 
       return {
         codeText: code.textContent ?? '',
         codeWordBreak: getComputedStyle(code).wordBreak,
+        columns: {
+          itemRight: round(itemRect.right),
+          mainRight: round(mainRect.right),
+          pillRight: round(pillRect.right),
+          railLeft: round(railRect.left),
+          railRight: round(railRect.right),
+        },
         errorText: error.textContent ?? '',
         errorWrap: getComputedStyle(error).overflowWrap,
         item: { clientWidth: item.clientWidth, scrollWidth: item.scrollWidth },
@@ -442,6 +529,14 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
     expect(wrapping.errorWrap, '型号·错误码行 computed overflow-wrap').toBe('break-word');
     expect(wrapping.item.scrollWidth, '条目容器不得横向溢出').toBeLessThanOrEqual(
       wrapping.item.clientWidth + 1,
+    );
+    // 长连续文本不得压住状态/操作栏：rail 起点不早于主内容终点（1px 容差），
+    // 状态胶囊完整落在条目右边界内（窄视口保持与 ready 态同一两列结构）
+    expect(wrapping.columns.railLeft, 'rail 不得被长文本主内容压占').toBeGreaterThanOrEqual(
+      wrapping.columns.mainRight - 1,
+    );
+    expect(wrapping.columns.pillRight, '状态胶囊不得越出条目右边界').toBeLessThanOrEqual(
+      wrapping.columns.itemRight + 1,
     );
 
     const overflow = await measurePageOverflow(page);

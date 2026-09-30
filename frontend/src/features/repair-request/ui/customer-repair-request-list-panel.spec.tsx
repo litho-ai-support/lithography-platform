@@ -4,9 +4,10 @@
 /**
  * 客户工作台左栏「我的维修申请」活动列表面板单测（纯展示组件）。
  *
- * 面板只接收稳定 view state 与回调：本 spec 覆盖条目渲染、active 高亮、
- * 删除入口条件、分页装配、失败/空库/越界空页状态与键盘可达的语义化按钮；
- * 列表 query / 删除时序由 application hook spec 覆盖，不在本层重复。
+ * 面板只接收稳定 view state 与回调：本 spec 覆盖条目渲染、两列状态/操作栏结构
+ * （已接单不产生删除 DOM）、active 高亮、删除入口与确认时序、分页装配、
+ * 失败/空库/越界空页状态与键盘可达的语义化按钮；列表 query 时序由
+ * application hook spec 覆盖，不在本层重复。
  */
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -89,6 +90,14 @@ const visibleConfirmButtons = () =>
     (popover) => Array.from(popover.querySelectorAll('.ant-popconfirm-buttons .ant-btn-primary')),
   );
 
+/** 当前可见 Popconfirm 内的取消按钮（默认按钮，非 primary） */
+const visibleCancelButtons = () =>
+  Array.from(
+    document.querySelectorAll(
+      '.ant-popover:not(.ant-popover-hidden) .ant-popconfirm-buttons .ant-btn:not(.ant-btn-primary)',
+    ),
+  );
+
 beforeEach(() => {
   onDeleteMock.mockReset();
   onGoToPageMock.mockReset();
@@ -134,6 +143,78 @@ describe('CustomerRepairRequestListPanel', () => {
     fireEvent.click(visibleConfirmButtons()[0]);
 
     expect(onDeleteMock).toHaveBeenCalledWith(920001);
+  });
+
+  it('两列结构：两种状态条目均存在固定状态/操作栏，已接单栏内无删除 DOM 与可聚焦元素', () => {
+    const { container } = renderPanel({ status: 'ready', data: makePage() });
+
+    const items = Array.from(container.querySelectorAll('.activity-item'));
+    expect(items).toHaveLength(2);
+
+    // 两态 rail 均存在且顶部状态胶囊就位（胶囊已从主选择按钮移入右栏）
+    for (const item of items) {
+      const rail = item.querySelector('.customer-workspace-item-rail');
+      expect(rail).not.toBeNull();
+      expect(rail?.querySelector('.customer-workspace-item-status .status-pill')).not.toBeNull();
+      expect(item.querySelector('.customer-workspace-item-main .status-pill')).toBeNull();
+    }
+
+    const [pendingItem, acceptedItem] = items;
+    // 待接单 rail 内含删除操作位；已接单 rail 无操作位、无按钮/链接/tabindex 假占位
+    expect(pendingItem.querySelector('.customer-workspace-item-actions')).not.toBeNull();
+    expect(acceptedItem.querySelector('.customer-workspace-item-actions')).toBeNull();
+    expect(
+      acceptedItem.querySelectorAll(
+        '.customer-workspace-item-rail button, .customer-workspace-item-rail a, .customer-workspace-item-rail [tabindex]',
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('两类条目的主选择按钮均可打开详情（点击回调记录 id）', () => {
+    renderPanel({ status: 'ready', data: makePage() });
+
+    fireEvent.click(screen.getByText('MOCK-RR-2026-0001').closest('button') as HTMLElement);
+    expect(onSelectMock).toHaveBeenCalledWith(920001);
+
+    fireEvent.click(screen.getByText('MOCK-RR-2026-0002').closest('button') as HTMLElement);
+    expect(onSelectMock).toHaveBeenCalledWith(920002);
+  });
+
+  it('删除确认取消路径：不触发删除回调', async () => {
+    renderPanel({ status: 'ready', data: makePage() });
+
+    fireEvent.click(screen.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' }));
+    await waitFor(() => expect(visibleConfirmButtons()).toHaveLength(1));
+    fireEvent.click(visibleCancelButtons()[0]);
+
+    expect(onDeleteMock).not.toHaveBeenCalled();
+  });
+
+  it('删除进行中（deletingId）：确认按钮呈 loading 且防重入（不产生重复删除请求）', async () => {
+    const { rerender } = renderPanel({ status: 'ready', data: makePage() });
+
+    fireEvent.click(screen.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' }));
+    await waitFor(() => expect(visibleConfirmButtons()).toHaveLength(1));
+    // rerender 模拟 hook 置 deletingId（删除请求进行中）
+    rerender(
+      <CustomerRepairRequestListPanel
+        deletingId={920001}
+        onCreateRequest={onCreateRequestMock}
+        onDelete={onDeleteMock}
+        onGoToPage={onGoToPageMock}
+        onOpenMyRequests={onOpenMyRequestsMock}
+        onRetry={onRetryMock}
+        onSelect={onSelectMock}
+        selectedRequestId={null}
+        state={{ status: 'ready', data: makePage() }}
+      />,
+    );
+    await waitFor(() =>
+      expect(visibleConfirmButtons()[0].classList.contains('ant-btn-loading')).toBe(true),
+    );
+    // loading 期间点击被 AntD Button 防重入拦截（确认回调已在非 loading 路径覆盖）
+    fireEvent.click(visibleConfirmButtons()[0]);
+    expect(onDeleteMock).not.toHaveBeenCalled();
   });
 
   it('删除进行中禁用所有条目的删除按钮', () => {

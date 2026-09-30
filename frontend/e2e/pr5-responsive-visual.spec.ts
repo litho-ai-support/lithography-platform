@@ -724,6 +724,15 @@ test('S6-2 列表页 S→M→L→M 往返：条目删除、Popconfirm、分页�
   await expect(pagination, '分页器应真实出现（total 12 > pageSize 10）').toBeVisible();
   await expect(page.locator('.activity-item')).toHaveCount(10);
 
+  // 状态/操作栏统一布局（2026-09-30）：已接单行（1004）不渲染删除按钮（无删除 DOM、
+  // 非禁用占位），与未接单行共用同一套两列几何
+  const acceptedRow = page.locator('.activity-item').filter({ hasText: 'MOCK-RR-2026-1004' });
+  await expect(acceptedRow, '已接单行应存在于首页').toHaveCount(1);
+  await expect(
+    acceptedRow.getByRole('button', { name: /^删除申请 / }),
+    '已接单行不得出现删除按钮',
+  ).toHaveCount(0);
+
   for (const [step, dock] of FONT_SCALE_DOCKS.entries()) {
     await clickFontScale(page, dock);
 

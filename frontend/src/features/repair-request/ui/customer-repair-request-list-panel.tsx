@@ -16,10 +16,11 @@ import type { RepairRequestListItem } from '../infrastructure/repair-request-rea
  * 客户工作台左栏「我的维修申请」活动列表面板（PR5 整合工作台）。
  *
  * - 只接收稳定列表状态、分页与选择/删除回调，不直接调用 GraphQL、不感知竞态；
- * - 条目沿用 gkj activity-request 信息层级（编号/型号·错误码/提交时间 11px·11px·9px，
- *   三态交互色见 index.css `.activity-item`），选中态由 aria-current 表达；
- * - 主选择用语义化 button（键盘可达），删除按钮独立存在，不嵌套按钮；
- * - 未接单条目显示删除确认（Popconfirm）；已接单完全不渲染删除操作；
+ * - 条目为「主内容列 + 固定宽状态/操作右栏」两列结构（`.customer-workspace-item`，
+ *   仅客户工作台消费）：信息层级沿用 gkj activity-request（编号/型号·错误码/提交时间
+ *   11px·11px·9px，三态交互色见 index.css `.activity-item`），选中态由 aria-current 表达；
+ * - 主选择用语义化 button（键盘可达）且独占内容列；右栏顶部恒为状态胶囊，仅未接单在
+ *   下方渲染删除确认（Popconfirm）。已接单不产生删除 DOM、无可聚焦元素，两态几何一致；
  * - 分页保留 AntD 语义（total>0 时恒显示分页，越界空页给可恢复提示，不隐藏分页）；
  * - 空库等状态与失败态互斥，加载失败不会被误读为「没有申请」。
  */
@@ -54,19 +55,17 @@ function RequestItemRow({
   selected: boolean;
 }) {
   return (
-    <div aria-current={selected ? 'true' : undefined} className="activity-item flex items-stretch">
+    <div
+      aria-current={selected ? 'true' : undefined}
+      className="activity-item customer-workspace-item"
+    >
       <button
-        className="customer-workspace-item-main flex min-w-0 flex-1 flex-col gap-1 px-3 py-[11px] text-left"
+        className="customer-workspace-item-main flex min-w-0 flex-col gap-1 px-3 py-[11px] text-left"
         onClick={() => onSelect(item.id)}
         type="button"
       >
-        <span className="flex flex-wrap items-center justify-between gap-2">
-          <span className="activity-item-code font-mono text-[11px] font-bold break-all">
-            {item.requestNo}
-          </span>
-          <StatusPill tone={item.isAccepted ? 'ok' : 'warn'}>
-            {item.isAccepted ? '已接单' : '待接单'}
-          </StatusPill>
+        <span className="activity-item-code font-mono text-[11px] font-bold break-all">
+          {item.requestNo}
         </span>
         <span className="text-[11px] font-bold break-words text-text">{`${item.equipmentModel.modelName}（${item.equipmentModel.modelCode}）· ${item.errorCode}`}</span>
         <span className="flex items-center justify-between gap-2 text-[9px] text-text-tertiary">
@@ -75,28 +74,37 @@ function RequestItemRow({
         </span>
       </button>
 
-      {/* 只有未接单申请可删除；已接单不预留空按钮位 */}
-      {item.isAccepted ? null : (
-        <div className="flex items-center pr-1.5">
-          <Popconfirm
-            cancelText="取消"
-            okButtonProps={{ loading: deleting }}
-            okText="确认删除"
-            onConfirm={() => onDelete(item.id)}
-            title="确认删除该维修申请？"
-          >
-            <Button
-              aria-label={`删除申请 ${item.requestNo}`}
-              danger
-              disabled={deleteDisabled}
-              size="small"
-              type="text"
+      {/* 状态/操作栏（固定宽 rail）：顶部恒为状态胶囊；仅未接单渲染删除确认。
+          已接单不产生删除 DOM（无禁用占位、无假按钮、无可聚焦元素）；
+          两态几何一致由 index.css `.customer-workspace-item` 的同一套两列网格保证 */}
+      <div className="customer-workspace-item-rail">
+        <span className="customer-workspace-item-status">
+          <StatusPill tone={item.isAccepted ? 'ok' : 'warn'}>
+            {item.isAccepted ? '已接单' : '待接单'}
+          </StatusPill>
+        </span>
+        {item.isAccepted ? null : (
+          <div className="customer-workspace-item-actions">
+            <Popconfirm
+              cancelText="取消"
+              okButtonProps={{ loading: deleting }}
+              okText="确认删除"
+              onConfirm={() => onDelete(item.id)}
+              title="确认删除该维修申请？"
             >
-              删除
-            </Button>
-          </Popconfirm>
-        </div>
-      )}
+              <Button
+                aria-label={`删除申请 ${item.requestNo}`}
+                danger
+                disabled={deleteDisabled}
+                size="small"
+                type="text"
+              >
+                删除
+              </Button>
+            </Popconfirm>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
