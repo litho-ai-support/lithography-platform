@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { seedAuthSession } from './helpers/auth-session-seed';
 import { captureStableViewport, readPngDimensions } from './helpers/visual-evidence';
@@ -219,10 +221,11 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
     filePath: capture1440Path,
   });
   expect(readPngDimensions(capture1440Path)).toEqual({ height: 900, width: 1440 });
-  await testInfo.attach('shared-shell-M-1440x900-evidence.json', {
-    body: JSON.stringify(capture1440, null, 2),
-    contentType: 'application/json',
-  });
+  // 证据 JSON 以 writeFileSync 落盘（testInfo.attach 的 body 在默认 reporter 下不写盘）：
+  // 阶段验收需能从磁盘直接核对 JSON 内 gitSha 与 PR head 一致
+  const capture1440Json = path.join(testInfo.outputPath(), 'shared-shell-M-1440x900-evidence.json');
+  writeFileSync(capture1440Json, JSON.stringify(capture1440, null, 2));
+  console.log(`[visual-evidence] ${capture1440Json}`);
 });
 
 test('导航 hover/active、三种状态底色和 S/M/L 往返均在真实浏览器生效', async ({
@@ -326,8 +329,7 @@ test('导航 hover/active、三种状态底色和 S/M/L 往返均在真实浏览
     filePath: capture1366Path,
   });
   expect(readPngDimensions(capture1366Path)).toEqual({ height: 768, width: 1366 });
-  await testInfo.attach('shared-shell-M-1366x768-evidence.json', {
-    body: JSON.stringify(capture1366, null, 2),
-    contentType: 'application/json',
-  });
+  const capture1366Json = path.join(testInfo.outputPath(), 'shared-shell-M-1366x768-evidence.json');
+  writeFileSync(capture1366Json, JSON.stringify(capture1366, null, 2));
+  console.log(`[visual-evidence] ${capture1366Json}`);
 });
