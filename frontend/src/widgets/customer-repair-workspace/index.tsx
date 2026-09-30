@@ -1,5 +1,6 @@
 // src/widgets/customer-repair-workspace/index.tsx
 
+import { useLayoutEffect, useRef } from 'react';
 import { Button } from 'antd';
 import { useNavigate } from 'react-router';
 
@@ -60,8 +61,10 @@ type CustomerRepairWorkspaceProps = {
  * 详情容器：详情 hook 只在具备详情目标时挂载（create 态不发起详情查询）。
  * 删除命令按模式编排（计划 S0-6）：
  * - history-list：走列表 hook 删除（内建分页回退与回刷），右栏随回刷结果更新为新第一项；
- * - history-detail：优先走详情 hook 删除（目标代次守卫）；从左栏删除当前 URL 目标时
- *   同样在成功后进入列表路由，列表刷新完成后选择当前页第一项。
+ * - history-detail：优先走详情 hook 删除（目标代次守卫）；从左栏删除当前 URL 目标时经
+ *   工作台路由实例代次守卫（CustomerRepairWorkspace 的 deleteNavigationGenerationRef），
+ *   仅当成功返回时仍停留于发起删除时的同一申请详情页才进入列表路由，
+ *   列表刷新完成后选择当前页第一项。
  */
 function WorkspaceDetailPane({
   deleteViaDetailFlow,
@@ -150,7 +153,9 @@ function ListPlaceholderPane({
 }
 
 /**
- * create 态右栏：主表单 + 约 230px「填写提示」（仅真实业务规则，无 AI / 统计 / 演示内容）。
+ * create 态右栏：RepairRequestForm 作为卡片完整单列主体（2026-09-30 复审移除独立
+ * 「填写提示」侧栏；字段级短提示就近挂在对应 Form.Item 小标题旁，整体业务规则放操作行，
+ * 均见 RepairRequestForm，不在本层复制业务文案）。
  * 被拒角色（SUPER_ADMIN 创建页例外）不渲染表单也不发起型号查询，展示明确说明。
  */
 function CreatePane({
@@ -185,23 +190,7 @@ function CreatePane({
           </Button>
         </div>
 
-        <div className="customer-create-grid">
-          <RepairRequestForm onCreated={onCreated} onViewCreated={onViewCreated} />
-
-          <aside className="flex flex-col gap-3">
-            <div className="rounded-xl border border-border bg-bg-container p-3.5">
-              <div className="text-[9px] font-extrabold tracking-[0.12em] text-text-tertiary uppercase">
-                填写提示
-              </div>
-              <ul className="mt-2 flex list-disc flex-col gap-2 pl-4 text-xs text-text-secondary">
-                <li>设备型号仅可选择管理员已启用的型号。</li>
-                <li>设备错误码必填，不超过 100 个字符。</li>
-                <li>故障描述必填，不超过 5000 个字符。</li>
-                <li>提交后申请内容不可修改；未接单的申请可自行删除。</li>
-              </ul>
-            </div>
-          </aside>
-        </div>
+        <RepairRequestForm onCreated={onCreated} onViewCreated={onViewCreated} />
       </div>
     </DataCard>
   );
@@ -237,6 +226,26 @@ export function CustomerRepairWorkspace({ mode, requestId }: CustomerRepairWorks
       ? detailTargetId
       : null;
 
+  // 左栏删除的导航守卫（2026-09-30 复审要求，与右栏详情删除的目标代次守卫等价）：
+  // 发起删除时记录当时的「路由实例代次」——mode / requestId 任一变化（切到创建页、
+  // 申请 B、列表页，或离开后重新进入申请 A）以及组件卸载都会推进代次。
+  // 只比较申请 ID 不够：离开 A 再回到 A 时 ID 相同，但已不是当初发起删除的页面实例。
+  const deleteNavigationGenerationRef = useRef(0);
+
+  useLayoutEffect(() => {
+    // 代次在 layout effect 内同步推进（幂等）：react-hooks/refs 禁止 render 期间读写
+    // ref，且 render 可能被并发特性重放而自增不幂等（与详情 flow 的目标代次同口径）。
+    deleteNavigationGenerationRef.current += 1;
+
+    const generation = deleteNavigationGenerationRef.current;
+
+    return () => {
+      if (deleteNavigationGenerationRef.current === generation) {
+        deleteNavigationGenerationRef.current += 1;
+      }
+    };
+  }, [mode, requestId]);
+
   const navigateToCreate = () => navigate(CUSTOMER_CREATE_PATH);
   const navigateToList = () => navigate(REPAIR_REQUESTS_LIST_PATH);
 
@@ -262,8 +271,13 @@ export function CustomerRepairWorkspace({ mode, requestId }: CustomerRepairWorks
     // 详情态从左栏删除当前 URL 目标：删除成功后进入列表路由（列表刷新后选第一项）；
     // 其余情况（列表态、或删除非当前目标）保持在列表路由并沿用列表 hook 的回刷规则。
     if (mode === 'history-detail' && detailTargetId === id) {
+      const generation = deleteNavigationGenerationRef.current;
+
       void deleteRequest(id).then((deleted) => {
-        if (deleted) {
+        // 仅当删除成功且仍停留在发起删除时的同一详情页实例（未卸载、未切页 / 切目标）
+        // 才导航；已离开时旧请求只完成数据删除，不把用户强制带回列表；
+        // 删除失败保持现场，反馈由列表 hook 的错误提示承担。
+        if (deleted && deleteNavigationGenerationRef.current === generation) {
           navigateToList();
         }
       });

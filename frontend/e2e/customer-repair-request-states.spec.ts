@@ -9,7 +9,9 @@
 // repair-request-manage-real.spec.ts 承担，职责分离。
 //
 // 验收内容（PR5 计划表 S2）：
-// - S2-1 创建页：字段等宽 / 标签 / 页面说明 / 主按钮半径与尺寸 / 提交中 loading / 业务拒绝错误反馈；
+// - S2-1 创建页：字段等宽 / 标签 / 提示就位（2026-09-30 复审：字段短提示挂在对应小标题旁、
+//   无独立「填写提示」侧栏，整体规则在操作行）/ 页面说明 / 主按钮半径与尺寸 / 提交中 loading /
+//   业务拒绝错误反馈；
 // - S2-2 型号 loading / 空 / 失败三态，且空与失败均可重试恢复（不必刷新整页）；
 // - S2-3 列表五态：loading / 库为空 / 失败 / 正常 / 长文本；失败态不与空态叠加
 //   （机械断言无活动条目、无空态文案；列表加载中与详情占位各自呈加载态）；
@@ -205,7 +207,9 @@ test.describe('创建页：型号三态与表单统一（S2-1 / S2-2）', () => 
     writeEvidence(testInfo, capturedAt, evidence);
   });
 
-  test('就绪态：字段等宽、标签与页面说明齐备、主按钮半径合规', async ({ page }, testInfo) => {
+  test('就绪态：字段等宽、提示就位、无独立提示栏、主按钮半径合规（1440×900 + 375×667）', async ({
+    page,
+  }, testInfo) => {
     const capturedAt = new Date();
     const evidence: Record<string, unknown> = {};
     await openPage(page, { models: 'ready' }, { path: CREATE_PATH });
@@ -220,6 +224,14 @@ test.describe('创建页：型号三态与表单统一（S2-1 / S2-2）', () => 
       await expect(page.getByText(label, { exact: true })).toBeVisible();
     }
 
+    // 2026-09-30 复审：字段提示与字段一一对应、就近挂在对应小标题旁；不再有独立「填写提示」右栏
+    await expect(page.getByText('仅可选择已启用型号')).toBeVisible();
+    await expect(page.getByText('必填，最多 100 个字符')).toBeVisible();
+    await expect(page.getByText('必填，最多 5000 个字符')).toBeVisible();
+    await expect(page.getByText('提交后不可修改；未接单可删除')).toBeVisible();
+    await expect(page.getByText('填写提示')).toHaveCount(0);
+    await expect(page.locator('.customer-workspace-detail-pane aside')).toHaveCount(0);
+
     // 字段等宽：三个控件同宽且等于表单内容宽度（统一字段宽度，不允许参差）
     const widths = await page.evaluate(() => {
       const select = document.querySelector('.ant-select');
@@ -233,6 +245,34 @@ test.describe('创建页：型号三态与表单统一（S2-1 / S2-2）', () => 
     });
     expect(new Set(widths.map((width) => Math.round(width))).size, `控件宽度：${widths}`).toBe(1);
 
+    // 桌面端表单使用卡片有效宽度（去掉右栏后不留空列）：表单宽 ≈ 卡片内容宽（1px 容差）
+    const formGeometry = await page.evaluate(() => {
+      const card = document.querySelector('.customer-workspace-detail-pane .data-card');
+      const form = card?.querySelector('form');
+      if (!card || !form) {
+        throw new Error('创建卡或表单缺失');
+      }
+
+      const cardRect = card.getBoundingClientRect();
+      const cardStyle = getComputedStyle(card);
+      const contentWidth =
+        cardRect.width -
+        parseFloat(cardStyle.paddingLeft) -
+        parseFloat(cardStyle.paddingRight) -
+        parseFloat(cardStyle.borderLeftWidth) -
+        parseFloat(cardStyle.borderRightWidth);
+
+      return {
+        cardWidth: cardRect.width,
+        contentWidth,
+        formWidth: form.getBoundingClientRect().width,
+      };
+    });
+    expect(
+      Math.abs(formGeometry.formWidth - formGeometry.contentWidth),
+      `表单应使用卡片有效宽度：${JSON.stringify(formGeometry)}`,
+    ).toBeLessThanOrEqual(1);
+
     // 主按钮按 --radius-action（8px）；提交按钮非 small 档
     const submit = page.getByRole('button', { name: '提交申请' });
     expect(await submit.evaluate((el) => getComputedStyle(el).borderRadius)).toBe('8px');
@@ -240,7 +280,35 @@ test.describe('创建页：型号三态与表单统一（S2-1 / S2-2）', () => 
 
     await capture(page, testInfo, 'customer-create-ready', WIDE, capturedAt, evidence, {
       controlWidths: widths,
+      formGeometry,
       overflow: await measurePageOverflow(page),
+    });
+
+    // 375×667 窄屏就绪态（2026-09-30 复审）：仍是单列（左栏收起），字段提示 / 整体规则 /
+    // 提交按钮可达，无整页横溢；截图前由 captureStableViewport 复位 scrollY 并校验
+    await page.setViewportSize(NARROW);
+    await waitForFontsReady(page);
+    const gridColumns = await page.evaluate(() => {
+      const gridEl = document.querySelector('.customer-workspace-grid');
+      if (!gridEl) {
+        throw new Error('工作台主网格缺失');
+      }
+
+      return getComputedStyle(gridEl).gridTemplateColumns.split(' ').length;
+    });
+    expect(gridColumns, '375×667 应保持单列').toBe(1);
+    await expect(page.locator('.customer-workspace-list-pane')).toBeHidden();
+    await expect(page.getByText('仅可选择已启用型号')).toBeVisible();
+    await expect(page.getByText('必填，最多 100 个字符')).toBeVisible();
+    await expect(page.getByText('必填，最多 5000 个字符')).toBeVisible();
+    await expect(page.getByText('提交后不可修改；未接单可删除')).toBeVisible();
+    await submit.scrollIntoViewIfNeeded();
+    await expect(submit, '375×667 提交按钮应可达（纵向滚动）').toBeInViewport();
+    const narrowOverflow = await measurePageOverflow(page);
+    expect(narrowOverflow, '375×667 不应出现整页横向滚动').toBeLessThanOrEqual(0);
+    await capture(page, testInfo, 'customer-create-ready-narrow', NARROW, capturedAt, evidence, {
+      gridColumns,
+      overflow: narrowOverflow,
     });
     writeEvidence(testInfo, capturedAt, evidence);
   });

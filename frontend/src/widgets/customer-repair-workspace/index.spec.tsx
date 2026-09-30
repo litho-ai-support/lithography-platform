@@ -10,7 +10,7 @@
  * 导航意图；列表 / 详情 / 创建状态机的时序行为由各自 application spec 与面板 spec 覆盖。
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -173,6 +173,16 @@ const visibleConfirmButtons = () =>
 async function confirmVisibleDelete(): Promise<void> {
   await waitFor(() => expect(visibleConfirmButtons()).toHaveLength(1));
   fireEvent.click(visibleConfirmButtons()[0]);
+}
+
+/** 可控结算的删除请求句柄：用于在途期间切换路由 / 卸载后再决定成功或失败晚到 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+
+  return { promise, resolve };
 }
 
 /**
@@ -381,6 +391,154 @@ describe('CustomerRepairWorkspace 的删除编排', () => {
 
     await waitFor(() => expect(listDeleteMock).toHaveBeenCalledWith(920003));
     expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  // 2026-09-30 复审：左栏删除的导航守卫（与右栏详情删除的目标代次守卫等价）。
+  // 删除在途时切页 / 切目标 / 卸载，旧请求的成功晚到只完成数据删除，不得把用户强制带回列表。
+  it('从左栏删除 A 后切到创建页：A 的成功晚到不导航', async () => {
+    setupReadyList();
+    const pendingDelete = deferred<boolean>();
+    listDeleteMock.mockReturnValueOnce(pendingDelete.promise);
+
+    const view = renderWorkspace({ mode: 'history-detail', requestId: 920001 });
+    fireEvent.click(screen.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' }));
+    await confirmVisibleDelete();
+    await waitFor(() => expect(listDeleteMock).toHaveBeenCalledWith(920001));
+
+    view.rerender(
+      <MessageFeedbackProvider>
+        <CustomerRepairWorkspace mode="create" />
+      </MessageFeedbackProvider>,
+    );
+
+    await act(async () => {
+      pendingDelete.resolve(true);
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('从左栏删除 A 后切到详情 B：A 的成功晚到不导航', async () => {
+    setupReadyList();
+    const pendingDelete = deferred<boolean>();
+    listDeleteMock.mockReturnValueOnce(pendingDelete.promise);
+
+    const view = renderWorkspace({ mode: 'history-detail', requestId: 920001 });
+    fireEvent.click(screen.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' }));
+    await confirmVisibleDelete();
+    await waitFor(() => expect(listDeleteMock).toHaveBeenCalledWith(920001));
+
+    view.rerender(
+      <MessageFeedbackProvider>
+        <CustomerRepairWorkspace mode="history-detail" requestId={920002} />
+      </MessageFeedbackProvider>,
+    );
+
+    await act(async () => {
+      pendingDelete.resolve(true);
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('从左栏删除 A 后离开工作台（卸载）：成功晚到不导航，也不产生卸载后更新告警', async () => {
+    setupReadyList();
+    const pendingDelete = deferred<boolean>();
+    listDeleteMock.mockReturnValueOnce(pendingDelete.promise);
+    const consoleErrorSpy = vi.spyOn(console, 'error');
+
+    const view = renderWorkspace({ mode: 'history-detail', requestId: 920001 });
+    fireEvent.click(screen.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' }));
+    await confirmVisibleDelete();
+    await waitFor(() => expect(listDeleteMock).toHaveBeenCalledWith(920001));
+
+    view.unmount();
+
+    await act(async () => {
+      pendingDelete.resolve(true);
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(
+      consoleErrorSpy.mock.calls.some((args) => String(args[0]).includes('unmounted')),
+      '不得出现「卸载后更新」告警',
+    ).toBe(false);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('从左栏删除 A、离开后重新进入申请 A（相同 ID 的新页面实例）：旧请求不导航', async () => {
+    setupReadyList();
+    const pendingDelete = deferred<boolean>();
+    listDeleteMock.mockReturnValueOnce(pendingDelete.promise);
+
+    const view = renderWorkspace({ mode: 'history-detail', requestId: 920001 });
+    fireEvent.click(screen.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' }));
+    await confirmVisibleDelete();
+    await waitFor(() => expect(listDeleteMock).toHaveBeenCalledWith(920001));
+
+    view.rerender(
+      <MessageFeedbackProvider>
+        <CustomerRepairWorkspace mode="create" />
+      </MessageFeedbackProvider>,
+    );
+    view.rerender(
+      <MessageFeedbackProvider>
+        <CustomerRepairWorkspace mode="history-detail" requestId={920001} />
+      </MessageFeedbackProvider>,
+    );
+
+    await act(async () => {
+      pendingDelete.resolve(true);
+    });
+
+    // 只比较申请 ID 会误判同一 ID 的新页面实例；必须按路由实例代次守卫
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('从左栏删除 A 且一直停留在 A：deferred 成功后正常回列表', async () => {
+    setupReadyList();
+    const pendingDelete = deferred<boolean>();
+    listDeleteMock.mockReturnValueOnce(pendingDelete.promise);
+
+    renderWorkspace({ mode: 'history-detail', requestId: 920001 });
+    fireEvent.click(screen.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' }));
+    await confirmVisibleDelete();
+    await waitFor(() => expect(listDeleteMock).toHaveBeenCalledWith(920001));
+    expect(navigateMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pendingDelete.resolve(true);
+    });
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/customer/repair-requests'));
+  });
+
+  it('从左栏删除失败（删除命令返回 false）：不导航（错误反馈仍由列表 hook 承担）', async () => {
+    setupReadyList();
+    const pendingDelete = deferred<boolean>();
+    listDeleteMock.mockReturnValueOnce(pendingDelete.promise);
+
+    renderWorkspace({ mode: 'history-detail', requestId: 920001 });
+    fireEvent.click(screen.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' }));
+    await confirmVisibleDelete();
+    await waitFor(() => expect(listDeleteMock).toHaveBeenCalledWith(920001));
+
+    await act(async () => {
+      pendingDelete.resolve(false);
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('CustomerRepairWorkspace 的创建页信息架构', () => {
+  it('不再渲染「填写提示」独立右栏（aside），表单协作端口保留', () => {
+    setupReadyList();
+    const { container } = renderWorkspace({ mode: 'create' });
+
+    expect(screen.queryByText('填写提示')).toBeNull();
+    expect(container.querySelector('.customer-workspace-detail-pane aside')).toBeNull();
+    expect(screen.getByTestId('mock-repair-request-form')).toBeTruthy();
   });
 });
 

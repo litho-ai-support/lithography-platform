@@ -21,6 +21,19 @@ type RepairRequestFormValues = {
   faultDescription: string;
 };
 
+/**
+ * 字段小标题 + 短提示（2026-09-30 复审：提示与字段一一对应、就近挂在标题旁，
+ * 不再集中成独立右栏；提示文本从属于小标题，低强调展示）。
+ */
+function FieldLabel({ hint, title }: { hint: string; title: string }) {
+  return (
+    <span className="repair-request-field-label">
+      <span>{title}</span>
+      <span className="repair-request-field-hint">{hint}</span>
+    </span>
+  );
+}
+
 export type RepairRequestFormProps = {
   /** 创建成功回调：携带真实创建记录（已含真实 id），供工作台刷新左栏列表联动 */
   onCreated?: (record: RepairRequestRecord) => void;
@@ -129,7 +142,7 @@ export function RepairRequestForm({ onCreated, onViewCreated }: RepairRequestFor
 
       <Form form={form} layout="vertical" onFinish={(values) => void handleSubmit(values)}>
         <Form.Item
-          label="设备型号"
+          label={<FieldLabel hint="仅可选择已启用型号" title="设备型号" />}
           name="equipmentModelId"
           rules={[{ message: '请选择设备型号', required: true }]}
         >
@@ -148,7 +161,9 @@ export function RepairRequestForm({ onCreated, onViewCreated }: RepairRequestFor
           />
         </Form.Item>
         <Form.Item
-          label="设备错误码"
+          label={
+            <FieldLabel hint={`必填，最多 ${ERROR_CODE_MAX_LENGTH} 个字符`} title="设备错误码" />
+          }
           name="errorCode"
           rules={[
             { message: '请输入设备错误码', required: true },
@@ -165,7 +180,12 @@ export function RepairRequestForm({ onCreated, onViewCreated }: RepairRequestFor
           />
         </Form.Item>
         <Form.Item
-          label="故障描述"
+          label={
+            <FieldLabel
+              hint={`必填，最多 ${FAULT_DESCRIPTION_MAX_LENGTH} 个字符`}
+              title="故障描述"
+            />
+          }
           name="faultDescription"
           rules={[
             { message: '请输入故障描述', required: true },
@@ -183,13 +203,17 @@ export function RepairRequestForm({ onCreated, onViewCreated }: RepairRequestFor
             style={{ minHeight: 150 }}
           />
         </Form.Item>
-        {/* 操作行右对齐（PR5 客户工作台计划 4.3）：取消仅重置已填内容 */}
+        {/* 操作行（2026-09-30 复审）：整体业务规则在左、按钮在右；窄屏自动换行后
+            规则在上、按钮仍右对齐（.repair-request-form-*，见 index.css） */}
         <Form.Item>
-          <div className="flex justify-end gap-2">
-            <Button onClick={handleCancel}>取消</Button>
-            <Button disabled={!modelsReady} htmlType="submit" loading={submitting} type="primary">
-              提交申请
-            </Button>
+          <div className="repair-request-form-actions">
+            <p className="repair-request-form-rule">提交后不可修改；未接单可删除</p>
+            <div className="repair-request-form-buttons">
+              <Button onClick={handleCancel}>取消</Button>
+              <Button disabled={!modelsReady} htmlType="submit" loading={submitting} type="primary">
+                提交申请
+              </Button>
+            </div>
           </div>
         </Form.Item>
       </Form>

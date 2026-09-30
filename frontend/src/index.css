@@ -828,17 +828,41 @@ body {
   display: inline-flex;
 }
 
-/* create 态右栏：主表单 + 约 230px 填写提示（960px 以下单列，提示落在表单下方） */
-.customer-create-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(0, 1fr);
+/* 创建表单信息架构（2026-09-30 复审）：去掉独立「填写提示」侧栏，字段提示就近挂在
+   小标题旁（.repair-request-field-hint），整体业务规则放操作行。桌面：规则在左、
+   按钮在右；窄屏自动换行后规则在上、按钮仍右对齐（双向 auto 外边距），不产生空白列。 */
+.repair-request-field-label {
+  align-items: baseline;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
 }
 
-@media (min-width: 960px) {
-  .customer-create-grid {
-    grid-template-columns: minmax(0, 1fr) 230px;
-  }
+.repair-request-field-hint {
+  color: var(--ant-color-text-tertiary);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1rem;
+}
+
+.repair-request-form-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.repair-request-form-rule {
+  color: var(--ant-color-text-tertiary);
+  font-size: 0.75rem;
+  line-height: 1rem;
+  margin: 0 auto 0 0;
+}
+
+.repair-request-form-buttons {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 /* 窄屏「查看我的维修申请」入口：仅单面板模式显示 */

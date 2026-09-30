@@ -1,7 +1,7 @@
 // src/features/repair-request/ui/repair-request-form.spec.tsx
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -365,5 +365,48 @@ describe('提交校验与反馈', () => {
 
     pending.resolve({ ok: true, repairRequest: CREATED_RECORD });
     expect(await screen.findByText('维修申请创建成功')).toBeTruthy();
+  });
+});
+
+describe('字段提示与整体规则（2026-09-30 复审：去掉集中式提示栏）', () => {
+  beforeEach(() => {
+    fetchEquipmentModelsMock.mockResolvedValue(MODEL_OPTIONS);
+  });
+
+  it('三个字段小标题旁各挂一条与字段一一对应的短提示，长度口径与 100 / 5000 契约一致', async () => {
+    renderForm();
+    await screen.findByRole('combobox');
+
+    const pairs = [
+      { hint: '仅可选择已启用型号', title: '设备型号' },
+      { hint: '必填，最多 100 个字符', title: '设备错误码' },
+      { hint: '必填，最多 5000 个字符', title: '故障描述' },
+    ] as const;
+
+    const items = pairs.map((pair) => {
+      const title = screen.getByText(pair.title, { exact: true });
+      const item = title.closest('.ant-form-item');
+
+      expect(item, `${pair.title} 应有对应 Form.Item`).not.toBeNull();
+      expect(item?.textContent, `${pair.title} 旁应展示短提示`).toContain(pair.hint);
+
+      return item;
+    });
+
+    // 提示不得集中塞进某一个字段：三个提示分属三个不同 Form.Item
+    expect(new Set(items).size).toBe(3);
+  });
+
+  it('整体业务规则位于提交按钮附近的操作行，且不再渲染「填写提示」', async () => {
+    renderForm();
+    await screen.findByRole('combobox');
+
+    const rule = screen.getByText('提交后不可修改；未接单可删除');
+    const actions = rule.closest('.repair-request-form-actions');
+
+    expect(actions).not.toBeNull();
+    expect(within(actions as HTMLElement).getByRole('button', { name: /取\s*消/ })).toBeTruthy();
+    expect(within(actions as HTMLElement).getByRole('button', { name: '提交申请' })).toBeTruthy();
+    expect(screen.queryByText('填写提示')).toBeNull();
   });
 });
