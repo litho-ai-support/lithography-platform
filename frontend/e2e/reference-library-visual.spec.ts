@@ -56,6 +56,8 @@ import {
 } from './helpers/reference-document-mocks';
 import {
   buildEvidenceFileName,
+  captureStableViewport,
+  prepareStableViewport,
   readPngDimensions,
   waitForFontsReady,
 } from './helpers/visual-evidence';
@@ -116,6 +118,8 @@ test('独立资料列表整页对齐知识库骨架：页头/汇总条/列表卡
   await installReferenceLibraryMocks(page);
   const capturedAt = new Date();
   const evidence: Record<string, unknown> = {};
+  // 同轮四视口默认/展开态截图必须共享同一干净 SHA（逐张记录，结束时断言一致）
+  const captureShas: string[] = [];
 
   for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ height: viewport.height, width: viewport.width });
@@ -354,7 +358,7 @@ test('独立资料列表整页对齐知识库骨架：页头/汇总条/列表卡
       viewportLabel: viewport.label,
     });
     const pngPath = path.join(evidenceDir, fileName);
-    await page.screenshot({ path: pngPath });
+    const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
     const png = readPngDimensions(pngPath);
     expect(png).toEqual({ height: viewport.height, width: viewport.width });
 
@@ -465,11 +469,13 @@ test('独立资料列表整页对齐知识库骨架：页头/汇总条/列表卡
     expect(overflow, `${viewport.label} 不应出现整页横向滚动`).toBeLessThanOrEqual(0);
 
     // 展开态整页证据（与默认态分开留档，供 R4 并排比对）
-    const expandedPngPath = path.join(
-      evidenceDir,
-      `reference-library-filter-expanded-${viewport.label}.png`,
-    );
-    await page.screenshot({ path: expandedPngPath });
+    const expandedFileName = `reference-library-filter-expanded-${viewport.label}.png`;
+    const expandedPngPath = path.join(evidenceDir, expandedFileName);
+    const expandedCapture = await captureStableViewport(page, {
+      fileName: expandedFileName,
+      filePath: expandedPngPath,
+    });
+    captureShas.push(capture.gitSha, expandedCapture.gitSha);
 
     // P1-2（S3 评审修复轮）：清除按钮是「输入非空后才渲染」的 DOM，必须与 .kb-search-clear 同源。
     // 放在默认态截图之后执行，避免防抖重载影响前面的 ready 断言与截图内容。
@@ -497,18 +503,21 @@ test('独立资料列表整页对齐知识库骨架：页头/汇总条/列表卡
       marginLeft: '8px',
       padding: '0px',
     });
-    const filledSearchPng = path.join(
-      evidenceDir,
-      `reference-library-search-filled-${viewport.label}.png`,
-    );
+    const filledSearchFileName = `reference-library-search-filled-${viewport.label}.png`;
+    const filledSearchPng = path.join(evidenceDir, filledSearchFileName);
+    // 局部截图例外（登记于 frontend/docs/testing.md）：搜索框元素截图，非全视口；
+    // 截图前仍复用统一稳定前置（滚动复位 + 布局稳定）
+    await prepareStableViewport(page, filledSearchFileName);
     await search.screenshot({ path: filledSearchPng });
 
     evidence[viewport.label] = {
+      capture,
       cardStyles,
       clearStyles,
       defaultFileName: fileName,
       defaultPng: png,
       defaultTableOffset,
+      expandedCapture,
       expandedPng: path.basename(expandedPngPath),
       expandedTableOffset,
       filledSearchPng: path.basename(filledSearchPng),
@@ -522,11 +531,18 @@ test('独立资料列表整页对齐知识库骨架：页头/汇总条/列表卡
     };
   }
 
+  expect(new Set(captureShas).size, '四视口默认/展开态截图必须共享同一 SHA').toBe(1);
+
   const evidenceJson = path.join(evidenceDir, 'reference-library-visual-evidence.json');
   writeFileSync(
     evidenceJson,
     JSON.stringify(
-      { capturedAt: capturedAt.toISOString(), role: ROLE, viewports: evidence },
+      {
+        capturedAt: capturedAt.toISOString(),
+        gitSha: captureShas[0],
+        role: ROLE,
+        viewports: evidence,
+      },
       null,
       2,
     ),
@@ -546,6 +562,8 @@ test('长标题 / 说明 / 原始文件名单行截断且详情入口仍可操�
   await installReferenceLibraryMocks(page, LONG_TEXT_ITEMS);
   const capturedAt = new Date();
   const evidence: Record<string, unknown> = {};
+  // 同轮四视口长文本截图必须共享同一干净 SHA（逐张记录，结束时断言一致）
+  const captureShas: string[] = [];
 
   for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ height: viewport.height, width: viewport.width });
@@ -620,7 +638,8 @@ test('长标题 / 说明 / 原始文件名单行截断且详情入口仍可操�
       viewportLabel: viewport.label,
     });
     const pngPath = path.join(evidenceDir, fileName);
-    await page.screenshot({ path: pngPath });
+    const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
+    captureShas.push(capture.gitSha);
     const png = readPngDimensions(pngPath);
     expect(png).toEqual({ height: viewport.height, width: viewport.width });
 
@@ -628,14 +647,21 @@ test('长标题 / 说明 / 原始文件名单行截断且详情入口仍可操�
     await titleCell.click();
     await expect(page).toHaveURL(new RegExp(`/reference-documents/${LONG_TEXT_ITEMS[0].id}$`));
 
-    evidence[viewport.label] = { fileName, overflow, png, truncation };
+    evidence[viewport.label] = { capture, fileName, overflow, png, truncation };
   }
+
+  expect(new Set(captureShas).size, '四视口长文本截图必须共享同一 SHA').toBe(1);
 
   const evidenceJson = path.join(evidenceDir, 'reference-library-long-text-evidence.json');
   writeFileSync(
     evidenceJson,
     JSON.stringify(
-      { capturedAt: capturedAt.toISOString(), role: ROLE, viewports: evidence },
+      {
+        capturedAt: capturedAt.toISOString(),
+        gitSha: captureShas[0],
+        role: ROLE,
+        viewports: evidence,
+      },
       null,
       2,
     ),

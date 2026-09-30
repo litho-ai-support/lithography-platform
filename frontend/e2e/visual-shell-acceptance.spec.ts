@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 import { seedAuthSession } from './helpers/auth-session-seed';
+import { captureStableViewport, readPngDimensions } from './helpers/visual-evidence';
 
 // 与 visual-shell.spec.ts 保持一致：壳层验收不依赖业务后端，但访问管理员页时
 // 必须给 mapper 一个合法的空 DTO，不能让空响应把已种入的会话误判成失效。
@@ -209,9 +210,18 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
     body: JSON.stringify(snapshot, null, 2),
     contentType: 'application/json',
   });
-  await page.screenshot({
-    path: testInfo.outputPath('shared-shell-M-1440x900.png'),
-    fullPage: true,
+  // P2-2 起统一经 captureStableViewport（工作区干净断言 + 滚动复位 + 布局稳定 + 元数据），
+  // 语义由 fullPage 整页改为标准视口截图：物理尺寸必须严格等于 1440×900
+  const capture1440FileName = 'shared-shell-M-1440x900.png';
+  const capture1440Path = testInfo.outputPath(capture1440FileName);
+  const capture1440 = await captureStableViewport(page, {
+    fileName: capture1440FileName,
+    filePath: capture1440Path,
+  });
+  expect(readPngDimensions(capture1440Path)).toEqual({ height: 900, width: 1440 });
+  await testInfo.attach('shared-shell-M-1440x900-evidence.json', {
+    body: JSON.stringify(capture1440, null, 2),
+    contentType: 'application/json',
   });
 });
 
@@ -307,8 +317,17 @@ test('导航 hover/active、三种状态底色和 S/M/L 往返均在真实浏览
     expect(layout.logoutBottom).toBeLessThanOrEqual(viewport.height);
     await clickFontScale(page, 'M');
   }
-  await page.screenshot({
-    path: testInfo.outputPath('shared-shell-M-1366x768.png'),
-    fullPage: true,
+  // P2-2 起统一经 captureStableViewport（工作区干净断言 + 滚动复位 + 布局稳定 + 元数据），
+  // 语义由 fullPage 整页改为标准视口截图：物理尺寸必须严格等于 1366×768
+  const capture1366FileName = 'shared-shell-M-1366x768.png';
+  const capture1366Path = testInfo.outputPath(capture1366FileName);
+  const capture1366 = await captureStableViewport(page, {
+    fileName: capture1366FileName,
+    filePath: capture1366Path,
+  });
+  expect(readPngDimensions(capture1366Path)).toEqual({ height: 768, width: 1366 });
+  await testInfo.attach('shared-shell-M-1366x768-evidence.json', {
+    body: JSON.stringify(capture1366, null, 2),
+    contentType: 'application/json',
   });
 });

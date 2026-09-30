@@ -189,19 +189,11 @@ async function waitForLayoutStable(page: Page, label: string): Promise<void> {
 }
 
 /**
- * 稳定截图：工作区干净断言（P2-1，失败关闭）→ 字体就绪 → 滚动复位到页面顶部并轮询确认 →
- * 页头/品牌可见 → 排空有限动画 → 布局稳定 → 截图 → 返回可对账的元数据。所有视觉证据截图
- * 一律经本函数，不得直调 `page.screenshot`（否则滚动位置污染与伪关联 SHA 都无法审计）。
+ * 稳定前置（P2-2，供统一入口与已登记者局部例外共用；工作区断言不在此层）：
+ * 字体就绪 → 滚动复位到页面顶部并轮询确认 → 页头/品牌可见 → 排空有限动画 → 布局稳定。
+ * 局部 clip / 元素截图的例外必须先调用本函数，再执行各自的专用截图实现。
  */
-export async function captureStableViewport(
-  page: Page,
-  options: { fileName: string; filePath: string },
-): Promise<ViewportCaptureMeta> {
-  const label = options.fileName;
-
-  // 0) 提交级证据前提（P2-1）：工作区必须干净，脏/不可判定一律失败关闭
-  const gitSha = assertCleanWorkspaceForEvidence(label);
-
+export async function prepareStableViewport(page: Page, label: string): Promise<void> {
   // 1) 字体就绪（基准 §1）
   await waitForFontsReady(page);
 
@@ -237,12 +229,32 @@ export async function captureStableViewport(
     await Promise.all(finite.map((animation) => animation.finished.catch(() => undefined)));
   });
 
-  // 5) 主工作区稳定后才截图
+  // 5) 主工作区稳定后才允许截图
   await waitForLayoutStable(page, label);
+}
+
+/**
+ * 稳定截图：工作区干净断言（P2-1，失败关闭）→ 稳定前置（字体/滚动复位/构图前提/动画/布局）→
+ * 截图 → 返回可对账的元数据。所有全视口证据截图一律经本函数，不得直调 `page.screenshot`
+ * （否则滚动位置污染与伪关联 SHA 都无法审计）；局部 clip / 元素例外须登记并先调
+ * prepareStableViewport。
+ */
+export async function captureStableViewport(
+  page: Page,
+  options: { fileName: string; filePath: string },
+): Promise<ViewportCaptureMeta> {
+  const label = options.fileName;
+
+  // 0) 提交级证据前提（P2-1）：工作区必须干净，脏/不可判定一律失败关闭
+  const gitSha = assertCleanWorkspaceForEvidence(label);
+
+  // 1) 稳定前置（2–5 步：字体就绪 → 滚动复位 → 构图前提 → 动画排空 → 布局稳定）
+  await prepareStableViewport(page, label);
 
   await page.screenshot({ path: options.filePath });
 
-  // 6) 采集构图与滚动元数据（写回证据 JSON，截图与实况可逐张对账）
+  // 6) 采集构图与滚动元数据（写回证据 JSON，截图与实况可逐张对账），
+  //    并断言「scrollY = 0 且无整页横向溢出」——每张全视口证据截图必须成立
   const metrics = await page.evaluate(() => {
     const grid = document.querySelector('.customer-workspace-grid');
 
@@ -257,6 +269,12 @@ export async function captureStableViewport(
       url: window.location.href,
     };
   });
+
+  expect(metrics.scrollY, `${label} 截图时刻 scrollY 应为 0`).toBe(0);
+  expect(
+    metrics.documentScrollWidth - metrics.documentClientWidth,
+    `${label} 截图时刻不应出现整页横向溢出`,
+  ).toBeLessThanOrEqual(0);
 
   return {
     ...metrics,

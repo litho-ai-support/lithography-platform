@@ -421,4 +421,38 @@ export default defineConfig([
       ],
     },
   },
+  {
+    // 视觉截图机械约束（PR5 P2-2）：e2e spec 一律经 e2e/helpers/visual-evidence.ts 的
+    // captureStableViewport 采集全视口证据（工作区干净断言 / 滚动复位 / 布局稳定 / 元数据），
+    // 禁止直接调用 page.screenshot()。helper 位于 e2e/helpers/（非 spec），不在本块范围内；
+    // 已登记的局部 clip 例外见下一块与 frontend/docs/testing.md 例外登记表。
+    files: ['e2e/**/*.spec.ts', 'e2e-real/**/*.spec.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          message:
+            '禁止在 spec 中直接调用 page.screenshot()：全视口视觉证据必须经 e2e/helpers/visual-evidence.ts 的 captureStableViewport 采集。如属已登记的局部 clip 例外，请先在 frontend/docs/testing.md 登记表登记，并在 eslint.config.js 对应 override 中放行。',
+          selector: 'CallExpression[callee.object.name="page"][callee.property.name="screenshot"]',
+        },
+      ],
+    },
+  },
+  {
+    // P2-2 已登记局部 clip 例外（frontend/docs/testing.md 例外登记表）：仅知识库视觉 spec 的
+    // 「表头 + 一行正文」clip 合成图允许带 clip 直调 page.screenshot；同文件内无 clip 的
+    // 全视口直调仍被禁止（同名规则整块覆盖上一块：本块即该文件的完整配置）。
+    files: ['e2e/admin-document-database-visual.spec.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          message:
+            'admin 视觉 spec 仅允许已登记的表头+首行 clip 例外带 clip 直调 page.screenshot；全视口截图必须经 captureStableViewport（见 frontend/docs/testing.md 例外登记表）。',
+          selector:
+            'CallExpression[callee.object.name="page"][callee.property.name="screenshot"]:not(:has(Property[key.name="clip"]))',
+        },
+      ],
+    },
+  },
 ]);

@@ -29,6 +29,7 @@ import {
 } from './helpers/reference-document-mocks';
 import {
   buildEvidenceFileName,
+  captureStableViewport,
   readPngDimensions,
   waitForFontsReady,
 } from './helpers/visual-evidence';
@@ -139,6 +140,8 @@ test('详情长标题 / 长文件名 / 长说明 / 长正文在四视口均不�
   await installReferenceDocumentMocks(page);
   const capturedAt = new Date();
   const evidence: Record<string, unknown> = {};
+  // 同轮四视口截图必须共享同一干净 SHA（逐张记录，结束时断言一致）
+  const captureShas: string[] = [];
 
   for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ height: viewport.height, width: viewport.width });
@@ -253,11 +256,13 @@ test('详情长标题 / 长文件名 / 长说明 / 长正文在四视口均不�
       viewportLabel: viewport.label,
     });
     const pngPath = path.join(evidenceDir, fileName);
-    await page.screenshot({ path: pngPath });
+    const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
+    captureShas.push(capture.gitSha);
     const png = readPngDimensions(pngPath);
     expect(png).toEqual({ height: viewport.height, width: viewport.width });
 
     evidence[viewport.label] = {
+      capture,
       contentOverflow,
       extraBelowTitle,
       fileName,
@@ -270,11 +275,18 @@ test('详情长标题 / 长文件名 / 长说明 / 长正文在四视口均不�
     };
   }
 
+  expect(new Set(captureShas).size, '四视口整页截图必须共享同一 SHA').toBe(1);
+
   const evidenceJson = path.join(evidenceDir, 'reference-document-detail-long-text-evidence.json');
   writeFileSync(
     evidenceJson,
     JSON.stringify(
-      { capturedAt: capturedAt.toISOString(), role: 'SUPER_ADMIN', viewports: evidence },
+      {
+        capturedAt: capturedAt.toISOString(),
+        gitSha: captureShas[0],
+        role: 'SUPER_ADMIN',
+        viewports: evidence,
+      },
       null,
       2,
     ),
@@ -321,16 +333,17 @@ test('新增页表单态 → 上传中（真实 loading、无假百分比）→ 
   await expect(panel).toHaveCount(1);
   await expect(panel.locator('form')).toHaveCount(1);
 
-  const formPng = path.join(
-    evidenceDir,
-    buildEvidenceFileName({
-      area: 'reference-document-new-form',
-      capturedAt,
-      role: 'SUPER_ADMIN',
-      viewportLabel: '1440x900',
-    }),
-  );
-  await page.screenshot({ path: formPng });
+  const formFileName = buildEvidenceFileName({
+    area: 'reference-document-new-form',
+    capturedAt,
+    role: 'SUPER_ADMIN',
+    viewportLabel: '1440x900',
+  });
+  const formPng = path.join(evidenceDir, formFileName);
+  const formCapture = await captureStableViewport(page, {
+    fileName: formFileName,
+    filePath: formPng,
+  });
   expect(readPngDimensions(formPng)).toEqual({ height: 900, width: 1440 });
 
   // 填写合法表单并选择文件（提交走 REST multipart 通道）
@@ -353,33 +366,40 @@ test('新增页表单态 → 上传中（真实 loading、无假百分比）→ 
   await expect(page.locator('.ant-progress')).toHaveCount(0);
   expect(await panel.innerText(), '上传中不得展示无业务支持的百分比').not.toContain('%');
 
-  const uploadingPng = path.join(
-    evidenceDir,
-    buildEvidenceFileName({
-      area: 'reference-document-uploading',
-      capturedAt,
-      role: 'SUPER_ADMIN',
-      viewportLabel: '1440x900',
-    }),
-  );
-  await page.screenshot({ path: uploadingPng });
+  const uploadingFileName = buildEvidenceFileName({
+    area: 'reference-document-uploading',
+    capturedAt,
+    role: 'SUPER_ADMIN',
+    viewportLabel: '1440x900',
+  });
+  const uploadingPng = path.join(evidenceDir, uploadingFileName);
+  const uploadingCapture = await captureStableViewport(page, {
+    fileName: uploadingFileName,
+    filePath: uploadingPng,
+  });
   expect(readPngDimensions(uploadingPng)).toEqual({ height: 900, width: 1440 });
 
   // 上传失败：展示后端原因（信封 code 映射的前端兜底文案），保留表单内容
   await expect(panel.getByText('上传文件超过大小限制。')).toBeVisible({ timeout: 30_000 });
   expect(await page.getByPlaceholder('请输入文档标题').inputValue()).toBe('光源模块维护指南');
 
-  const failedPng = path.join(
-    evidenceDir,
-    buildEvidenceFileName({
-      area: 'reference-document-upload-failed',
-      capturedAt,
-      role: 'SUPER_ADMIN',
-      viewportLabel: '1440x900',
-    }),
-  );
-  await page.screenshot({ path: failedPng });
+  const failedFileName = buildEvidenceFileName({
+    area: 'reference-document-upload-failed',
+    capturedAt,
+    role: 'SUPER_ADMIN',
+    viewportLabel: '1440x900',
+  });
+  const failedPng = path.join(evidenceDir, failedFileName);
+  const failedCapture = await captureStableViewport(page, {
+    fileName: failedFileName,
+    filePath: failedPng,
+  });
   expect(readPngDimensions(failedPng)).toEqual({ height: 900, width: 1440 });
+
+  expect(
+    new Set([formCapture.gitSha, uploadingCapture.gitSha, failedCapture.gitSha]).size,
+    '表单/上传中/上传失败三张截图必须共享同一 SHA',
+  ).toBe(1);
 
   const evidenceJson = path.join(evidenceDir, 'reference-document-upload-evidence.json');
   writeFileSync(
@@ -387,11 +407,12 @@ test('新增页表单态 → 上传中（真实 loading、无假百分比）→ 
     JSON.stringify(
       {
         capturedAt: capturedAt.toISOString(),
+        gitSha: formCapture.gitSha,
         role: 'SUPER_ADMIN',
         screenshots: {
-          failed: path.basename(failedPng),
-          form: path.basename(formPng),
-          uploading: path.basename(uploadingPng),
+          failed: failedCapture,
+          form: formCapture,
+          uploading: uploadingCapture,
         },
       },
       null,
@@ -442,16 +463,17 @@ test('下载失败明确提示；软删二次确认且未确认不发删除请�
   await page.getByRole('button', { name: /下载文件/ }).click();
   await expect(page.getByText('该资料没有可下载的文件。')).toBeVisible();
 
-  const downloadFailedPng = path.join(
-    evidenceDir,
-    buildEvidenceFileName({
-      area: 'reference-document-download-failed',
-      capturedAt,
-      role: 'SUPER_ADMIN',
-      viewportLabel: '1440x900',
-    }),
-  );
-  await page.screenshot({ path: downloadFailedPng });
+  const downloadFailedFileName = buildEvidenceFileName({
+    area: 'reference-document-download-failed',
+    capturedAt,
+    role: 'SUPER_ADMIN',
+    viewportLabel: '1440x900',
+  });
+  const downloadFailedPng = path.join(evidenceDir, downloadFailedFileName);
+  const downloadFailedCapture = await captureStableViewport(page, {
+    fileName: downloadFailedFileName,
+    filePath: downloadFailedPng,
+  });
   expect(readPngDimensions(downloadFailedPng)).toEqual({ height: 900, width: 1440 });
 
   // 软删二次确认：点击删除只弹确认框，未确认前不得发出删除 mutation
@@ -468,16 +490,17 @@ test('下载失败明确提示；软删二次确认且未确认不发删除请�
     '未确认前不得发出软删请求',
   ).toHaveLength(0);
 
-  const deleteConfirmPng = path.join(
-    evidenceDir,
-    buildEvidenceFileName({
-      area: 'reference-document-delete-confirm',
-      capturedAt,
-      role: 'SUPER_ADMIN',
-      viewportLabel: '1440x900',
-    }),
-  );
-  await page.screenshot({ path: deleteConfirmPng });
+  const deleteConfirmFileName = buildEvidenceFileName({
+    area: 'reference-document-delete-confirm',
+    capturedAt,
+    role: 'SUPER_ADMIN',
+    viewportLabel: '1440x900',
+  });
+  const deleteConfirmPng = path.join(evidenceDir, deleteConfirmFileName);
+  const deleteConfirmCapture = await captureStableViewport(page, {
+    fileName: deleteConfirmFileName,
+    filePath: deleteConfirmPng,
+  });
   expect(readPngDimensions(deleteConfirmPng)).toEqual({ height: 900, width: 1440 });
 
   // 取消确认后仍停留详情页，且始终未发出删除请求
@@ -485,17 +508,23 @@ test('下载失败明确提示；软删二次确认且未确认不发删除请�
   await expect(detailRoot.locator('.ant-card-head-title')).toHaveText(LONG_TITLE);
   expect(recorded.filter((name) => name === 'SoftDeleteReferenceDocument')).toHaveLength(0);
 
+  expect(
+    new Set([downloadFailedCapture.gitSha, deleteConfirmCapture.gitSha]).size,
+    '下载失败/删除确认两张截图必须共享同一 SHA',
+  ).toBe(1);
+
   const evidenceJson = path.join(evidenceDir, 'reference-document-download-delete-evidence.json');
   writeFileSync(
     evidenceJson,
     JSON.stringify(
       {
         capturedAt: capturedAt.toISOString(),
+        gitSha: downloadFailedCapture.gitSha,
         recordedOperations: recorded,
         role: 'SUPER_ADMIN',
         screenshots: {
-          deleteConfirm: path.basename(deleteConfirmPng),
-          downloadFailed: path.basename(downloadFailedPng),
+          deleteConfirm: deleteConfirmCapture,
+          downloadFailed: downloadFailedCapture,
         },
       },
       null,

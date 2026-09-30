@@ -95,3 +95,28 @@ Remove-Item Env:E2E_ALLOW_PHYSICAL_CLEANUP
   一律失败关闭；
 - `E2E_ALLOW_PHYSICAL_CLEANUP` 不写入任何 npm script，必须由执行者在启动前显式设置；
 - `--list` 只验证入口跨平台可启动，不代表真实联调通过。
+
+## 视觉截图统一入口与局部截图例外登记（PR5 P2-2）
+
+全视口视觉证据截图**必须**经 `e2e/helpers/visual-evidence.ts` 的 `captureStableViewport()`：
+其内部依次执行工作区干净断言（P2-1，脏工作区失败关闭，禁止伪关联 SHA）、字体就绪、
+滚动复位（`scrollY = 0`）、页头/侧栏品牌可见、有限动画排空、布局稳定，并在截图后
+断言 `scrollY === 0` 且无整页横向溢出，返回 `scrollX/scrollY/视口/页面模式/gitSha` 元数据。
+
+机械约束（`eslint.config.js` 的两个 `no-restricted-syntax` 块，`npm run lint` 生效）：
+
+- `e2e/**/*.spec.ts`、`e2e-real/**/*.spec.ts` 禁止直接调用 `page.screenshot()`；
+- admin 知识库视觉 spec 按下方登记表放行**带 `clip` 的** `page.screenshot()`（无 `clip` 仍禁止）；
+- helper 位于 `e2e/helpers/`（非 spec），是 `page.screenshot` 的唯一收口，不在约束范围；
+- 元素级 `locator.screenshot()`（含 ref-lib 搜索框）不被该选择器约束，但仅限下方已登记的
+  局部例外，且截图前必须复用 `prepareStableViewport()`（滚动复位 + 布局稳定）。
+
+局部截图例外登记表（新增例外必须先在此登记，再按需在 `eslint.config.js` override 放行）：
+
+| 文件                                         | 截图产物                                      | 类型                                      | 例外理由                                                                                              |
+| -------------------------------------------- | --------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `e2e/admin-document-database-visual.spec.ts` | `kb-local-{宽x高}-header/summary/toolbar.png` | 元素截图（`locator.screenshot`）          | 元素 1:1 局部图（物理尺寸 = 元素 CSS 尺寸），供与原型并排人工对照，非全视口证据                       |
+| `e2e/admin-document-database-visual.spec.ts` | `kb-local-{宽x高}-thead-first-row.png`        | clip 合成图（`page.screenshot` + `clip`） | 表头 + 一行正文跨元素连续区域；`clip` 由相邻元素 `boundingBox()` 合成，机械约束中唯一放行的 clip 例外 |
+| `e2e/reference-library-visual.spec.ts`       | `reference-library-search-filled-*.png`       | 元素截图（`locator.screenshot`）          | 搜索框填充态局部细节图，非全视口证据                                                                  |
+
+以上例外截图前均调用 `prepareStableViewport()`；全视口证据不得以登记表例外替代。

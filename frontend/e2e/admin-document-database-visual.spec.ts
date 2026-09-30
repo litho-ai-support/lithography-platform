@@ -31,7 +31,11 @@ import path from 'node:path';
 
 import { installAdminDocumentKbGraphqlMocks } from './helpers/admin-document-kb-mocks';
 import { seedAuthSession } from './helpers/auth-session-seed';
-import { readPngDimensions } from './helpers/visual-evidence';
+import {
+  captureStableViewport,
+  prepareStableViewport,
+  readPngDimensions,
+} from './helpers/visual-evidence';
 
 const PAGE_PATH = '/admin/document-database';
 const MODEL_WARNING_TEXT = '设备型号选项加载失败';
@@ -490,13 +494,16 @@ async function waitForFontsReady(page: Page): Promise<void> {
   await page.evaluate(() => document.fonts.ready);
 }
 
-/** 采集 1:1 局部图：元素截图物理尺寸必须等于元素 CSS 尺寸（dpr=1、不二次缩放）。 */
+/** 采集 1:1 局部图：元素截图物理尺寸必须等于元素 CSS 尺寸（dpr=1、不二次缩放）。
+ *  局部截图例外（登记于 frontend/docs/testing.md）：元素截图非全视口；
+ *  截图前仍复用统一稳定前置（滚动复位 + 布局稳定）。 */
 async function shootLocal(
   locator: Locator,
   filePath: string,
   evidence: Record<string, unknown>,
   name: string,
 ): Promise<void> {
+  await prepareStableViewport(locator.page(), path.basename(filePath));
   await locator.screenshot({ path: filePath });
   const box = await locator.boundingBox();
   if (box === null) throw new Error(`局部图 ${name} 无 boundingBox`);
@@ -506,7 +513,9 @@ async function shootLocal(
   evidence[name] = { png, boxHeight: +box.height.toFixed(2), boxWidth: +box.width.toFixed(2) };
 }
 
-/** 表头 + 一行正文跨元素：用 clip 合成连续区域（同 1:1 校验）。 */
+/** 表头 + 一行正文跨元素：用 clip 合成连续区域（同 1:1 校验）。
+ *  局部 clip 截图例外（登记于 frontend/docs/testing.md）：非全视口；
+ *  截图前复用统一稳定前置（滚动复位 + 布局稳定），再按元素几何合成 clip。 */
 async function shootTheadFirstRow(
   page: Page,
   pane: Locator,
@@ -514,6 +523,8 @@ async function shootTheadFirstRow(
   evidence: Record<string, unknown>,
   name: string,
 ): Promise<void> {
+  // 先稳定（滚动复位后 boundingBox 与 clip 坐标才与全视口约定一致）
+  await prepareStableViewport(page, path.basename(filePath));
   const theadBox = await pane.locator('.kb-table-scope .ant-table-thead').boundingBox();
   const rowBox = await pane
     .locator('.kb-table-scope .ant-table-tbody tr.ant-table-row')
@@ -591,6 +602,8 @@ test.describe('mocked admin document database - knowledge base visual baseline (
 
     const evidence: Record<string, unknown> = {};
     const tables: Record<string, unknown> = {};
+    // 同轮四标签三视口全部整页截图必须共享同一干净 SHA（逐张记录，结束时断言一致）
+    const captureShas: string[] = [];
 
     for (const viewport of VIEWPORTS) {
       const tag = `${viewport.width}x${viewport.height}`;
@@ -615,10 +628,13 @@ test.describe('mocked admin document database - knowledge base visual baseline (
         expectKbPageBaseline(pageSnapshot, viewport.width);
         expectKbPaneBaseline(paneSnapshot);
 
-        // 复查 B2：viewport 截图（不加 fullPage），物理尺寸必须严格等于指定视口
+        // 复查 B2：viewport 截图（不加 fullPage），物理尺寸必须严格等于指定视口；
+        // P2-2 起一律经 captureStableViewport（滚动复位 + 工作区干净断言 + 元数据）
         const key = `kb-visual-${tab.fileStem}-M-${tag}`;
-        const pngPath = path.join(evidenceDir, `${key}.png`);
-        await page.screenshot({ path: pngPath });
+        const fileName = `${key}.png`;
+        const pngPath = path.join(evidenceDir, fileName);
+        const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
+        captureShas.push(capture.gitSha);
         const png = readPngDimensions(pngPath);
         expect(png).toEqual({ height: viewport.height, width: viewport.width });
 
@@ -646,7 +662,13 @@ test.describe('mocked admin document database - knowledge base visual baseline (
           expect(pillRadius, `${tab.name} 状态胶囊半径规则`).toBe('999px');
         }
 
-        tabEvidence[tab.fileStem] = { page: pageSnapshot, pane: paneSnapshot, png, tab: tab.name };
+        tabEvidence[tab.fileStem] = {
+          capture,
+          page: pageSnapshot,
+          pane: paneSnapshot,
+          png,
+          tab: tab.name,
+        };
       }
 
       // 每视口实现侧 1:1 局部图（供与原型人工并排对照）
@@ -663,6 +685,8 @@ test.describe('mocked admin document database - knowledge base visual baseline (
       }
     }
 
+    expect(new Set(captureShas).size, '四标签三视口全部整页截图必须共享同一 SHA').toBe(1);
+    evidence.gitSha = captureShas[0];
     evidence.tableScroll = tables;
     const evidenceJson = path.join(evidenceDir, 'kb-visual-evidence.json');
     writeFileSync(evidenceJson, JSON.stringify(evidence, null, 2));
@@ -727,15 +751,25 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     expect(geometry.gapAfterToolbar).toBe(geometry.blockPaddingTop);
     expect(geometry.gapBeforeTable).toBe(geometry.blockPaddingBottom);
 
-    const pngPath = testInfo.outputPath('kb-repair-requests-M-model-warning-1440x900.png');
-    await page.screenshot({ path: pngPath });
+    const warningFileName = 'kb-repair-requests-M-model-warning-1440x900.png';
+    const pngPath = testInfo.outputPath(warningFileName);
+    const capture = await captureStableViewport(page, {
+      fileName: warningFileName,
+      filePath: pngPath,
+    });
     expect(readPngDimensions(pngPath)).toEqual({ height: 900, width: 1440 });
 
     const evidenceJson = path.join(testInfo.outputPath(), 'kb-evidence-model-warning.json');
     writeFileSync(
       evidenceJson,
       JSON.stringify(
-        { 'kb-repair-requests-M-model-warning-1440x900': { geometry, page: pageSnapshot } },
+        {
+          'kb-repair-requests-M-model-warning-1440x900': {
+            capture,
+            geometry,
+            page: pageSnapshot,
+          },
+        },
         null,
         2,
       ),
@@ -844,6 +878,8 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     const evidence: Record<string, unknown> = {};
 
     /** 默认外观探针：不得出现知识库变体类；工作区保持渐变 + 内容 1280px 上限。 */
+    // 同轮四个页面截图必须共享同一干净 SHA（逐张记录，结束时断言一致）
+    const captureShas: string[] = [];
     const readShell = () =>
       page.evaluate(() => {
         const workspace = document.querySelector<HTMLElement>('.app-workspace');
@@ -900,8 +936,9 @@ test.describe('mocked admin document database - knowledge base visual baseline (
 
     const shoot = async (fileName: string): Promise<void> => {
       const pngPath = path.join(evidenceDir, fileName);
-      await page.screenshot({ path: pngPath });
-      evidence[fileName] = readPngDimensions(pngPath);
+      const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
+      captureShas.push(capture.gitSha);
+      evidence[fileName] = { capture, png: readPngDimensions(pngPath) };
     };
 
     await page.setViewportSize({ height: 900, width: 1440 });
@@ -944,6 +981,8 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     await expectDefaultShell('customer-repair-requests');
     await shoot('kb-shared-customer-repair-requests-1440x900.png');
 
+    expect(new Set(captureShas).size, '共享外观四页截图必须共享同一 SHA').toBe(1);
+    evidence.gitSha = captureShas[0];
     const evidenceJson = path.join(evidenceDir, 'kb-shared-look-regression.json');
     writeFileSync(evidenceJson, JSON.stringify(evidence, null, 2));
     console.log(`[visual-evidence] ${evidenceJson}`);
