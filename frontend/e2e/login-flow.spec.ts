@@ -3,6 +3,7 @@
 import { expect, test } from '@playwright/test';
 
 import { readStoredAuthSession, seedAuthSession } from './helpers/auth-session-seed';
+import { installCustomerRepairRequestMocks } from './helpers/customer-repair-request-mocks';
 
 test('anonymous engineer visit completes the public login flow and returns to the target', async ({
   page,
@@ -113,6 +114,12 @@ test('credential rejection keeps the login name, clears the password and creates
 });
 
 test('entry route dispatches by login state', async ({ page }) => {
+  // 登录态目标页（/customer = 默认 create 态工作台）会发出受保护的 MyRepairRequests /
+  // EquipmentModels 查询；seed 会话是占位 token，若落到真实后端会收到 UNAUTHENTICATED，
+  // 触发全局清会话跳登录，覆盖「按登录态分发」断言。与 customer-repair-request-states
+  // 同口径：mock 先于会话预置安装（seedAuthSession 内部也会载入应用源）。
+  await installCustomerRepairRequestMocks(page);
+
   await page.goto('/');
   await expect(page).toHaveURL(/\/login$/);
 

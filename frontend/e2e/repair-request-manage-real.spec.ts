@@ -217,9 +217,16 @@ test.describe('real backend manage flow', () => {
     // 删除入口断言限定右栏详情面板（左栏未接单条目的删除按钮 accessible name 为
     // 「删除申请 {编号}」，全局按名匹配会被子串命中，不能表达「详情面板无删除入口」）
     await expect(detailPane.getByRole('button', { name: '删除申请' })).toHaveCount(0);
-    // 回复时间线：李工实时昵称 + PENDING 标签；无任何账号 ID 字样（裁定 3）
-    await expect(page.getByText('李工')).toBeVisible();
-    await expect(page.getByText('处理中')).toBeVisible();
+    // 回复时间线：李工实时昵称 + PENDING 标签；无任何账号 ID 字样（裁定 3）。
+    // 详情标题区还会渲染同一「处理中」状态胶囊（latestResolutionStatus），与时间线
+    // 状态标签同文案并存；断言限定回复模块容器。外层 DataCard 同样是 section
+    // （.data-card）且包住全部文本，须以 section:not(.data-card) 排除（与未接单用例
+    // 同口径），避免多元素 strict 歧义（2026-09-30 基线实锤）。
+    const responsesSection = detailPane.locator('section:not(.data-card)', {
+      hasText: '工程师回复',
+    });
+    await expect(responsesSection.getByText('李工')).toBeVisible();
+    await expect(responsesSection.getByText('处理中')).toBeVisible();
     await expect(page.getByText(/engineerAccountId|accountId|customerAccountId/)).toHaveCount(0);
 
     // S2-7：回复时间来自后端字段并按客户侧分钟精度格式化。期望值由同一后端载荷推导

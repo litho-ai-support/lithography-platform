@@ -238,17 +238,29 @@ test.describe('real backend reference document flow', () => {
     await page.goto(LIST_PATH);
     await expect(page.getByText(SEED_ERROR_MANUAL_TITLE)).toBeVisible();
 
-    // AntD Select 筛选交互：combobox 打开下拉后点 option
-    await page.getByRole('combobox').nth(0).click();
+    // PR5 R2：筛选区默认收起（不渲染）；先经工具区「筛选」按钮展开，再操作类型下拉。
+    // 展开前不假设 combobox 存在；下拉以 placeholder 文案锚定，不依赖 DOM 顺序。
+    const filterPanel = page.locator('.reference-library-filter-panel');
+    await expect(filterPanel).toHaveCount(0);
+    const filterButton = page.getByRole('button', { name: '筛选' });
+    await filterButton.click();
+    await expect(filterButton).toHaveAttribute('aria-expanded', 'true');
+    await expect(filterPanel).toBeVisible();
+
+    const documentTypeSelect = filterPanel.locator('.ant-select', { hasText: '文档类型' });
+    await expect(documentTypeSelect).toBeVisible();
+    await documentTypeSelect.getByRole('combobox').click();
     await page.locator('.ant-select-item-option', { hasText: '维护指南' }).click();
 
     await expect(page.getByText(SEED_MAINTENANCE_GUIDE_TITLE)).toBeVisible();
     await expect(page.getByText(SEED_ERROR_MANUAL_TITLE)).toHaveCount(0);
     await expect(page.getByText(SEED_SAFETY_STANDARD_TITLE)).toHaveCount(0);
 
-    // 清空筛选恢复全量（AntD allowClear 的清除按钮需 hover 后出现）
-    await page.getByRole('combobox').nth(0).hover();
-    await page.locator('.ant-select-clear').click();
+    // 清空筛选恢复全量（AntD allowClear 的清除按钮需 hover 后出现）；选中后 placeholder
+    // 已被值替换，改按选中值锚定同一控件
+    const selectedTypeSelect = filterPanel.locator('.ant-select', { hasText: '维护指南' });
+    await selectedTypeSelect.hover();
+    await selectedTypeSelect.locator('.ant-select-clear').click();
     await expect(page.getByText(SEED_ERROR_MANUAL_TITLE)).toBeVisible();
     await expect(page.getByText(SEED_SAFETY_STANDARD_TITLE)).toBeVisible();
   });
