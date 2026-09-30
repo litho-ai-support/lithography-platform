@@ -9,20 +9,29 @@
 //   不得出现「S/L 截图却写 scale-M」的元数据失真；
 // - 往返中两次 M 档位相同，只靠「区域 + 分钟级时间戳」会覆盖，必须由调用方在「区域」里带步序
 //   才能生成互不相同的文件名；
-// - PNG 尺寸读取对非法 PNG 必须抛错（防止 e2e 静默取到错误尺寸）。
+// - PNG 尺寸读取对非法 PNG 必须抛错（防止 e2e 静默取到错误尺寸）；
+// - P2-1：工作区干净断言——脏/不可判定一律失败关闭，禁止把截图伪关联到提交 SHA。
 
+import { execSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 import {
+  assertCleanWorkspaceForEvidence,
   buildEvidenceFileName,
   EVIDENCE_SCALE_LEVEL,
   EVIDENCE_ZOOM,
   type EvidenceScaleLevel,
   readPngDimensions,
+  readWorkspaceEvidenceState,
 } from './visual-evidence';
+
+// P2-1 测试：拦截 node:child_process，按命令分发 stub（不得真跑 git）
+vi.mock('node:child_process', () => ({ execSync: vi.fn() }));
+
+const execSyncMock = vi.mocked(execSync) as unknown as Mock<(command: string) => string>;
 
 const CAPTURED_AT = new Date(2026, 8, 25, 14, 5); // 2026-09-25 14:05 本地时间
 const tempDir = mkdtempSync(path.join(tmpdir(), 'visual-evidence-spec-'));
@@ -119,5 +128,75 @@ describe('readPngDimensions', () => {
     writeFileSync(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
     expect(() => readPngDimensions(filePath)).toThrow(/不是合法 PNG/);
+  });
+});
+
+// ─── P2-1：工作区干净断言（脏工作区不得产出提交级证据）────────────────────────
+
+const CLEAN_SHA = '852f52404e5cfd03c6137621d5d5bfc23a5c9dc0';
+
+/** 按命令分发 git stub：rev-parse 返回 SHA 行；status --porcelain 返回给定输出。 */
+function stubGit(options: { revParse: Error | string; status: Error | string }): void {
+  execSyncMock.mockImplementation((command) => {
+    const result = command.includes('rev-parse HEAD') ? options.revParse : options.status;
+
+    if (result instanceof Error) {
+      throw result;
+    }
+
+    return result;
+  });
+}
+
+describe('工作区状态与提交级证据前提（P2-1）', () => {
+  beforeEach(() => {
+    execSyncMock.mockReset();
+  });
+
+  it('干净工作区：正常返回可对账的 HEAD SHA', () => {
+    stubGit({ revParse: `${CLEAN_SHA}\n`, status: '' });
+
+    expect(readWorkspaceEvidenceState()).toEqual({ kind: 'clean', sha: CLEAN_SHA });
+    expect(assertCleanWorkspaceForEvidence('customer-home.png')).toBe(CLEAN_SHA);
+  });
+
+  it('脏工作区：禁止生成提交级最终证据（失败关闭并列明未提交项）', () => {
+    stubGit({
+      revParse: `${CLEAN_SHA}\n`,
+      status: ' M frontend/src/index.css\n?? frontend/e2e/foo.spec.ts\n',
+    });
+
+    const state = readWorkspaceEvidenceState();
+
+    expect(state.kind).toBe('dirty');
+    expect(state.kind === 'dirty' ? state.entries : []).toHaveLength(2);
+    expect(() => assertCleanWorkspaceForEvidence('customer-home.png')).toThrow(
+      /工作区存在 2 项未提交变更/,
+    );
+    expect(() => assertCleanWorkspaceForEvidence('customer-home.png')).toThrow(
+      /frontend\/src\/index\.css/,
+    );
+    expect(() => assertCleanWorkspaceForEvidence('customer-home.png')).toThrow(/不得伪关联到/);
+  });
+
+  it('git rev-parse 异常：返回可识别失败状态，不以 HEAD 冒充干净', () => {
+    stubGit({ revParse: new Error('git not found'), status: '' });
+
+    const state = readWorkspaceEvidenceState();
+
+    expect(state.kind).toBe('unavailable');
+    expect(state).not.toHaveProperty('sha');
+    expect(() => assertCleanWorkspaceForEvidence('customer-home.png')).toThrow(
+      /无法判定工作区状态/,
+    );
+  });
+
+  it('git status 异常：同样判为不可判定，不得按干净放行', () => {
+    stubGit({ revParse: `${CLEAN_SHA}\n`, status: new Error('index.lock exists') });
+
+    expect(readWorkspaceEvidenceState().kind).toBe('unavailable');
+    expect(() => assertCleanWorkspaceForEvidence('customer-home.png')).toThrow(
+      /git status --porcelain 失败/,
+    );
   });
 });

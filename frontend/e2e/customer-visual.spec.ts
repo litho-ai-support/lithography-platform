@@ -39,9 +39,9 @@ import {
   readUnregisteredOperations,
 } from './helpers/customer-repair-request-mocks';
 import {
+  assertCleanWorkspaceForEvidence,
   buildEvidenceFileName,
   captureStableViewport,
-  readGitSha,
   readPngDimensions,
   waitForFontsReady,
 } from './helpers/visual-evidence';
@@ -323,6 +323,9 @@ test('工作台布局实测：三模式左右等高、四宽度无横溢、切�
 }, testInfo) => {
   test.setTimeout(240_000);
 
+  // P2-1：布局证据同属提交级证据，工作区脏则失败关闭（先于 4 分钟测量，尽早暴露）
+  const gitSha = assertCleanWorkspaceForEvidence('workspace-layout-evidence.json');
+
   const capturedAt = new Date();
   const measurements: Record<
     string,
@@ -427,7 +430,7 @@ test('工作台布局实测：三模式左右等高、四宽度无横溢、切�
     JSON.stringify(
       {
         capturedAt: capturedAt.toISOString(),
-        gitSha: readGitSha(),
+        gitSha,
         navChecks: { backForward: true, compatRoute: true, deepLinkReload: true },
         role: ROLE,
         switchTrail,
