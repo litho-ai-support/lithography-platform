@@ -337,11 +337,16 @@ test.describe('real backend engineer accept and respond flow', () => {
       await switchAccount(page, CUSTOMER_LOGIN_NAME, env.MOCK_SEED_PASSWORD, /\/customer$/);
       await page.goto(`${CUSTOMER_LIST_PATH}/${createdRequestId}`);
 
-      await expect(page.getByRole('heading', { name: '维修申请详情' })).toBeVisible();
-      await expect(page.getByText(/已接单（/)).toBeVisible();
+      // 2026-09-29 整合工作台：详情标题为申请编号 + 状态 pill（无「维修申请详情」heading）。
+      // 左右栏 pill 文案会重复，编号与接单状态断言限定右栏详情面板；「已解决」同时出现在
+      // 头部处理状态与回复条目，取首个。
+      const customerDetailPane = page.locator('.customer-workspace-detail-pane');
+
+      await expect(customerDetailPane.getByText(requestNo!).first()).toBeVisible();
+      await expect(customerDetailPane.getByText('已接单', { exact: true })).toBeVisible();
       await expect(page.getByText('工程师回复（1）')).toBeVisible();
       await expect(page.getByText(ENGINEER_NICKNAME)).toBeVisible();
-      await expect(page.getByText('已解决')).toBeVisible();
+      await expect(customerDetailPane.getByText('已解决').first()).toBeVisible();
       await expect(page.getByText(REAL_FLOW_RESPONSE_TEXT)).toBeVisible();
       // 回复时间线只呈现昵称与文案，不泄露任何账号 ID 字样
       await expect(page.getByText(/engineerAccountId|accountId|customerAccountId/)).toHaveCount(0);

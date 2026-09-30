@@ -1,6 +1,7 @@
 // e2e/customer-repair-request-states.spec.ts
 //
-// PR5 S2（客户创建、列表与详情收尾）状态与视觉验收（无后端确定性版本）：
+// PR5 S2（客户创建、列表与详情收尾）状态与视觉验收（无后端确定性版本；2026-09-29 起
+// 客户四页复用同一整合工作台，断言口径同步为「左栏活动列表 + 右栏创建/详情面板」）：
 // 会话由 helpers/auth-session-seed 预置，GraphQL 一律走
 // helpers/customer-repair-request-mocks 的按 operationName 应答 —— 不依赖真实后端、
 // 开发库、backend/env/.env.development，fresh clone 直接可跑。
@@ -10,21 +11,24 @@
 // 验收内容（PR5 计划表 S2）：
 // - S2-1 创建页：字段等宽 / 标签 / 页面说明 / 主按钮半径与尺寸 / 提交中 loading / 业务拒绝错误反馈；
 // - S2-2 型号 loading / 空 / 失败三态，且空与失败均可重试恢复（不必刷新整页）；
-// - S2-3 列表五态：loading / 库为空 / 失败 / 正常 / 长文本；失败态不与空表叠加（机械断言表格不存在）；
-// - S2-4 未接单行有删除入口且需二次确认；已接单行不渲染删除按钮；
+// - S2-3 列表五态：loading / 库为空 / 失败 / 正常 / 长文本；失败态不与空态叠加
+//   （机械断言无活动条目、无空态文案；列表加载中与详情占位各自呈加载态）；
+// - S2-4 未接单条目有删除入口且需二次确认；已接单条目不渲染删除按钮；
 // - S2-5 长连续文本（申请编号 / 错误码 / 故障描述 / 正文 / 回复正文）不破坏布局：
-//   列表按基准 §6.4.4 验收「横滚只发生在表格内部 + 整页不溢出（不出现整页横滚）」，
-//   详情按「容器几何不横向溢出」验收，两者均附带 computed overflow-wrap 断言；
+//   列表按「条目文本携带换行约束 + 容器几何不溢出 + 整页不溢出」验收，
+//   详情按「容器几何不横向溢出」验收，两者均附带 computed 换行断言；
 // - S2-6 0 条回复时详情页整个回复模块不渲染（无标题 / 无计数 / 无占位）；
 // - S2-7 有回复时内容、工程师、时间与状态均来自后端字段并按客户侧格式展示；
-// - S2-8 loading / failed / not-found 使用同一页面骨架（页头 + 面板），无空白面板与旧内容残留。
+// - S2-8 loading / failed / not-found 使用同一详情面板骨架（固定页头 + 右栏面板），
+//   无空白面板与旧内容残留。
 //
 // mock 失败关闭：未登记的 operationName 会抛错，并由下方 afterEach 断言留痕为空
 // （漏登记 / 拼错 operation 时用例必须失败，不得被成功空 data 兜底）。
 //
 // 截图与 JSON 写入 testInfo outputPath（frontend/test-results/...），由采集人复制归档到
 // docs/tmp/PR/PR5-证据（本地可追溯，不随 PR 提交）。命名遵循
-// frontend/docs/gkj-visual-baseline.md §1，状态由「区域」字段承载（helpers/visual-evidence.ts）。
+// frontend/docs/gkj-visual-baseline.md §1，状态由「区域」字段承载（helpers/visual-evidence.ts）；
+// 所有截图经 captureStableViewport（2026-09-30 S2：截图前滚动复位到页面顶部 + 构图元数据）。
 
 import { expect, type Page, test, type TestInfo } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -40,6 +44,7 @@ import {
 } from './helpers/customer-repair-request-mocks';
 import {
   buildEvidenceFileName,
+  captureStableViewport,
   readPngDimensions,
   waitForFontsReady,
 } from './helpers/visual-evidence';
@@ -56,7 +61,7 @@ const NARROW = { height: 667, label: '375x667', width: 375 };
 /** 删除确认弹层文案（S2-4） */
 const DELETE_POPCONFIRM_TITLE = '确认删除该维修申请？';
 
-/** 客户侧统一时间格式（与 src/pages/customer/format-date.ts 同参数，用于核对展示值） */
+/** 客户侧统一时间格式（与 src/shared/ui/format-date-time.ts 同参数，用于核对展示值） */
 const timeFormatter = new Intl.DateTimeFormat('zh-CN', {
   day: '2-digit',
   hour: '2-digit',
@@ -104,11 +109,11 @@ async function capture(
     viewportLabel: viewport.label,
   });
   const pngPath = path.join(testInfo.outputPath(), fileName);
-  await page.screenshot({ path: pngPath });
+  const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
   const png = readPngDimensions(pngPath);
   expect(png, `${fileName} 物理尺寸`).toEqual({ height: viewport.height, width: viewport.width });
 
-  evidence[area] = { ...extra, fileName, png };
+  evidence[area] = { ...extra, capture, fileName, png };
 
   return fileName;
 }
@@ -205,7 +210,12 @@ test.describe('创建页：型号三态与表单统一（S2-1 / S2-2）', () => 
     const evidence: Record<string, unknown> = {};
     await openPage(page, { models: 'ready' }, { path: CREATE_PATH });
 
-    await expect(page.getByText('提交设备故障信息，创建维修申请。')).toBeVisible();
+    // 固定页头（2026-09-29 整合裁定）：四个客户 URL 共用标题与说明；create 态左栏保留列表上下文
+    await expect(page.locator('.customer-workspace-grid[data-mode="create"]')).toHaveCount(1);
+    await expect(page.getByRole('heading', { name: '客户页面' })).toBeVisible();
+    await expect(
+      page.getByText('提交设备维修申请，并跟踪接单情况、处理进度与工程师回复。'),
+    ).toBeVisible();
     for (const label of ['设备型号', '设备错误码', '故障描述']) {
       await expect(page.getByText(label, { exact: true })).toBeVisible();
     }
@@ -278,15 +288,14 @@ test.describe('创建页：型号三态与表单统一（S2-1 / S2-2）', () => 
 // ---------------------------------------------------------------- 列表页（S2-3 / S2-4 / S2-5）
 
 test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () => {
-  test('加载中：呈现加载态且不提前给出空态文案', async ({ page }, testInfo) => {
+  test('加载中：列表与详情占位各自呈加载态，不提前给出空态文案', async ({ page }, testInfo) => {
     const capturedAt = new Date();
     const evidence: Record<string, unknown> = {};
     await openPage(page, { list: 'pending' }, { path: LIST_PATH });
 
-    await expect(page.locator('.ant-spin-spinning')).toHaveCount(1);
-    await expect(page.getByText('还没有维修申请，点击客户首页「发起维修申请」创建。')).toHaveCount(
-      0,
-    );
+    // 左栏列表与右栏详情占位同时处于加载态（详情目标须待列表就绪后才能派生）
+    await expect(page.locator('.ant-spin-spinning')).toHaveCount(2);
+    await expect(page.getByText('还没有维修申请。')).toHaveCount(0);
 
     await capture(
       page,
@@ -304,10 +313,9 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
     const evidence: Record<string, unknown> = {};
     await openPage(page, { list: 'empty' }, { path: LIST_PATH });
 
-    await expect(
-      page.getByText('还没有维修申请，点击客户首页「发起维修申请」创建。'),
-    ).toBeVisible();
-    await expect(page.locator('.ant-table-row')).toHaveCount(0);
+    // 左栏列表与右栏详情占位同为空态：同一空态文案出现两处，且不残留任何活动条目
+    await expect(page.getByText('还没有维修申请。')).toHaveCount(2);
+    await expect(page.locator('.activity-item')).toHaveCount(0);
 
     await capture(page, testInfo, 'customer-repair-request-list-empty', WIDE, capturedAt, evidence);
     writeEvidence(testInfo, capturedAt, evidence);
@@ -319,12 +327,12 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
     await openPage(page, { list: 'failed' }, { path: LIST_PATH });
 
     await expect(page.getByText('网络连接异常，请稍后重试。')).toBeVisible();
-    await expect(page.getByRole('button', { name: /重\s*试/ })).toBeVisible();
-    // 失败态不与空表叠加：表格与空态文案均不得出现
-    await expect(page.locator('.ant-table')).toHaveCount(0);
-    await expect(page.getByText('还没有维修申请，点击客户首页「发起维修申请」创建。')).toHaveCount(
-      0,
-    );
+    // 左栏列表与右栏详情占位各自提供重试入口（占位文案与列表失败原因区分）
+    await expect(page.getByRole('button', { name: /重\s*试/ })).toHaveCount(2);
+    await expect(page.getByText('维修申请列表加载失败，详情暂不可用。')).toBeVisible();
+    // 失败态不与空态叠加：无活动条目、无空态文案
+    await expect(page.locator('.activity-item')).toHaveCount(0);
+    await expect(page.getByText('还没有维修申请。')).toHaveCount(0);
 
     await capture(
       page,
@@ -337,25 +345,30 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
     writeEvidence(testInfo, capturedAt, evidence);
   });
 
-  test('正常态：两条真实字段行、状态标签与接单差异（S2-4 删除入口）', async ({
+  test('正常态：两条真实字段条目、状态标签与接单差异（S2-4 删除入口）', async ({
     page,
   }, testInfo) => {
     const capturedAt = new Date();
     const evidence: Record<string, unknown> = {};
     await openPage(page, { list: 'ready' }, { path: LIST_PATH });
 
-    await expect(page.locator('.ant-table-row')).toHaveCount(2);
-    await expect(page.getByText('MOCK-RR-2026-0001')).toBeVisible();
-    await expect(page.getByText('待接单')).toBeVisible();
-    await expect(page.getByText('已接单')).toBeVisible();
-    await expect(page.getByText('已解决')).toBeVisible();
-    await expect(page.getByText('暂无回复')).toBeVisible();
+    // 左栏活动条目：两条真实字段（编号 / 型号〈代码〉· 错误码 / 提交时间 / 接单状态 Pill）
+    await expect(page.locator('.activity-item')).toHaveCount(2);
+    // 编号同时出现在左栏条目与右栏默认详情（第一项 0001）标题，故取首个
+    await expect(page.getByText('MOCK-RR-2026-0001').first()).toBeVisible();
+    await expect(page.getByText('光刻机 200 型（LITHO-200）· E-STAGE-201')).toBeVisible();
+    await expect(page.getByText('光刻机 300 型（LITHO-300）· E-LENS-102')).toBeVisible();
+    // 「待接单」同时出现在左栏 0001 条目 Pill 与右栏默认详情（第一项）标题 Pill，故取首个
+    await expect(page.getByText('待接单').first()).toBeVisible();
+    // 「已接单」由左栏 0002 条目 Pill 提供（右栏默认目标是第一项 0001）
+    await expect(page.getByText('已接单').first()).toBeVisible();
 
-    // 未接单行有删除入口，已接单行不渲染删除按钮
-    const unacceptedRow = page.getByRole('row', { name: /MOCK-RR-2026-0001/ });
-    const acceptedRow = page.getByRole('row', { name: /MOCK-RR-2026-0002/ });
-    await expect(unacceptedRow.getByRole('button', { name: /^删\s*除$/ })).toHaveCount(1);
-    await expect(acceptedRow.getByRole('button', { name: /^删\s*除$/ })).toHaveCount(0);
+    // 未接单条目有删除入口，已接单条目不渲染删除按钮（aria-label 携带编号，精确限定条目）
+    await expect(page.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '删除申请 MOCK-RR-2026-0002' })).toHaveCount(0);
+
+    // 右栏默认详情（列表态以第一项为默认目标）异步就绪，避免截图落在骨架态
+    await expect(page.locator('.customer-workspace-detail-pane .ant-skeleton')).toHaveCount(0);
 
     // 删除需二次确认：先留就绪态证据，再打开确认框留确认态证据（取消后不产生删除请求）
     const readyOverflow = await measurePageOverflow(page);
@@ -372,7 +385,7 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
       },
     );
 
-    await unacceptedRow.getByRole('button', { name: /^删\s*除$/ }).click();
+    await page.getByRole('button', { name: '删除申请 MOCK-RR-2026-0001' }).click();
     await expect(page.getByText(DELETE_POPCONFIRM_TITLE)).toBeVisible();
     await capture(
       page,
@@ -386,49 +399,49 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
     await page.getByRole('button', { name: /取\s*消/ }).click();
     // Popconfirm 关闭后节点仍挂载（仅隐藏），故断言可见性而非 count；并核对取消未触发删除
     await expect(page.getByText(DELETE_POPCONFIRM_TITLE)).toBeHidden();
-    await expect(page.locator('.ant-table-row')).toHaveCount(2);
+    await expect(page.locator('.activity-item')).toHaveCount(2);
 
     writeEvidence(testInfo, capturedAt, evidence);
   });
 
-  test('长连续文本：横滚只发生在表格内部，整页无横向溢出（窄视口）', async ({ page }, testInfo) => {
+  test('长连续文本：条目换行约束生效，容器与整页无横向溢出（窄视口）', async ({
+    page,
+  }, testInfo) => {
     const capturedAt = new Date();
     const evidence: Record<string, unknown> = {};
     await openPage(page, { list: 'long-text' }, { path: LIST_PATH, viewport: NARROW });
 
     await expect(page.getByText(LONG_REQUEST_NO)).toBeVisible();
 
-    // 列内长连续文本仍须携带换行类（列宽被内容撑开时也不会把文字挤出单元格）
-    const cell = page.locator('td.break-words').first();
-    const cellMetrics = await cell.evaluate((el) => ({
-      overflowWrap: getComputedStyle(el).overflowWrap,
-      text: el.textContent ?? '',
-    }));
-    expect(cellMetrics.text).toBe(LONG_REQUEST_NO);
-    expect(cellMetrics.overflowWrap, 'computed overflow-wrap').toBe('break-word');
-
-    // 错误码列同样换行
-    const errorCell = page.locator('td.break-words').filter({ hasText: LONG_ERROR_CODE });
-    await expect(errorCell).toHaveCount(1);
-
-    // 基准 §6.4.4：整页不得横滚，超宽内容只允许在表格容器内部横滚。
-    // 注：单元格 clientWidth 由内容撑开（长串单行宽度），对其断言 scrollWidth ≤ clientWidth
-    // 恒真、无鉴别力；真正的不变量是「表格容器可横滚 + 整页不溢出」。
-    const table = await page.evaluate(() => {
-      const el = document.querySelector<HTMLElement>('.ant-table-content');
-      if (!el) {
-        throw new Error('表格容器 .ant-table-content 缺失');
+    // 条目内长连续文本仍须携带换行约束（编号 break-all；型号·错误码行 break-words），
+    // 且条目容器几何不横向溢出（375px 单面板下左栏占满剩余宽度）。
+    // 注：编号 span 为行内元素时 clientWidth 恒为 0（CSSOM 对行内非替换元素如此），
+    // 几何不变量改在块级条目容器上断言。
+    const wrapping = await page.evaluate(() => {
+      const item = document.querySelector<HTMLElement>(
+        '.customer-workspace-list-pane .activity-item',
+      );
+      const code = item?.querySelector<HTMLElement>('.activity-item-code');
+      const error = item?.querySelector<HTMLElement>('span.break-words');
+      if (!item || !code || !error) {
+        throw new Error('长文本条目节点缺失');
       }
 
       return {
-        clientWidth: el.clientWidth,
-        overflowX: getComputedStyle(el).overflowX,
-        scrollWidth: el.scrollWidth,
+        codeText: code.textContent ?? '',
+        codeWordBreak: getComputedStyle(code).wordBreak,
+        errorText: error.textContent ?? '',
+        errorWrap: getComputedStyle(error).overflowWrap,
+        item: { clientWidth: item.clientWidth, scrollWidth: item.scrollWidth },
       };
     });
-    expect(table.overflowX, '表格容器 overflow-x').toBe('auto');
-    expect(table.scrollWidth, '表格内容宽于容器（内部横滚生效）').toBeGreaterThan(
-      table.clientWidth,
+
+    expect(wrapping.codeText).toBe(LONG_REQUEST_NO);
+    expect(wrapping.codeWordBreak, '申请编号 computed word-break').toBe('break-all');
+    expect(wrapping.errorText).toContain(LONG_ERROR_CODE);
+    expect(wrapping.errorWrap, '型号·错误码行 computed overflow-wrap').toBe('break-word');
+    expect(wrapping.item.scrollWidth, '条目容器不得横向溢出').toBeLessThanOrEqual(
+      wrapping.item.clientWidth + 1,
     );
 
     const overflow = await measurePageOverflow(page);
@@ -440,7 +453,7 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
       NARROW,
       capturedAt,
       evidence,
-      { cell: cellMetrics, overflow, table },
+      { overflow, wrapping },
     );
     writeEvidence(testInfo, capturedAt, evidence);
   });
@@ -449,14 +462,17 @@ test.describe('列表页：五态与删除入口（S2-3 / S2-4 / S2-5）', () =>
 // ---------------------------------------------------------------- 详情页（S2-5 / S2-6 / S2-7 / S2-8）
 
 test.describe('详情页：骨架、回复模块与长文本（S2-5 / S2-6 / S2-7 / S2-8）', () => {
-  test('加载中：页头 + 面板骨架，无空白面板与旧内容残留', async ({ page }, testInfo) => {
+  test('加载中：固定页头 + 详情面板骨架，无空白面板与旧内容残留', async ({ page }, testInfo) => {
     const capturedAt = new Date();
     const evidence: Record<string, unknown> = {};
     await openPage(page, { detail: 'pending' }, { path: DETAIL_PATH });
 
+    await expect(page.getByRole('heading', { name: '客户页面' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '维修申请详情' })).toBeVisible();
-    await expect(page.locator('.surface-panel .ant-skeleton')).toHaveCount(1);
-    await expect(page.getByText(/工程师回复/)).toHaveCount(0);
+    await expect(page.locator('.customer-workspace-detail-pane .ant-skeleton')).toHaveCount(1);
+    await expect(
+      page.locator('.customer-workspace-detail-pane').getByText(/工程师回复/),
+    ).toHaveCount(0);
 
     await capture(
       page,
@@ -474,10 +490,15 @@ test.describe('详情页：骨架、回复模块与长文本（S2-5 / S2-6 / S2-
     const evidence: Record<string, unknown> = {};
     await openPage(page, { detail: 'not-found' }, { path: DETAIL_PATH });
 
-    await expect(page.getByText('维修申请不存在或不可查看。')).toBeVisible();
-    await expect(page.getByRole('button', { name: '返回列表' })).toBeVisible();
-    await expect(page.getByText(/工程师回复/)).toHaveCount(0);
-    await expect(page.getByText('MOCK-RR-2026-0001')).toHaveCount(0);
+    const detailPane = page.locator('.customer-workspace-detail-pane');
+    await expect(detailPane.getByText('维修申请不存在或不可查看。')).toBeVisible();
+    await expect(detailPane.locator('.ant-alert-warning')).toHaveCount(1);
+    await expect(detailPane.getByRole('button', { name: '返回历史列表' })).toBeVisible();
+    await expect(
+      page.locator('.customer-workspace-detail-pane').getByText(/工程师回复/),
+    ).toHaveCount(0);
+    // 右栏不残留任何旧详情内容（左栏列表上下文不属于残留）
+    await expect(detailPane.getByText('MOCK-RR-2026-0001')).toHaveCount(0);
 
     await capture(
       page,
@@ -487,6 +508,11 @@ test.describe('详情页：骨架、回复模块与长文本（S2-5 / S2-6 / S2-
       capturedAt,
       evidence,
     );
+
+    // 返回入口把工作台带回历史列表态（URL 为列表路由）
+    await detailPane.getByRole('button', { name: '返回历史列表' }).click();
+    await expect(page).toHaveURL(new RegExp(`${LIST_PATH}$`));
+
     writeEvidence(testInfo, capturedAt, evidence);
   });
 
@@ -495,18 +521,24 @@ test.describe('详情页：骨架、回复模块与长文本（S2-5 / S2-6 / S2-
     const evidence: Record<string, unknown> = {};
     await openPage(page, { detail: 'failed' }, { path: DETAIL_PATH });
 
+    const detailPane = page.locator('.customer-workspace-detail-pane');
     // 通用失败态与 not-found 区分：error 告警（not-found 为 warning）
-    await expect(page.locator('.ant-alert-error')).toHaveCount(1);
-    await expect(page.locator('.ant-alert-warning')).toHaveCount(0);
-    await expect(page.getByText('网络连接异常，请稍后重试。')).toBeVisible();
-    await expect(page.getByRole('button', { name: '返回列表' })).toBeVisible();
+    await expect(detailPane.locator('.ant-alert-error')).toHaveCount(1);
+    await expect(detailPane.locator('.ant-alert-warning')).toHaveCount(0);
+    await expect(detailPane.getByText('网络连接异常，请稍后重试。')).toBeVisible();
+    await expect(detailPane.getByRole('button', { name: '返回历史列表' })).toBeVisible();
 
-    // 同一页面骨架（页头 + 面板），无旧详情内容、无回复模块、无删除入口
+    // 同一详情面板骨架（固定页头 + 右栏面板），无旧详情内容、无回复模块、无删除入口
+    await expect(page.getByRole('heading', { name: '客户页面' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '维修申请详情' })).toBeVisible();
-    await expect(page.locator('.surface-panel')).toHaveCount(1);
-    await expect(page.getByText(/工程师回复/)).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '删除申请' })).toHaveCount(0);
-    await expect(page.getByText('MOCK-RR-2026-0001')).toHaveCount(0);
+    await expect(page.locator('.customer-workspace-detail-pane .data-card')).toHaveCount(1);
+    await expect(
+      page.locator('.customer-workspace-detail-pane').getByText(/工程师回复/),
+    ).toHaveCount(0);
+    // 精确匹配名「删除申请」只属于右栏详情入口（左栏删除按钮的 accessible name 为
+    // 「删除申请 {编号}」；role 名匹配默认为子串，必须 exact 才不误中）
+    await expect(page.getByRole('button', { name: '删除申请', exact: true })).toHaveCount(0);
+    await expect(detailPane.getByText('MOCK-RR-2026-0001')).toHaveCount(0);
 
     await capture(
       page,
@@ -526,11 +558,17 @@ test.describe('详情页：骨架、回复模块与长文本（S2-5 / S2-6 / S2-
     await openPage(page, { detail: 'no-responses' }, { path: DETAIL_PATH });
 
     await expect(page.getByText('MOCK-RR-2026-0001').first()).toBeVisible();
-    await expect(page.getByText(/工程师回复/)).toHaveCount(0);
+    await expect(
+      page.locator('.customer-workspace-detail-pane').getByText(/工程师回复/),
+    ).toHaveCount(0);
     await expect(page.getByText('暂无工程师回复。')).toHaveCount(0);
-    // 面板只剩「申请信息」与「故障正文」两块，未接单详情仍保留删除入口
-    await expect(page.locator('.surface-panel')).toHaveCount(2);
-    await expect(page.getByRole('button', { name: '删除申请' })).toBeVisible();
+    // 右栏只剩「故障描述」与「故障正文」两块内容区（DataCard 之外），未接单详情仍保留删除入口
+    await expect(
+      page.locator('.customer-workspace-detail-pane section:not(.data-card)'),
+    ).toHaveCount(2);
+    await expect(page.getByRole('heading', { name: '故障描述' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '故障正文' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '删除申请', exact: true })).toBeVisible();
 
     await capture(
       page,
@@ -552,7 +590,8 @@ test.describe('详情页：骨架、回复模块与长文本（S2-5 / S2-6 / S2-
     await expect(page.getByText('工程师回复（2）')).toBeVisible();
     await expect(page.getByText('李工')).toBeVisible();
     await expect(page.getByText('王工')).toBeVisible();
-    await expect(page.getByText('已解决')).toBeVisible();
+    // 「已解决」同时出现在头部最高处理状态 Pill 与回复 2 的 Pill
+    await expect(page.getByText('已解决').first()).toBeVisible();
     await expect(page.getByText('处理中')).toBeVisible();
     await expect(page.getByText('已更换温控组件并完成标定，套刻误差回到规格内。')).toBeVisible();
 
@@ -561,9 +600,12 @@ test.describe('详情页：骨架、回复模块与长文本（S2-5 / S2-6 / S2-
     await expect(page.getByText(expectedTime)).toBeVisible();
     await expect(page.getByText('2026-09-02T18:40:00.000Z')).toHaveCount(0);
 
-    // 已接单详情不渲染删除入口
-    await expect(page.getByRole('button', { name: '删除申请' })).toHaveCount(0);
-    await expect(page.locator('.surface-panel')).toHaveCount(3);
+    // 已接单详情不渲染删除入口（exact 精确匹配右栏详情入口，不误中左栏未接单条目按钮）；
+    // 三块内容区（故障描述 / 故障正文 / 工程师回复）齐备
+    await expect(page.getByRole('button', { name: '删除申请', exact: true })).toHaveCount(0);
+    await expect(
+      page.locator('.customer-workspace-detail-pane section:not(.data-card)'),
+    ).toHaveCount(3);
 
     await capture(
       page,
@@ -585,16 +627,17 @@ test.describe('详情页：骨架、回复模块与长文本（S2-5 / S2-6 / S2-
     await expect(page.getByText('A'.repeat(600))).toBeVisible();
 
     const wrapping = await page.evaluate(() => {
-      // 故障描述文字在行内 <span> 上，其 clientWidth/scrollWidth 恒为 0（CSSOM 对行内非替换元素如此），
-      // 几何只能取块级容器 .ant-descriptions-item-content；换行类仍在 span 上断言。
-      // 注意：页面有 6 个 .ant-descriptions-item-content，必须由文字的 span 反查所属容器。
-      const faultText = document.querySelector('.ant-descriptions-item-content span.break-words');
-      const faultBox = faultText?.closest('.ant-descriptions-item-content');
-      const pre = document.querySelector('pre');
-      const reply = [...document.querySelectorAll('.text-sm.break-words')].find(
+      // 故障描述在本面板的块级换行容器（div.break-words）上，几何与换行类都可直接断言；
+      // 正文 pre 与回复正文保留原有选择器口径，全部限定在右栏详情面板内（窄视口左栏已收起）。
+      const pane = document.querySelector('.customer-workspace-detail-pane');
+      const faultText = [...(pane?.querySelectorAll('div.break-words') ?? [])].find(
+        (el) => el.textContent === 'A'.repeat(600),
+      );
+      const pre = pane?.querySelector('pre');
+      const reply = [...(pane?.querySelectorAll('.text-sm.break-words') ?? [])].find(
         (el) => el.textContent === 'C'.repeat(900),
       );
-      if (!faultBox || !faultText || !pre || !reply) {
+      if (!pane || !faultText || !pre || !reply) {
         throw new Error('长文本节点缺失');
       }
 
@@ -602,7 +645,7 @@ test.describe('详情页：骨架、回复模块与长文本（S2-5 / S2-6 / S2-
       const wrap = (el: Element) => getComputedStyle(el).overflowWrap;
 
       return {
-        fault: box(faultBox),
+        fault: box(faultText),
         faultWrap: wrap(faultText),
         pre: box(pre),
         reply: box(reply),
@@ -643,17 +686,35 @@ test.describe('详情页：骨架、回复模块与长文本（S2-5 / S2-6 / S2-
 
 // ---------------------------------------------------------------- 入口可达性（S2-9 收尾）
 
-test('客户首页两条入口进入真实创建页与列表页（不经手输 URL）', async ({ page }) => {
+test('客户首页入口在工作台内可达列表与详情（不经手输 URL）', async ({ page }) => {
   await installCustomerRepairRequestMocks(page, {});
   await seedAuthSession(page, ROLE);
   await page.goto(HOME_PATH);
 
+  // 首页默认 create 态：固定页头 + 右栏表单；页头按钮重复点击为 no-op（URL 不变、不清空输入）
+  await expect(page.getByRole('heading', { name: '客户页面' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '发起维修申请' })).toBeVisible();
   await page.getByRole('button', { name: '发起维修申请' }).click();
-  await expect(page).toHaveURL(new RegExp(`${CREATE_PATH}$`));
-  await expect(page.getByRole('heading', { name: '创建维修申请' })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`${HOME_PATH}$`));
 
-  await page.goto(HOME_PATH);
-  await page.getByRole('button', { name: '查看维修申请' }).click();
+  // 左栏卡头「我的维修申请」入口 → 历史列表路由（列表态以第一项为默认详情）
+  await page.getByRole('button', { name: '我的维修申请' }).click();
   await expect(page).toHaveURL(new RegExp(`${LIST_PATH}$`));
-  await expect(page.getByRole('heading', { name: '我的维修申请' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '客户页面' })).toBeVisible();
+  await expect(page.locator('.activity-item')).toHaveCount(2);
+
+  // 条目主按钮进入详情路由（URL requestId 为详情目标唯一真值）
+  await page.locator('.activity-item').first().locator('.customer-workspace-item-main').click();
+  await expect(page).toHaveURL(new RegExp(`${DETAIL_PATH}$`));
+  await expect(page.getByRole('button', { name: '返回历史列表' })).toBeVisible();
+
+  // 返回入口回到列表路由
+  await page.getByRole('button', { name: '返回历史列表' }).click();
+  await expect(page).toHaveURL(new RegExp(`${LIST_PATH}$`));
+
+  // 历史态页头「发起维修申请」恢复默认创建态（PR5 S0-4/S2-6：同一工作台切模式，页头不卸载）
+  await page.locator('.page-header').getByRole('button', { name: '发起维修申请' }).click();
+  await expect(page).toHaveURL(new RegExp(`${HOME_PATH}$`));
+  await expect(page.getByRole('button', { name: '提交申请' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '客户页面' })).toBeVisible();
 });

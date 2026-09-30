@@ -27,7 +27,8 @@ import {
  * - create command：进行中以防连点 ref 拦重复提交；业务拒绝展示后端消息并保留表单内容，
  *   transport 失败展示共享错误模型的用户文案；
  * - 输入归一（错误码与故障描述去首尾空格）在本层收口，ui 只回传表单原始值；
- * - submit 返回 boolean（true 表示成功），ui 据此重置表单并进入成功态；
+ * - submit 成功时返回真实创建记录（含真实 id，ui 据此重置表单并进入成功态，
+ *   工作台据此刷新左栏列表）；失败返回 null；
  *   createdRequest 由本层持有，continueCreating 复位以便「继续创建」。
  */
 
@@ -88,42 +89,45 @@ export function useRepairRequestCreateFlow() {
     void loadEquipmentModelsState().then(setModelsState);
   }, []);
 
-  /** 提交创建。返回 true 表示创建成功（ui 据此重置表单并展示成功态）。 */
-  const submit = useCallback(async (values: RepairRequestCreateFormValues): Promise<boolean> => {
-    if (submittingRef.current) {
-      return false;
-    }
-
-    submittingRef.current = true;
-    setSubmitting(true);
-    setSubmitError(null);
-
-    try {
-      const result = await createRepairRequest({
-        equipmentModelId: values.equipmentModelId,
-        errorCode: values.errorCode.trim(),
-        faultDescription: values.faultDescription.trim(),
-      });
-
-      if (result.ok) {
-        setCreatedRequest(result.repairRequest);
-
-        return true;
+  /** 提交创建。成功时返回真实创建记录（含真实 id，供 ui 重置表单并上报联动）；失败返回 null。 */
+  const submit = useCallback(
+    async (values: RepairRequestCreateFormValues): Promise<RepairRequestRecord | null> => {
+      if (submittingRef.current) {
+        return null;
       }
 
-      // 业务拒绝展示后端消息并保留表单内容，不做乐观成功
-      setSubmitError(result.message);
+      submittingRef.current = true;
+      setSubmitting(true);
+      setSubmitError(null);
 
-      return false;
-    } catch (error) {
-      setSubmitError(toUserMessage(error, '维修申请提交失败，请稍后重试。'));
+      try {
+        const result = await createRepairRequest({
+          equipmentModelId: values.equipmentModelId,
+          errorCode: values.errorCode.trim(),
+          faultDescription: values.faultDescription.trim(),
+        });
 
-      return false;
-    } finally {
-      submittingRef.current = false;
-      setSubmitting(false);
-    }
-  }, []);
+        if (result.ok) {
+          setCreatedRequest(result.repairRequest);
+
+          return result.repairRequest;
+        }
+
+        // 业务拒绝展示后端消息并保留表单内容，不做乐观成功
+        setSubmitError(result.message);
+
+        return null;
+      } catch (error) {
+        setSubmitError(toUserMessage(error, '维修申请提交失败，请稍后重试。'));
+
+        return null;
+      } finally {
+        submittingRef.current = false;
+        setSubmitting(false);
+      }
+    },
+    [],
+  );
 
   const continueCreating = useCallback(() => setCreatedRequest(null), []);
 

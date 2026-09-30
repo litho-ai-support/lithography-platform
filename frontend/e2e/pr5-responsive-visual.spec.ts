@@ -10,16 +10,18 @@
 // 验收内容（PR5 计划表 S6，数值源 frontend/docs/gkj-visual-baseline.md §1 / §6.4.4）：
 // - S6-1：M 档 + 100% 缩放（helpers/visual-evidence 锁定 EVIDENCE_SCALE_LEVEL='M'、
 //   EVIDENCE_ZOOM='100'）在 1366×768 / 1440×900 / 1920×1080 三个基准视口全量采集
-//   PR5 七页就绪态截图：客户首页 / 客户创建 / 客户列表 / 客户详情（CUSTOMER），
+//   PR5 七页就绪态截图：客户四页（/customer 系；2026-09-29 起复用同一整合工作台，
+//   首页即 create 态、列表与详情为同一工作台的 history-list / history-detail 态）、
 //   资料列表（ENGINEER），资料新增 / 资料详情（SUPER_ADMIN，写入口按后端口径只给
-//   SUPER_ADMIN）。每页每个视口先断言该页自身真实文案 / 表头 / 表单控件已渲染（不是
+//   SUPER_ADMIN）。每页每个视口先断言该页自身真实文案 / 表单控件 / 活动条目已渲染（不是
 //   「有 DOM」），再断言 PNG 物理尺寸**严格等于**视口。窄视口 375×667 归 S1/S2/S3/S4
 //   既有 spec，本文件不重复采集。
 // - S6-2：字号档位 S→M→L→M 往返过程中，四个停靠点上都断言「创建表单四控件 / 列表
-//   操作列删除按钮 / 删除 Popconfirm / 分页器上一页与下一页 / 侧栏退出按钮 / 全局 AI
+//   条目删除按钮 / 删除 Popconfirm / 分页器上一页与下一页 / 侧栏退出按钮 / 全局 AI
 //   浮动入口」仍可达（可见 + 启用 + 几何位于视口内）；往返结束根字号回到 M 档 16px。
-// - S6-3：三个基准视口 × 七页整页无横向滚动；长文本数据集下超宽内容不得撑破页面，
-//   必要的横向滚动只发生在表格容器 `.ant-table-content`。
+// - S6-3：三个基准视口 × 七页整页无横向滚动；长文本数据集下超宽内容不得撑破页面：
+//   客户列表条目在容器内换行不溢出（列表已无表格），资料列表必要的横向滚动只发生在
+//   表格容器 `.ant-table-content`。
 //
 // 全局 AI 浮动入口（.entry-trigger-shell）宿主条件：唯一宿主是 AppLayout
 // （src/app/layout/app-layout.tsx:270-287，`{!isSidecarOpen ? <div className="entry-trigger-shell">…}`），
@@ -28,7 +30,9 @@
 //
 // 截图与 JSON 写入 testInfo outputPath（frontend/test-results/...），由采集人复制归档到
 // docs/tmp/PR/PR5-证据（本地可追溯，不随 PR 提交）。命名遵循
-// frontend/docs/gkj-visual-baseline.md §1，由 helpers/visual-evidence.ts 统一生成。
+// frontend/docs/gkj-visual-baseline.md §1，由 helpers/visual-evidence.ts 统一生成；
+// 所有截图经 captureStableViewport（2026-09-30 S2：截图前滚动复位到页面顶部 +
+// scrollY/视口/页面模式/Git SHA 元数据随 JSON 落盘，两轮截图构图一致可审计）。
 
 import type { Locator, Page, TestInfo } from '@playwright/test';
 import { expect, test } from '@playwright/test';
@@ -38,6 +42,8 @@ import path from 'node:path';
 import { seedAuthSession, type SeededAuthSessionRole } from './helpers/auth-session-seed';
 import {
   installCustomerRepairRequestMocks,
+  LONG_ERROR_CODE,
+  LONG_REQUEST_NO,
   readUnregisteredOperations,
 } from './helpers/customer-repair-request-mocks';
 import {
@@ -48,6 +54,7 @@ import {
 } from './helpers/reference-document-mocks';
 import {
   buildEvidenceFileName,
+  captureStableViewport,
   readPngDimensions,
   waitForFontsReady,
 } from './helpers/visual-evidence';
@@ -99,8 +106,13 @@ const CUSTOMER_HOME_CASE: Pr5PageCase = {
   area: 'pr5-responsive-customer-home',
   expectReady: async (page) => {
     await expect(page.locator('.page-title')).toHaveText('客户页面');
-    await expect(page.getByRole('button', { name: '发起维修申请' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '查看维修申请' })).toBeVisible();
+    // 固定页头入口（同名空态按钮仅在库为空时出现，此处固定夹具 2 条已就绪）
+    await expect(
+      page.locator('.page-header').getByRole('button', { name: '发起维修申请' }),
+    ).toBeVisible();
+    // create 态右栏表单可用 + 左栏列表上下文就绪
+    await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
+    await expect(page.locator('.activity-item')).toHaveCount(2);
   },
   mocks: 'customer',
   mockOptions: {},
@@ -113,8 +125,10 @@ const CUSTOMER_HOME_CASE: Pr5PageCase = {
 const CUSTOMER_CREATE_CASE: Pr5PageCase = {
   area: 'pr5-responsive-customer-create',
   expectReady: async (page) => {
-    await expect(page.locator('.page-title')).toHaveText('创建维修申请');
-    await expect(page.getByText('提交设备故障信息，创建维修申请。')).toBeVisible();
+    await expect(page.locator('.page-title')).toHaveText('客户页面');
+    await expect(
+      page.getByText('提交设备维修申请，并跟踪接单情况、处理进度与工程师回复。'),
+    ).toBeVisible();
     // 就绪态：型号已返回 → 下拉与字段可用（加载中/失败会禁用）
     await expect(page.getByRole('combobox')).toBeEnabled();
     await expect(page.getByPlaceholder('例如：E-2001')).toBeVisible();
@@ -132,24 +146,31 @@ const CUSTOMER_CREATE_CASE: Pr5PageCase = {
 const CUSTOMER_LIST_CASE: Pr5PageCase = {
   area: 'pr5-responsive-customer-list',
   expectReady: async (page) => {
-    await expect(page.locator('.page-title')).toHaveText('我的维修申请');
-    await expect(page.getByRole('columnheader', { name: '申请编号' })).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: '操作' })).toBeVisible();
-    await expect(page.locator('.ant-table-row')).toHaveCount(2);
-    await expect(page.getByText('MOCK-RR-2026-0001')).toBeVisible();
+    await expect(page.locator('.page-title')).toHaveText('客户页面');
+    await expect(page.getByRole('heading', { name: '我的维修申请' })).toBeVisible();
+    await expect(page.locator('.activity-item')).toHaveCount(2);
+    // 编号同时出现在左栏条目与右栏默认详情（第一项 0001）标题，故取首个
+    await expect(page.getByText('MOCK-RR-2026-0001').first()).toBeVisible();
+    // 右栏默认详情（列表态以第一项 920001 为目标，mock 按 id 分发返回 0001）异步就绪：
+    // 右栏标题出现且骨架结束；0 条回复时整个回复模块不渲染（S2-6 口径）
+    await expect(
+      page.locator('.customer-workspace-detail-pane').getByText('MOCK-RR-2026-0001'),
+    ).toBeVisible();
+    await expect(page.locator('.customer-workspace-detail-pane .ant-skeleton')).toHaveCount(0);
+    await expect(page.getByText('工程师回复（2）')).toHaveCount(0);
   },
   mocks: 'customer',
   mockOptions: { list: 'ready' },
   path: CUSTOMER_LIST_PATH,
   role: 'CUSTOMER',
-  tableScope: 'required',
+  tableScope: 'absent',
   title: '客户列表页',
 };
 
 const CUSTOMER_DETAIL_CASE: Pr5PageCase = {
   area: 'pr5-responsive-customer-detail',
   expectReady: async (page) => {
-    await expect(page.locator('.page-title')).toHaveText('维修申请详情');
+    await expect(page.locator('.page-title')).toHaveText('客户页面');
     await expect(page.getByText('MOCK-RR-2026-0002').first()).toBeVisible();
     // 有回复态：回复模块、工程师昵称与正文均渲染（不只看骨架）
     await expect(page.getByText('工程师回复（2）')).toBeVisible();
@@ -315,17 +336,39 @@ async function expectReachable(
   return box;
 }
 
+/**
+ * 预置会话的隔离窗：seedAuthSession 内部先 goto('/') 落地再写会话，落地导航用的
+ * 是页面上现存的旧会话（跨用例/跨角色即旧角色），会以旧角色首页发出查询。这段
+ * 查询一律 abort 兜底 —— 既不能落入即将安装的目标 stub（失败关闭），也不得放行到
+ * dev proxy（后端不可达时的 proxy 连接错误会打断 dev server）；abort 只影响旧角色
+ * 首页渲染，无断言依赖（2026-09-29 实锤）。
+ */
+async function seedAuthSessionWithAbort(page: Page, role: SeededAuthSessionRole): Promise<void> {
+  await page.route('**/graphql', async (route) => {
+    await route.abort();
+  });
+  await seedAuthSession(page, role);
+  await page.unroute('**/graphql');
+}
+
 /** 会话预置 + 按用例所属 mock 来源安装 stub（先卸载上一用例的 GraphQL 路由，避免叠加）。 */
 async function prepareCase(page: Page, testCase: Pr5PageCase): Promise<void> {
+  // 跨 mock/跨角色的切换必须严格按序：
+  // 1) 离舱：旧业务页卸载，其在途请求被浏览器取消；
+  // 2) 卸 stub：window 内无任何 mock；
+  // 3) 预置会话：旧角色查询经 seedAuthSessionWithAbort 的 abort 窗拦下，不产生留痕；
+  // 4) 再离舱：预置完成后清掉角色首页，避免其延迟微任务落入新 stub；
+  // 5) 装 stub：此后只有目标用例页面的查询会命中。
+  await page.goto('about:blank');
   await page.unroute('**/graphql');
+  await seedAuthSessionWithAbort(page, testCase.role);
+  await page.goto('about:blank');
 
   if (testCase.mocks === 'customer') {
     await installCustomerRepairRequestMocks(page, testCase.mockOptions ?? {});
   } else {
     await installReferenceLibraryMocks(page, testCase.referenceItems);
   }
-
-  await seedAuthSession(page, testCase.role);
 }
 
 function writeEvidence(testInfo: TestInfo, fileName: string, payload: unknown): void {
@@ -400,7 +443,7 @@ test('S6-1 客户四页 M 档 100% 缩放在三个基准视口全量采集（CUS
       });
       const pngPath = path.join(testInfo.outputPath(), fileName);
 
-      await page.screenshot({ path: pngPath });
+      const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
 
       const png = readPngDimensions(pngPath);
 
@@ -410,6 +453,7 @@ test('S6-1 客户四页 M 档 100% 缩放在三个基准视口全量采集（CUS
       });
 
       evidence[`${testCase.area}-${viewport.label}`] = {
+        capture,
         fileName,
         overflow,
         path: testCase.path,
@@ -458,7 +502,7 @@ test('S6-1 资料列表 M 档三基准视口采集（ENGINEER，只读角色）'
       });
       const pngPath = path.join(testInfo.outputPath(), fileName);
 
-      await page.screenshot({ path: pngPath });
+      const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
 
       const png = readPngDimensions(pngPath);
 
@@ -468,6 +512,7 @@ test('S6-1 资料列表 M 档三基准视口采集（ENGINEER，只读角色）'
       });
 
       evidence[`${testCase.area}-${viewport.label}`] = {
+        capture,
         fileName,
         overflow,
         path: testCase.path,
@@ -518,7 +563,7 @@ test('S6-1 资料新增与详情 M 档三基准视口采集（SUPER_ADMIN，写�
       });
       const pngPath = path.join(testInfo.outputPath(), fileName);
 
-      await page.screenshot({ path: pngPath });
+      const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
 
       const png = readPngDimensions(pngPath);
 
@@ -528,6 +573,7 @@ test('S6-1 资料新增与详情 M 档三基准视口采集（SUPER_ADMIN，写�
       });
 
       evidence[`${testCase.area}-${viewport.label}`] = {
+        capture,
         fileName,
         overflow,
         path: testCase.path,
@@ -610,7 +656,7 @@ test('S6-2 创建页 S→M→L→M 往返：表单四控件、侧栏退出与 AI
     });
     const pngPath = path.join(testInfo.outputPath(), fileName);
 
-    await page.screenshot({ path: pngPath });
+    const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
 
     const png = readPngDimensions(pngPath);
 
@@ -622,6 +668,7 @@ test('S6-2 创建页 S→M→L→M 往返：表单四控件、侧栏退出与 AI
     // key 带步序：S→M→L→M 的末次 M 与首次 M 档位相同，只用 label 做 key 会互相覆盖，
     // 丢掉「往返确实回到 M」的痕迹（证据必须能逐停靠点追溯）。
     docksEvidence[`${step + 1}-${dock}`] = {
+      capture,
       fileName,
       logoutBottom: logout.y + logout.height,
       png,
@@ -644,7 +691,7 @@ test('S6-2 创建页 S→M→L→M 往返：表单四控件、侧栏退出与 AI
   });
 });
 
-test('S6-2 列表页 S→M→L→M 往返：操作列删除、Popconfirm、分页与侧栏退出仍可达', async ({
+test('S6-2 列表页 S→M→L→M 往返：条目删除、Popconfirm、分页与侧栏退出仍可达', async ({
   page,
 }, testInfo) => {
   test.setTimeout(180_000);
@@ -652,20 +699,20 @@ test('S6-2 列表页 S→M→L→M 往返：操作列删除、Popconfirm、分�
   const capturedAt = new Date();
   const docksEvidence: Record<string, unknown> = {};
 
-  // list: 'many'（12 条）→ 分页器真实出现（12 > PAGE_SIZE 10）
+  // list: 'many'（12 条）→ 分页器真实出现（12 > PAGE_SIZE 10）；会话预置走同款
+  // abort 窗（本 test 新 page 无旧会话时落 /login 零查询，防御重试/复用场景）
   await page.unroute('**/graphql');
+  await seedAuthSessionWithAbort(page, CUSTOMER_LIST_CASE.role);
   await installCustomerRepairRequestMocks(page, { list: 'many' });
-  await seedAuthSession(page, CUSTOMER_LIST_CASE.role);
   await page.setViewportSize({ height: S6_2_VIEWPORT.height, width: S6_2_VIEWPORT.width });
   await page.goto(CUSTOMER_LIST_PATH);
   await waitForFontsReady(page);
 
-  // 列表就绪态按 many 夹具判定（不能用 only ready 夹具的 CUSTOMER_LIST_CASE.expectReady：
-  // 该夹具 2 行、首行 0001；many 首行申请编号 MOCK-RR-2026-1001）
-  await expect(page.locator('.page-title')).toHaveText('我的维修申请');
-  await expect(page.getByRole('columnheader', { name: '申请编号' })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: '操作' })).toBeVisible();
-  await expect(page.getByText('MOCK-RR-2026-1001')).toBeVisible();
+  // 列表就绪态按 many 夹具判定（不能用 CUSTOMER_LIST_CASE.expectReady：该夹具 2 条、
+  // 首条 0001；many 首页 10 条、首条申请编号 MOCK-RR-2026-1001）
+  await expect(page.locator('.page-title')).toHaveText('客户页面');
+  await expect(page.getByRole('heading', { name: '我的维修申请' })).toBeVisible();
+  await expect(page.getByText('MOCK-RR-2026-1001').first()).toBeVisible();
 
   const pagination = page.locator('.ant-pagination');
   const prevButton = page.locator('.ant-pagination-prev button');
@@ -675,25 +722,21 @@ test('S6-2 列表页 S→M→L→M 往返：操作列删除、Popconfirm、分�
 
   // 分页器真的出现：total 12 / pageSize 10 → 2 页
   await expect(pagination, '分页器应真实出现（total 12 > pageSize 10）').toBeVisible();
-  await expect(page.locator('.ant-table-row')).toHaveCount(10);
+  await expect(page.locator('.activity-item')).toHaveCount(10);
 
   for (const [step, dock] of FONT_SCALE_DOCKS.entries()) {
     await clickFontScale(page, dock);
 
-    // 1) 操作列：删除按钮位于「操作」列内且可达
-    const deleteButton = page.getByRole('button', { name: /^删\s*除$/ }).first();
+    // 1) 条目操作位：第一条目（1001，未接单）的删除按钮可达且归属同一活动条目
+    //（2026-09-29 整合工作台：删除按钮携带条目编号 aria-label，精确限定本条目）
+    const firstItem = page.locator('.activity-item').filter({ hasText: 'MOCK-RR-2026-1001' });
+    const deleteButton = firstItem.getByRole('button', { name: '删除申请 MOCK-RR-2026-1001' });
 
-    await expectReachable(deleteButton, `列表 操作列删除按钮（${dock} 档）`, S6_2_VIEWPORT);
-
-    const deleteCell = deleteButton.locator('xpath=ancestor::td[1]');
-    const deleteCellIndex = await deleteCell.evaluate(
-      (element) => (element as HTMLTableCellElement).cellIndex,
-    );
-
-    await expect(
-      page.locator('.ant-table-thead th').nth(deleteCellIndex),
-      '删除按钮必须位于「操作」列内',
-    ).toHaveText('操作');
+    await expect(firstItem, '删除按钮应归属第一项活动条目').toHaveCount(1);
+    // 长列表自然高度超出视口：先滚回条目操作位（上一轮末尾停在分页器处；
+    // 架构不设列表内滚动容器，页面竖直滚动是唯一可达手段）
+    await deleteButton.scrollIntoViewIfNeeded();
+    await expectReachable(deleteButton, `列表条目删除按钮（${dock} 档）`, S6_2_VIEWPORT);
 
     // 2) 弹窗：点删除打开 Popconfirm，Escape 关闭后回到可操作态
     await deleteButton.click();
@@ -711,14 +754,17 @@ test('S6-2 列表页 S→M→L→M 往返：操作列删除、Popconfirm、分�
     await expect(deleteButton, 'Popconfirm 关闭后删除按钮回到可操作态').toBeEnabled();
 
     // 3) 分页：两个翻页按钮均在视口内；正向前进证明「下一页」可用，返回证明「上一页」可用
+    //（分页器位于长列表底部，按真实用户路径先滚动到分页器再断言几何）
+    await pagination.scrollIntoViewIfNeeded();
     await expectInViewport(prevButton, `分页 上一页按钮（${dock} 档）`, S6_2_VIEWPORT);
     await expectReachable(nextButton, `分页 下一页按钮（${dock} 档）`, S6_2_VIEWPORT);
     await expect(activePage).toHaveText('1');
 
     await nextButton.click();
     await expect(activePage, '点击下一页应真实翻到第 2 页').toHaveText('2');
+    await prevButton.scrollIntoViewIfNeeded();
     await expectReachable(prevButton, `分页 上一页按钮（${dock} 档，第 2 页）`, S6_2_VIEWPORT);
-    await expect(page.locator('.ant-table-row'), '第 2 页应只剩 2 条').toHaveCount(2);
+    await expect(page.locator('.activity-item'), '第 2 页应只剩 2 条').toHaveCount(2);
 
     await prevButton.click();
     await expect(activePage, '点击上一页应回到第 1 页').toHaveText('1');
@@ -752,7 +798,7 @@ test('S6-2 列表页 S→M→L→M 往返：操作列删除、Popconfirm、分�
     });
     const pngPath = path.join(testInfo.outputPath(), fileName);
 
-    await page.screenshot({ path: pngPath });
+    const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
 
     const png = readPngDimensions(pngPath);
 
@@ -763,7 +809,8 @@ test('S6-2 列表页 S→M→L→M 往返：操作列删除、Popconfirm、分�
 
     // key 带步序：末次 M 与首次 M 档位相同，只用 label 做 key 会覆盖（同 S6-2 创建页用例）。
     docksEvidence[`${step + 1}-${dock}`] = {
-      deleteCellIndex,
+      capture,
+      deleteLabel: '删除申请 MOCK-RR-2026-1001',
       fileName,
       logoutBottom: logout.y + logout.height,
       png,
@@ -846,7 +893,7 @@ test('S6-3 七页在三基准视口均无整页横向滚动（1366×768 / 1440×
   });
 });
 
-test('S6-3 长文本：整页不横滚，必要横向滚动只发生在 .ant-table-content', async ({
+test('S6-3 长文本：整页不横滚，客户条目换行吸收、资料横滚限表格容器', async ({
   page,
 }, testInfo) => {
   test.setTimeout(240_000);
@@ -854,33 +901,63 @@ test('S6-3 长文本：整页不横滚，必要横向滚动只发生在 .ant-tab
   const capturedAt = new Date();
   const evidence: Record<string, unknown> = {};
 
-  // 客户列表：长申请编号 / 长错误码使表格内容必然超宽（无空格长串撑开最小内容宽度）
+  // 客户列表：长申请编号 / 长错误码由条目换行吸收（2026-09-29 起列表已无表格），
+  // 断言编号允许任意位置换行、型号·错误码行允许长词换行，且条目自身无内容横溢
   await page.unroute('**/graphql');
+  // 会话预置口径同 prepareCase：旧会话查询经 abort 窗拦下（本 test 新 page 无旧
+  // 会话时它落在 /login 零查询，防御重试/复用场景）。
+  await seedAuthSessionWithAbort(page, CUSTOMER_LIST_CASE.role);
   await installCustomerRepairRequestMocks(page, { list: 'long-text' });
-  await seedAuthSession(page, CUSTOMER_LIST_CASE.role);
 
   for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ height: viewport.height, width: viewport.width });
     await page.goto(CUSTOMER_LIST_PATH);
     await waitForFontsReady(page);
-    await expect(page.locator('.ant-table-row')).toHaveCount(1);
+    await expect(page.locator('.activity-item')).toHaveCount(1);
+    await expect(page.getByText(LONG_REQUEST_NO).first()).toBeVisible();
 
     const pageOverflow = await measurePageOverflow(page);
-    const table = await measureTableOverflow(page);
-
-    if (table === null) {
-      throw new Error(`客户列表长文本 ${viewport.label} 缺少表格容器 .ant-table-content`);
-    }
 
     expect(
       pageOverflow,
       `客户列表长文本 ${viewport.label} 不应出现整页横向滚动`,
     ).toBeLessThanOrEqual(0);
-    expect(table.overflowX, `客户列表长文本 ${viewport.label} 表格容器 overflow-x`).toBe('auto');
+
+    // 条目换行约束：编号 word-break: break-all、型号·错误码行 overflow-wrap: break-word；
+    // 条目 scrollWidth <= clientWidth + 1（亚像素容差）证明超宽长串被换行吸收而非撑破条目
+    const wrapping = await page
+      .locator('.customer-workspace-list-pane .activity-item')
+      .first()
+      .evaluate((item) => {
+        const code = item.querySelector<HTMLElement>('.activity-item-code');
+        const wrapSpan = item.querySelector<HTMLElement>('span.break-words');
+
+        if (!code || !wrapSpan) {
+          throw new Error('长文本条目缺少编号或错误码节点');
+        }
+
+        return {
+          codeText: code.textContent ?? '',
+          codeWordBreak: getComputedStyle(code).wordBreak,
+          errorText: wrapSpan.textContent ?? '',
+          errorWrap: getComputedStyle(wrapSpan).overflowWrap,
+          itemClientWidth: item.clientWidth,
+          itemScrollWidth: item.scrollWidth,
+        };
+      });
+
+    expect(wrapping.codeWordBreak, `客户列表长文本 ${viewport.label} 编号应允许任意位置换行`).toBe(
+      'break-all',
+    );
+    expect(wrapping.errorWrap, `客户列表长文本 ${viewport.label} 错误码行应允许长词换行`).toBe(
+      'break-word',
+    );
+    expect(wrapping.codeText).toContain(LONG_REQUEST_NO);
+    expect(wrapping.errorText, '长错误码应完整落在型号·错误码行内').toContain(LONG_ERROR_CODE);
     expect(
-      table.scrollWidth,
-      `客户列表长文本 ${viewport.label} 超宽内容应被限制在表格容器内横滚`,
-    ).toBeGreaterThan(table.clientWidth);
+      wrapping.itemScrollWidth,
+      `客户列表长文本 ${viewport.label} 条目不应出现内容横溢`,
+    ).toBeLessThanOrEqual(wrapping.itemClientWidth + 1);
 
     const fileName = buildEvidenceFileName({
       area: 'pr5-s6-3-customer-list-long-text',
@@ -890,7 +967,7 @@ test('S6-3 长文本：整页不横滚，必要横向滚动只发生在 .ant-tab
     });
     const pngPath = path.join(testInfo.outputPath(), fileName);
 
-    await page.screenshot({ path: pngPath });
+    const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
 
     const png = readPngDimensions(pngPath);
 
@@ -900,11 +977,12 @@ test('S6-3 长文本：整页不横滚，必要横向滚动只发生在 .ant-tab
     });
 
     evidence[`customer-list-long-text-${viewport.label}`] = {
+      capture,
       fileName,
       pageOverflow,
       path: CUSTOMER_LIST_PATH,
       png,
-      table,
+      wrapping,
     };
   }
 
@@ -912,9 +990,13 @@ test('S6-3 长文本：整页不横滚，必要横向滚动只发生在 .ant-tab
   // 内容被列内截断而非撑破页面；表格仍保留可横滚容器（overflow-x: auto），
   // 但基准三视口的表格容器宽（1102 / 1176 / 1278）均 >= AntD scroll.x 最小宽 1100，
   // 故此刻不需要内部横滚 —— 实测 scrollWidth == clientWidth（见证据 JSON）。
+  // 跨 mock 切换按 prepareCase 同口径严格按序：离舱 → 卸 stub → 预置会话
+  //（旧角色客户首页查询经 abort 窗拦下）→ 再离舱 → 装资料 stub。
+  await page.goto('about:blank');
   await page.unroute('**/graphql');
+  await seedAuthSessionWithAbort(page, REFERENCE_LIST_CASE.role);
+  await page.goto('about:blank');
   await installReferenceLibraryMocks(page, LONG_TEXT_ITEMS);
-  await seedAuthSession(page, REFERENCE_LIST_CASE.role);
 
   for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ height: viewport.height, width: viewport.width });
@@ -967,7 +1049,7 @@ test('S6-3 长文本：整页不横滚，必要横向滚动只发生在 .ant-tab
     });
     const pngPath = path.join(testInfo.outputPath(), fileName);
 
-    await page.screenshot({ path: pngPath });
+    const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
 
     const png = readPngDimensions(pngPath);
 
@@ -977,6 +1059,7 @@ test('S6-3 长文本：整页不横滚，必要横向滚动只发生在 .ant-tab
     });
 
     evidence[`reference-list-long-text-${viewport.label}`] = {
+      capture,
       fileName,
       pageOverflow,
       path: REFERENCE_LIST_PATH,

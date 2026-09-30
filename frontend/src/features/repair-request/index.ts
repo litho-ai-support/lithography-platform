@@ -28,6 +28,8 @@ export type {
   EquipmentModelOption,
   RepairRequestRecord,
 } from './infrastructure/repair-request.types';
+export { CustomerRepairRequestDetailPanel } from './ui/customer-repair-request-detail-panel';
+export { CustomerRepairRequestListPanel } from './ui/customer-repair-request-list-panel';
 export { EngineerRepairRequestDetailPanel } from './ui/engineer-repair-request-detail-panel';
 export { EngineerRepairRequestList } from './ui/engineer-repair-request-list';
 export { ENGINEER_REPAIR_REQUEST_LIST_PATH } from './ui/engineer-repair-request-paths';

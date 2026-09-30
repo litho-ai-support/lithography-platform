@@ -16,6 +16,9 @@ const SHELL_GRAPHQL_STUBS: Record<string, unknown> = {
   EngineerRepairRequests: {
     engineerRepairRequests: { items: [], page: 1, pageSize: 10, total: 0 },
   },
+  // 客户整合工作台（2026-09-29 复用同一工作台）：/customer 创建态会真实读型号，
+  // 登记最小合法 DTO（空数组）；历史列表走空页时右栏占位不发其余业务查询。
+  EquipmentModels: { equipmentModels: [] },
   MyRepairRequests: { myRepairRequests: { items: [], page: 1, pageSize: 10, total: 0 } },
 };
 
@@ -141,8 +144,9 @@ const REFRESH_CASES: ReadonlyArray<{
     inactiveLabel: '首页',
     path: '/customer/repair-requests',
     // 业务页就绪正控：Heading 存在只说明壳层渲染了路由，还必须有该页真实 ready 态产物
+    //（2026-09-29 整合工作台：左栏列表空态与右栏详情占位同为空态文案）
     readyHeading: '我的维修申请',
-    readyText: '还没有维修申请，点击客户首页「发起维修申请」创建。',
+    readyText: '还没有维修申请。',
     role: 'CUSTOMER',
   },
   {
@@ -166,7 +170,8 @@ for (const refreshCase of REFRESH_CASES) {
     // 否则业务页抛异常被 error boundary 接住时，壳层与菜单断言依然成立（假绿）。
     await expect(page.getByRole('heading', { name: refreshCase.readyHeading })).toBeVisible();
     if (refreshCase.readyText !== undefined) {
-      await expect(page.getByText(refreshCase.readyText)).toBeVisible();
+      // 整合工作台左右栏同为空态时同文案出现两处，取首个即可证明 ready 产物已渲染
+      await expect(page.getByText(refreshCase.readyText).first()).toBeVisible();
     }
 
     const nav = page.getByRole('navigation', { name: '主导航' });

@@ -160,6 +160,27 @@ const DETAIL_LONG_TEXT = {
   ],
 };
 
+/**
+ * 合成列表条目（MANY_ITEMS）的详情：字段形状与真实契约对齐，0 回复（未接单行）。
+ * 默认详情按请求变量 id 分发时，长列表夹具的每一条都能拿到「自己的」详情，
+ * 避免 active 高亮与右栏内容错位。
+ */
+function detailFromListItem(item: ListItem) {
+  return {
+    id: item.id,
+    requestNo: item.requestNo,
+    errorCode: item.errorCode,
+    faultDescription: `压测列表夹具条目 ${item.requestNo} 的故障描述。`,
+    contentMd: '## 故障现象\n\n压测列表夹具正文。',
+    createdAt: item.createdAt,
+    isAccepted: item.isAccepted,
+    acceptedAt: item.acceptedAt,
+    latestResolutionStatus: item.latestResolutionStatus,
+    equipmentModel: { ...item.equipmentModel },
+    responses: [],
+  };
+}
+
 const CREATED_RECORD = {
   id: 920009,
   requestNo: 'RR20260903090000XYZ789',
@@ -172,7 +193,7 @@ const CREATED_RECORD = {
 
 type GraphQLRequestBody = {
   operationName?: string;
-  variables?: { pagination?: { page?: number; pageSize?: number } };
+  variables?: { id?: number; pagination?: { page?: number; pageSize?: number } };
 };
 
 /** 各 operation 的可控状态；未指定则使用就绪态。 */
@@ -252,7 +273,7 @@ function resolveResponse(
       return ok({ myRepairRequests: paginated(LIST_ITEMS, LIST_ITEMS.length, variables) });
     }
     case 'MyRepairRequest': {
-      const state = options.detail ?? 'with-responses';
+      const state = options.detail ?? null;
       if (state === 'failed') return { abort: true };
       if (state === 'pending') return null;
       if (state === 'not-found') {
@@ -260,6 +281,22 @@ function resolveResponse(
       }
       if (state === 'no-responses') return ok({ myRepairRequest: { ...DETAIL_NO_RESPONSES } });
       if (state === 'long-text') return ok({ myRepairRequest: { ...DETAIL_LONG_TEXT } });
+      if (state === 'with-responses') return ok({ myRepairRequest: { ...DETAIL_WITH_RESPONSES } });
+
+      // 默认（未显式指定 detail）：按请求变量 id 返回「自己的」详情，对齐组件
+      // 「列表态右栏默认目标 = 当前页第一项」的真实行为（恒返回 920002 会让 active
+      // 高亮与右栏内容错位，2026-09-30 实锤）。920002/920001 用专用夹具，
+      // MANY_ITEMS 合成条目由列表行生成（0 回复）；未知 id 保底沿用 with-responses。
+      const requestedId = variables?.id;
+      if (requestedId === DETAIL_WITH_RESPONSES.id) {
+        return ok({ myRepairRequest: { ...DETAIL_WITH_RESPONSES } });
+      }
+      if (requestedId === DETAIL_NO_RESPONSES.id) {
+        return ok({ myRepairRequest: { ...DETAIL_NO_RESPONSES } });
+      }
+      const synthesized = MANY_ITEMS.find((item) => item.id === requestedId);
+      if (synthesized) return ok({ myRepairRequest: detailFromListItem(synthesized) });
+
       return ok({ myRepairRequest: { ...DETAIL_WITH_RESPONSES } });
     }
     case 'CreateRepairRequest': {

@@ -11,6 +11,8 @@
 // （条件更新未命中不改行状态）；删除流程用本用例自建的申请行，结束前清理，
 // 不污染共享开发库基线。
 // 前提不满足（无本地后端 / 无 env）时用例自动跳过，不会以失败阻塞。
+// 2026-09-29 整合工作台：断言口径同步为「左栏活动列表 + 右栏详情面板」，
+// 创建成功后的「查看维修申请」分流到该申请详情路由，列表/详情不再有表格与 Descriptions。
 
 import { expect, test } from '@playwright/test';
 
@@ -50,7 +52,7 @@ const DETAIL_QUERY = `
   }
 `;
 
-/** 客户侧统一时间格式（与 src/pages/customer/format-date.ts 同参数），用于核对展示值。 */
+/** 客户侧统一时间格式（与 src/shared/ui/format-date-time.ts 同参数），用于核对展示值。 */
 const customerTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
   day: '2-digit',
   hour: '2-digit',
@@ -129,7 +131,7 @@ test.describe('real backend manage flow', () => {
       await page.getByLabel('故障描述').fill(MANAGE_FAULT_DESCRIPTION);
       await page.getByRole('button', { name: '提交申请' }).click();
 
-      // 成功页（T-05：创建成功跳列表真实路径）
+      // 成功页（T-05：创建成功后分流到该申请详情路由，2026-09-29 整合裁定）
       await expect(page.getByText('维修申请创建成功')).toBeVisible();
       requestNo = (await page.getByText(/申请编号：/).textContent())
         ?.replace('申请编号：', '')
@@ -139,28 +141,27 @@ test.describe('real backend manage flow', () => {
       // 清理所需预期事实齐备性：创建成功即必须已被动记录到发送的设备型号，探针失效时用例转红
       expect(createdEquipmentModelId).toBeGreaterThan(0);
       await page.getByRole('button', { name: '查看维修申请' }).click();
-      await expect(page).toHaveURL(new RegExp(LIST_PATH));
+      await expect(page).toHaveURL(new RegExp(`${LIST_PATH}/\\d+$`));
 
-      // 列表可见：新申请按 createdAt DESC 置顶
-      const firstRow = page.getByRole('row', { name: new RegExp(requestNo!) });
-      await expect(firstRow).toBeVisible();
-      await expect(firstRow.getByText('待接单')).toBeVisible();
-
-      // 详情可达且字段来自后端
-      await firstRow.getByRole('button', { name: '查看详情' }).click();
-      // 用 heading role 精确断言：loading 态描述「正在加载维修申请详情…」含同文本子串
-      await expect(page.getByRole('heading', { name: '维修申请详情' })).toBeVisible();
+      // 详情直接可达且字段来自后端：标题为申请编号 + 待接单 Pill，描述来自真实载荷
       await expect(page.getByText(requestNo!).first()).toBeVisible();
-      // 故障描述同时出现在 Descriptions 表格与正文 markdown 区，取首个避免 strict mode violation
+      await expect(
+        page.locator('.customer-workspace-detail-pane').getByText('待接单'),
+      ).toBeVisible();
       await expect(page.getByText(MANAGE_FAULT_DESCRIPTION).first()).toBeVisible();
 
-      // 回列表删除未接单申请
-      await page.getByRole('button', { name: '返回列表' }).click();
-      await expect(page).toHaveURL(new RegExp(LIST_PATH));
-      await firstRow.getByRole('button', { name: /^删\s*除$/ }).click();
+      // 返回历史列表：新申请按 createdAt DESC 置顶（左栏第一条目）
+      await page.getByRole('button', { name: '返回历史列表' }).click();
+      await expect(page).toHaveURL(new RegExp(`${LIST_PATH}$`));
+      const createdItem = page.locator('.activity-item').filter({ hasText: requestNo! });
+      await expect(createdItem).toHaveCount(1);
+      await expect(createdItem.getByText('待接单')).toBeVisible();
+
+      // 删除未接单申请（左栏条目删除按钮 aria-label 携带编号，精确命中本行）
+      await page.getByRole('button', { name: `删除申请 ${requestNo}` }).click();
       await page.getByRole('button', { name: '确认删除' }).click();
       await expect(page.getByText('维修申请已删除。')).toBeVisible();
-      await expect(page.getByRole('row', { name: new RegExp(requestNo!) })).toHaveCount(0);
+      await expect(page.locator('.activity-item').filter({ hasText: requestNo! })).toHaveCount(0);
 
       // 落库证据：软删除（deprecated=1 且 deleted_at 非空），非物理删除（受保护 helper，内部白名单校验）
       const row = findRepairRequestByRequestNo(
@@ -210,8 +211,12 @@ test.describe('real backend manage flow', () => {
 
     await page.goto(`${LIST_PATH}/920003`);
     await expect(page.getByText('MOCK-RR-2026-0003').first()).toBeVisible();
-    await expect(page.getByText(/已接单（/)).toBeVisible();
-    await expect(page.getByRole('button', { name: '删除申请' })).toHaveCount(0);
+    // 已接单在详情面板标题呈现为「已接单」Pill（左栏条目同文案，限定右栏避免歧义）
+    const detailPane = page.locator('.customer-workspace-detail-pane');
+    await expect(detailPane.getByText('已接单', { exact: true })).toBeVisible();
+    // 删除入口断言限定右栏详情面板（左栏未接单条目的删除按钮 accessible name 为
+    // 「删除申请 {编号}」，全局按名匹配会被子串命中，不能表达「详情面板无删除入口」）
+    await expect(detailPane.getByRole('button', { name: '删除申请' })).toHaveCount(0);
     // 回复时间线：李工实时昵称 + PENDING 标签；无任何账号 ID 字样（裁定 3）
     await expect(page.getByText('李工')).toBeVisible();
     await expect(page.getByText('处理中')).toBeVisible();
@@ -245,11 +250,17 @@ test.describe('real backend manage flow', () => {
     await page.goto(`${LIST_PATH}/920001`);
     // 先确认数据已就绪，再断言回复模块缺失（排除 loading 造成的假阴性）
     await expect(page.getByText('MOCK-RR-2026-0001').first()).toBeVisible();
-    await expect(page.getByText(/工程师回复/)).toHaveCount(0);
+    await expect(
+      page.locator('.customer-workspace-detail-pane').getByText(/工程师回复/),
+    ).toHaveCount(0);
     await expect(page.getByText(/暂无工程师回复/)).toHaveCount(0);
-    // 未接单详情只剩「申请信息」与「故障正文」两块面板
-    await expect(page.locator('.surface-panel')).toHaveCount(2);
-    await expect(page.getByRole('button', { name: '删除申请' })).toBeVisible();
+    // 未接单详情只剩「故障描述」与「故障正文」两块内容区（DataCard 之外）
+    await expect(
+      page.locator('.customer-workspace-detail-pane section:not(.data-card)'),
+    ).toHaveCount(2);
+    await expect(
+      page.locator('.customer-workspace-detail-pane').getByRole('button', { name: '删除申请' }),
+    ).toBeVisible();
   });
 
   // T-08：已接单拒绝（裁定 5 CONFLICT）。UI 无删除入口，走 API 直发探测；
@@ -301,8 +312,8 @@ test.describe('real backend manage flow', () => {
     await expect(page).toHaveURL(/\/customer$/);
 
     await page.goto(LIST_PATH);
-    // 乙名下未删除的申请可见；已删除的 920004 不出现在正常列表
-    await expect(page.getByText('MOCK-RR-2026-0002')).toBeVisible();
+    // 乙名下未删除的申请可见（左栏条目 + 右栏默认详情标题同文案，取首个）；已删除的 920004 不出现在正常列表
+    await expect(page.getByText('MOCK-RR-2026-0002').first()).toBeVisible();
     await expect(page.getByText('MOCK-RR-2026-0004')).toHaveCount(0);
 
     await page.goto(`${LIST_PATH}/920004`);
@@ -326,7 +337,8 @@ test.describe('real backend manage flow', () => {
     await page.goto(LIST_PATH);
     await expect(page).toHaveURL(new RegExp(LIST_PATH));
     await expect(page.getByText('我的维修申请').first()).toBeVisible();
-    await expect(page.getByText(/还没有维修申请/)).toBeVisible();
+    // 左栏列表与右栏详情占位同为空态：同一文案出现两处
+    await expect(page.getByText('还没有维修申请。')).toHaveCount(2);
 
     const { body } = await realGraphqlCall(
       env,

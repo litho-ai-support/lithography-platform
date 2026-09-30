@@ -5,6 +5,7 @@ import { Alert, Button, Form, Input, Result, Select } from 'antd';
 import { useNavigate } from 'react-router';
 
 import { useRepairRequestCreateFlow } from '../application/use-repair-request-create-flow';
+import type { RepairRequestRecord } from '../infrastructure/repair-request.types';
 
 // 创建成功后的返回目标：跳转维修申请列表（T-05：列表能力已落地，替换阶段一的客户首页临时落点）
 const REPAIR_REQUESTS_LIST_PATH = '/customer/repair-requests';
@@ -20,6 +21,13 @@ type RepairRequestFormValues = {
   faultDescription: string;
 };
 
+export type RepairRequestFormProps = {
+  /** 创建成功回调：携带真实创建记录（已含真实 id），供工作台刷新左栏列表联动 */
+  onCreated?: (record: RepairRequestRecord) => void;
+  /** 「查看维修申请」跳转意图；未提供时保持既有默认行为（跳转列表路由） */
+  onViewCreated?: (record: RepairRequestRecord) => void;
+};
+
 /**
  * 创建维修申请表单。
  *
@@ -29,9 +37,11 @@ type RepairRequestFormValues = {
  * - 设备型号列表来自后端（仅启用型号），含加载中 / 失败重试 / 无可用型号三种状态；
  * - 业务拒绝展示后端消息并保留表单内容；transport 失败展示共享错误模型的用户文案；
  * - 提交中禁用按钮并以进行中标志防连点；成功展示申请编号（后端生成，不从输入取），
- *   并重置表单，避免“继续创建”时残留旧值一键重复提交。
+ *   并重置表单，避免“继续创建”时残留旧值一键重复提交；
+ * - 协作端口：onCreated 在创建成功时上报记录（工作台据此刷新左栏列表）；
+ *   onViewCreated 覆盖「查看维修申请」的默认跳转目标（工作台进入新申请详情路由）。
  */
-export function RepairRequestForm() {
+export function RepairRequestForm({ onCreated, onViewCreated }: RepairRequestFormProps) {
   const navigate = useNavigate();
   const [form] = Form.useForm<RepairRequestFormValues>();
   const {
@@ -48,13 +58,21 @@ export function RepairRequestForm() {
 
   const handleSubmit = useCallback(
     async (values: RepairRequestFormValues) => {
-      if (await submit(values)) {
-        // 重置表单，避免“继续创建”时残留旧值导致一键重复提交
+      const record = await submit(values);
+
+      if (record) {
+        // 重置表单，避免“继续创建”时残留旧值导致一键重复提交；随后上报创建成功
         form.resetFields();
+        onCreated?.(record);
       }
     },
-    [form, submit],
+    [form, onCreated, submit],
   );
+
+  // 「取消」即放弃当前填写内容：仅重置表单字段，不清除型号等页面级状态
+  const handleCancel = useCallback(() => {
+    form.resetFields();
+  }, [form]);
 
   if (createdRequest) {
     return (
@@ -63,7 +81,13 @@ export function RepairRequestForm() {
           <Button key="continue" onClick={continueCreating}>
             继续创建
           </Button>,
-          <Button key="list" type="primary" onClick={() => navigate(REPAIR_REQUESTS_LIST_PATH)}>
+          <Button
+            key="list"
+            onClick={() =>
+              onViewCreated ? onViewCreated(createdRequest) : navigate(REPAIR_REQUESTS_LIST_PATH)
+            }
+            type="primary"
+          >
             查看维修申请
           </Button>,
         ]}
@@ -155,13 +179,18 @@ export function RepairRequestForm() {
             disabled={!modelsReady}
             maxLength={FAULT_DESCRIPTION_MAX_LENGTH}
             placeholder="请描述设备故障现象与发生场景"
-            rows={4}
+            rows={6}
+            style={{ minHeight: 150 }}
           />
         </Form.Item>
+        {/* 操作行右对齐（PR5 客户工作台计划 4.3）：取消仅重置已填内容 */}
         <Form.Item>
-          <Button disabled={!modelsReady} htmlType="submit" loading={submitting} type="primary">
-            提交申请
-          </Button>
+          <div className="flex justify-end gap-2">
+            <Button onClick={handleCancel}>取消</Button>
+            <Button disabled={!modelsReady} htmlType="submit" loading={submitting} type="primary">
+              提交申请
+            </Button>
+          </div>
         </Form.Item>
       </Form>
     </div>

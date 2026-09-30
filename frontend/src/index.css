@@ -720,6 +720,120 @@ body {
   color: var(--ant-color-primary-active);
 }
 
+/* ===== 客户维修工作台（PR5 整合工作台 20260929）=====
+   主网格对齐 gkj profile 319.33 + 16 + 842.67 语言：左列在 280–320px 区间收缩，
+   右列消费剩余宽度（不硬编码 1178px）；<960px 单面板按 data-mode 收起一列。
+   仅客户工作台消费本区类，不向其他页面扩散。 */
+.customer-workspace-grid {
+  column-gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+}
+
+/* 左右等高与卡片内纵向 Flex（2026-09-30 布局遗留修复 S1）：
+   网格行高由内容较高的一侧决定；两侧 pane 与直接 DataCard 拉伸填满行高，
+   列表卡内部「卡头固定 + 列表吸收剩余高度 + 分页贴底」，历史较少时保留空白。
+   不写死任何单状态高度；窄屏单面板按自身内容成行，不产生桌面最小高度。 */
+.customer-workspace-list-pane,
+.customer-workspace-detail-pane {
+  display: flex;
+  flex-direction: column;
+}
+
+.customer-workspace-list-pane > .data-card,
+.customer-workspace-detail-pane > .data-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 卡头（标题与筛选区）固定，不参与拉伸 */
+.customer-workspace-list-pane > .data-card > .data-card-header,
+.customer-workspace-detail-pane > .data-card > .data-card-header {
+  flex: 0 0 auto;
+}
+
+/* 列表卡内体吸收剩余高度（申请列表区域 flex: 1） */
+.customer-workspace-list-pane > .data-card > div:not(.data-card-header) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 分页贴底：仅在存在分页时生效（空/加载/失败态保持顶部对齐） */
+.customer-workspace-list-pane
+  > .data-card
+  > div:not(.data-card-header)
+  > div:has(> .ant-pagination) {
+  margin-top: auto;
+}
+
+/* 左栏卡头「我的维修申请」入口：可操作（进入历史列表态），保留键盘焦点环 */
+.customer-workspace-list-heading {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.customer-workspace-list-heading:hover {
+  text-decoration: underline;
+}
+
+.customer-workspace-list-heading:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--ant-color-primary);
+  outline-offset: 2px;
+}
+
+/* 列表条目主按钮：三态交互色绑定在 .activity-item 容器上，
+   主选择按钮承载键盘焦点环；删除按钮独立存在（不嵌套按钮） */
+.customer-workspace-item-main {
+  border-radius: 10px;
+}
+
+.customer-workspace-item-main:focus-visible {
+  outline: 2px solid var(--ant-color-primary);
+  outline-offset: 2px;
+}
+
+/* create 态右栏：主表单 + 约 230px 填写提示（960px 以下单列，提示落在表单下方） */
+.customer-create-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 960px) {
+  .customer-create-grid {
+    grid-template-columns: minmax(0, 1fr) 230px;
+  }
+}
+
+/* 窄屏「查看我的维修申请」入口：仅单面板模式显示 */
+.customer-workspace-narrow-entry {
+  display: none;
+}
+
+@media (max-width: 959px) {
+  .customer-workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .customer-workspace-grid[data-mode='create'] > .customer-workspace-list-pane,
+  .customer-workspace-grid[data-mode='history-list'] > .customer-workspace-detail-pane,
+  .customer-workspace-grid[data-mode='history-detail'] > .customer-workspace-list-pane {
+    display: none;
+  }
+
+  .customer-workspace-narrow-entry {
+    display: block;
+  }
+}
+
 /* ===== 知识库页 opt-in 变体（PR3 R7；仅 /admin/document-database 消费）=====
    原型 #knowledge-base-page / .kb-card / .kb-table；与通用 panel/search 基准是两套视觉语言
    （基准表 frontend/docs/gkj-visual-baseline.md 第 6 节）。默认公共组件样式保持原值：

@@ -186,7 +186,7 @@ describe('useCustomerRepairRequestList 的删除命令', () => {
     await waitFor(() => expect(result.current.state.status).toBe('ready'));
 
     await act(async () => {
-      await result.current.deleteRequest(920001);
+      await expect(result.current.deleteRequest(920001)).resolves.toBe(true);
     });
 
     expect(deleteMock).toHaveBeenCalledWith(920001);
@@ -240,15 +240,15 @@ describe('useCustomerRepairRequestList 的删除命令', () => {
     const { result } = renderHook(() => useCustomerRepairRequestList(notify));
     await waitFor(() => expect(result.current.state.status).toBe('ready'));
 
-    let first: Promise<void> = Promise.resolve();
+    let first: Promise<boolean> = Promise.resolve(true);
     await act(async () => {
       first = result.current.deleteRequest(920001);
     });
     expect(result.current.deletingId).toBe(920001);
 
-    // 在途期间第二次发起：直接被拒，不产生第二次删除请求
+    // 在途期间第二次发起：直接被拒（返回 false），不产生第二次删除请求
     await act(async () => {
-      await result.current.deleteRequest(920002);
+      await expect(result.current.deleteRequest(920002)).resolves.toBe(false);
     });
     expect(deleteMock).toHaveBeenCalledTimes(1);
 
@@ -310,7 +310,7 @@ describe('useCustomerRepairRequestList 的删除 × 分页交错（四次复查 
     const { result } = renderHook(() => useCustomerRepairRequestList(notify));
     await waitFor(() => expect(result.current.state).toMatchObject({ data: { page: 1 } }));
 
-    let deleting: Promise<void> = Promise.resolve();
+    let deleting: Promise<boolean> = Promise.resolve(true);
     await act(async () => {
       deleting = result.current.deleteRequest(920001);
     });
@@ -336,7 +336,7 @@ describe('useCustomerRepairRequestList 的删除 × 分页交错（四次复查 
     const { result } = renderHook(() => useCustomerRepairRequestList(notify));
     await waitFor(() => expect(result.current.state).toMatchObject({ data: { page: 1 } }));
 
-    let deleting: Promise<void> = Promise.resolve();
+    let deleting: Promise<boolean> = Promise.resolve(true);
     await act(async () => {
       deleting = result.current.deleteRequest(920001);
     });
@@ -368,7 +368,7 @@ describe('useCustomerRepairRequestList 的删除 × 分页交错（四次复查 
     const { result } = renderHook(() => useCustomerRepairRequestList(notify));
     await waitFor(() => expect(result.current.state).toMatchObject({ data: { page: 1 } }));
 
-    let deleting: Promise<void> = Promise.resolve();
+    let deleting: Promise<boolean> = Promise.resolve(true);
     await act(async () => {
       deleting = result.current.deleteRequest(920001);
     });
@@ -407,7 +407,7 @@ describe('useCustomerRepairRequestList 的删除 × 分页交错（四次复查 
     const { result } = renderHook(() => useCustomerRepairRequestList(notify));
     await waitFor(() => expect(result.current.state).toMatchObject({ data: { page: 1 } }));
 
-    let deleting: Promise<void> = Promise.resolve();
+    let deleting: Promise<boolean> = Promise.resolve(true);
     await act(async () => {
       deleting = result.current.deleteRequest(920001);
     });

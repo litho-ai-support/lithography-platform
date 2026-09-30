@@ -62,7 +62,6 @@ const ADMIN_LOGIN = 'mock_super_admin';
 
 const CUSTOMER_HOME_PATH = '/customer';
 const CUSTOMER_LIST_PATH = '/customer/repair-requests';
-const CUSTOMER_CREATE_PATH = '/customer/repair-requests/new';
 const DOCUMENT_LIST_PATH = '/reference-documents';
 const DOCUMENT_NEW_PATH = '/reference-documents/new';
 
@@ -443,10 +442,11 @@ test.describe('PR5 real link permission and business closure', () => {
         await expect(mainNav(page).getByRole('link', { name: '发起申请' })).toBeVisible();
         await expect(mainNav(page).getByRole('link', { name: '我的申请' })).toBeVisible();
 
-        // 首页 → 创建页（客户首页是创建页唯一可发现入口）
+        // 首页即创建态（2026-09-29 整合工作台裁定）：页头「发起维修申请」入口始终保留，
+        // create 态点击为 no-op（不跳转、不重复挂载、不清空输入）
         await expect(page.getByRole('heading', { name: '客户页面' })).toBeVisible();
-        await page.getByRole('button', { name: '发起维修申请' }).click();
-        await expect(page).toHaveURL(new RegExp(`${CUSTOMER_CREATE_PATH}$`));
+        await page.locator('.page-header').getByRole('button', { name: '发起维修申请' }).click();
+        await expect(page).toHaveURL(new RegExp(`${CUSTOMER_HOME_PATH}$`));
 
         // 真实创建：型号来自真实库，提交走真实受保护通道
         await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
@@ -480,26 +480,45 @@ test.describe('PR5 real link permission and business closure', () => {
           responses: [],
         });
 
-        // 成功页 → 列表：新申请按 createdAt DESC 置顶且为待接单
+        // 成功反馈 → 详情（2026-09-29 起直达该申请详情路由）：新申请按 createdAt DESC 置顶，
+        // 左栏条目应为待接单
         await page.getByRole('button', { name: '查看维修申请' }).click();
-        await expect(page).toHaveURL(new RegExp(CUSTOMER_LIST_PATH));
-        const row = page.getByRole('row', { name: new RegExp(requestNo) });
-        await expect(row).toBeVisible();
-        await expect(row.getByText('待接单')).toBeVisible();
+        await expect(page).toHaveURL(new RegExp(`${CUSTOMER_LIST_PATH}/${generatedId}$`));
+        const createdItem = page.locator('.activity-item').filter({ hasText: requestNo });
+        await expect(createdItem).toHaveCount(1);
+        await expect(createdItem.getByText('待接单')).toBeVisible();
 
-        // 详情：字段来自后端真实载荷
-        await row.getByRole('button', { name: '查看详情' }).click();
-        await expect(page.getByRole('heading', { name: '维修申请详情' })).toBeVisible();
+        // 详情：字段来自后端真实载荷（右栏详情面板接单状态为待接单）
+        await expect(
+          page.locator('.customer-workspace-detail-pane').getByText('待接单'),
+        ).toBeVisible();
         await expect(page.getByText(requestNo).first()).toBeVisible();
         await expect(page.getByText(`未接单删除链路：${FAULT_TAG}`).first()).toBeVisible();
 
+        // S6 视频序列：详情态点击页头「发起维修申请」→ 恢复默认创建态（页头不卸载、表单可用）
+        await page.locator('.page-header').getByRole('button', { name: '发起维修申请' }).click();
+        await expect(page).toHaveURL(new RegExp(`${CUSTOMER_HOME_PATH}$`));
+        await expect(page.getByRole('button', { name: '提交申请' })).toBeVisible();
+
+        // S6 视频序列：经侧栏「我的申请」重回历史态，点击条目返回该申请详情
+        await mainNav(page).getByRole('link', { name: '我的申请' }).click();
+        await expect(page).toHaveURL(new RegExp(`${CUSTOMER_LIST_PATH}$`));
+        const detailEntry = page
+          .locator('.activity-item')
+          .filter({ hasText: requestNo })
+          .locator('.customer-workspace-item-main');
+        await expect(detailEntry).toBeVisible();
+        await detailEntry.click();
+        await expect(page).toHaveURL(new RegExp(`${CUSTOMER_LIST_PATH}/${generatedId}$`));
+
         // 未接单：详情页保留删除入口 → 二次确认 → 回列表
-        await expect(page.getByRole('button', { name: '删除申请' })).toBeVisible();
-        await page.getByRole('button', { name: '删除申请' }).click();
+        //（左栏条目删除按钮的 accessible name 为「删除申请 {编号}」，详情入口用 exact 精确匹配）
+        await expect(page.getByRole('button', { name: '删除申请', exact: true })).toBeVisible();
+        await page.getByRole('button', { name: '删除申请', exact: true }).click();
         await page.getByRole('button', { name: '确认删除' }).click();
         await expect(page.getByText('维修申请已删除。')).toBeVisible();
-        await expect(page).toHaveURL(new RegExp(CUSTOMER_LIST_PATH));
-        await expect(page.getByRole('row', { name: new RegExp(requestNo) })).toHaveCount(0);
+        await expect(page).toHaveURL(new RegExp(`${CUSTOMER_LIST_PATH}$`));
+        await expect(page.locator('.activity-item').filter({ hasText: requestNo })).toHaveCount(0);
 
         // S5-1/S5-7 落库证据：软删除（deprecated=1 且 deleted_at 非空）、未接单标记不变
         expect(readPr5RepairRequestState(requestNo, customerAccountId)).toEqual({
@@ -554,11 +573,14 @@ test.describe('PR5 real link permission and business closure', () => {
         });
 
         // 已接单后 UI：详情呈现已接单，且无任何删除入口
+        //（左栏条目同 pill 文案，状态断言限定右栏详情面板避免多节点歧义）
         await loginViaUi(page, CUSTOMER_LOGIN, env.MOCK_SEED_PASSWORD, CUSTOMER_HOME_PATH);
         await page.goto(`${CUSTOMER_LIST_PATH}/${created.id}`);
         await expect(page.getByText(created.requestNo).first()).toBeVisible();
-        await expect(page.getByText(/已接单（/)).toBeVisible();
-        await expect(page.getByRole('button', { name: '删除申请' })).toHaveCount(0);
+        await expect(
+          page.locator('.customer-workspace-detail-pane').getByText('已接单', { exact: true }),
+        ).toBeVisible();
+        await expect(page.getByRole('button', { name: '删除申请', exact: true })).toHaveCount(0);
 
         // 直调 Mutation 探测：CONFLICT + 固定业务码，且行状态未被改动
         const stateBeforeDelete = readPr5RepairRequestState(created.requestNo, customerAccountId);
@@ -630,10 +652,15 @@ test.describe('PR5 real link permission and business closure', () => {
         await loginViaUi(page, CUSTOMER_LOGIN, env.MOCK_SEED_PASSWORD, CUSTOMER_HOME_PATH);
         await page.goto(`${CUSTOMER_LIST_PATH}/${created.id}`);
         await expect(page.getByText(created.requestNo).first()).toBeVisible();
-        await expect(page.getByText(/工程师回复/)).toHaveCount(0);
+        await expect(
+          page.locator('.customer-workspace-detail-pane').getByText(/工程师回复/),
+        ).toHaveCount(0);
         await expect(page.getByText(/暂无工程师回复/)).toHaveCount(0);
-        await expect(page.locator('.surface-panel')).toHaveCount(2);
-        await expect(page.getByRole('button', { name: '删除申请' })).toBeVisible();
+        // 未接单详情只剩「故障描述」与「故障正文」两块内容区（DataCard 之外）
+        await expect(
+          page.locator('.customer-workspace-detail-pane section:not(.data-card)'),
+        ).toHaveCount(2);
+        await expect(page.getByRole('button', { name: '删除申请', exact: true })).toBeVisible();
 
         // 真实接单 + 真实回复（Node 侧，工程师身份）
         await acceptPr5RepairRequestViaApi(env, created.id);
@@ -660,12 +687,13 @@ test.describe('PR5 real link permission and business closure', () => {
         };
 
         // 有回复：计数、工程师昵称、状态标签与正文全部可见；已接单故无删除入口
+        //（接单后详情头部与回复条目可能同显「处理中」，取首个）
         await page.reload();
         await expect(page.getByText(/工程师回复（1）/)).toBeVisible();
         await expect(page.getByText(response.engineerNickname).first()).toBeVisible();
-        await expect(page.getByText('处理中')).toBeVisible();
+        await expect(page.getByText('处理中').first()).toBeVisible();
         await expect(page.getByText(responseText)).toBeVisible();
-        await expect(page.getByRole('button', { name: '删除申请' })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: '删除申请', exact: true })).toHaveCount(0);
       },
       () => {
         reclaimPr5RepairRequestBound(binding);

@@ -73,24 +73,36 @@ test('engineer visit to the list is redirected to the role home', async ({ page 
 
 // T-02 后页面发起真实 GraphQL 请求，但 seedAuthSession 的是假 Token：
 // 不 mock 时 401 会触发全局失效链路（清会话+跳登录），与守卫断言竞态。
-// 守卫 / 可发现性用例只关心路由层，统一拦截列表 Query 返回空页数据隔离数据层。
-async function fulfillEmptyListQuery(page: Page): Promise<void> {
-  await page.route('**/graphql', (route) =>
-    route.fulfill({
+// 守卫 / 可发现性用例只关心路由层，统一拦截工作台的列表与型号 Query 返回空数据隔离数据层
+//（2026-09-29 整合工作台：首页 create 态会并行查询左栏列表与表单型号）。
+async function fulfillEmptyWorkspaceQueries(page: Page): Promise<void> {
+  await page.route('**/graphql', async (route) => {
+    const payload = route.request().postDataJSON() as { query?: string };
+
+    if (payload.query?.includes('query EquipmentModels')) {
+      await route.fulfill({
+        body: JSON.stringify({ data: { equipmentModels: [] } }),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    await route.fulfill({
       body: JSON.stringify({
         data: { myRepairRequests: { items: [], total: 0, page: 1, pageSize: 10 } },
       }),
       contentType: 'application/json',
       status: 200,
-    }),
-  );
+    });
+  });
 }
 
 // 负责人裁定 2：不扩大 SUPER_ADMIN 拒绝范围（拒绝清单仅拒 /new）；
 // 超管继承放行列表与详情，数据过滤（本人名下=空态）由阶段三后端按身份保证。
 test('super admin can enter the list like a customer (deny list not widened)', async ({ page }) => {
   await seedAuthSession(page, 'SUPER_ADMIN');
-  await fulfillEmptyListQuery(page);
+  await fulfillEmptyWorkspaceQueries(page);
   await page.goto(LIST_PATH);
 
   await expect(page).toHaveURL(new RegExp(LIST_PATH));
@@ -101,10 +113,11 @@ test('super admin can enter the list like a customer (deny list not widened)', a
 
 test('customer reaches the list by clicking the entry on the customer home', async ({ page }) => {
   await seedAuthSession(page, 'CUSTOMER');
-  await fulfillEmptyListQuery(page);
+  await fulfillEmptyWorkspaceQueries(page);
 
   await page.goto(CUSTOMER_HOME_PATH);
-  await page.getByRole('button', { name: '查看维修申请' }).click();
+  // 2026-09-29 整合裁定：左栏卡头「我的维修申请」为进入历史列表的路由入口。
+  await page.getByRole('button', { name: '我的维修申请' }).click();
 
   await expect(page).toHaveURL(new RegExp(LIST_PATH));
   await expect(page.getByText('我的维修申请').first()).toBeVisible();

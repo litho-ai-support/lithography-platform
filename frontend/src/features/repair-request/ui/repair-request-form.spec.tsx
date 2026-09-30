@@ -12,7 +12,7 @@ import {
   fetchEquipmentModels,
 } from '../infrastructure/repair-request-adapter';
 
-import { RepairRequestForm } from './repair-request-form';
+import { RepairRequestForm, type RepairRequestFormProps } from './repair-request-form';
 
 vi.mock('../infrastructure/repair-request-adapter', () => ({
   createRepairRequest: vi.fn(),
@@ -57,10 +57,10 @@ function isDisabled(element: HTMLElement): boolean {
   );
 }
 
-function renderForm() {
+function renderForm(props: RepairRequestFormProps = {}) {
   return render(
     <MemoryRouter>
-      <RepairRequestForm />
+      <RepairRequestForm {...props} />
     </MemoryRouter>,
   );
 }
@@ -219,6 +219,55 @@ describe('提交校验与反馈', () => {
     fireEvent.click(screen.getByRole('button', { name: '查看维修申请' }));
 
     expect(navigateMock).toHaveBeenCalledWith('/customer/repair-requests');
+  });
+
+  // PR5 整合工作台协作端口：onCreated 在创建成功时上报真实记录（工作台据此刷新左栏）
+  it('提供 onCreated 时创建成功上报真实记录，且不改默认导航边界', async () => {
+    const onCreatedMock = vi.fn();
+    createRepairRequestMock.mockResolvedValue({ ok: true, repairRequest: CREATED_RECORD });
+
+    renderForm({ onCreated: onCreatedMock });
+    await screen.findByRole('combobox');
+    await fillForm();
+    fireEvent.click(screen.getByRole('button', { name: '提交申请' }));
+
+    expect(await screen.findByText('维修申请创建成功')).toBeTruthy();
+    expect(onCreatedMock).toHaveBeenCalledWith(CREATED_RECORD);
+  });
+
+  // PR5 整合工作台协作端口：onViewCreated 覆盖「查看维修申请」的默认跳转目标
+  it('提供 onViewCreated 时点击「查看维修申请」交给回调处理，不再走默认列表跳转', async () => {
+    const onViewCreatedMock = vi.fn();
+    createRepairRequestMock.mockResolvedValue({ ok: true, repairRequest: CREATED_RECORD });
+
+    renderForm({ onViewCreated: onViewCreatedMock });
+    await screen.findByRole('combobox');
+    await fillForm();
+    fireEvent.click(screen.getByRole('button', { name: '提交申请' }));
+
+    expect(await screen.findByText('维修申请创建成功')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '查看维修申请' }));
+
+    expect(onViewCreatedMock).toHaveBeenCalledWith(CREATED_RECORD);
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  // PR5 整合工作台：取消仅重置已填内容，不清除型号等页面级状态
+  it('取消按钮清空已填字段，表单回到可重新填写状态', async () => {
+    renderForm();
+    await screen.findByRole('combobox');
+    await fillForm();
+
+    fireEvent.click(screen.getByRole('button', { name: /取\s*消/ }));
+
+    expect((screen.getByPlaceholderText('例如：E-2001') as HTMLInputElement).value).toBe('');
+    expect(
+      (screen.getByPlaceholderText('请描述设备故障现象与发生场景') as HTMLTextAreaElement).value,
+    ).toBe('');
+    // 型号下拉回到占位文案，型号列表仍可用（页面级状态不被清除）
+    expect(screen.getByText('请选择设备型号')).toBeTruthy();
+    expect(isDisabled(screen.getByRole('button', { name: '提交申请' }))).toBe(false);
+    expect(createRepairRequestMock).not.toHaveBeenCalled();
   });
 
   it('提交时对错误码与故障描述去首尾空格', async () => {

@@ -11,3 +11,21 @@ export function formatDateTimeText(value: string): string {
 
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false });
 }
+
+// 分钟精度变体（客户维修工作台消费）：与 formatDateTimeText 同一解析口径，
+// 输出不含秒；解析失败时回显原值（与原 pages/customer/format-date.ts 行为一致），
+// 该副本已收敛至此，供 feature 面板跨层复用。
+const minuteFormatter = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+export function formatDateTimeMinuteText(value: string): string {
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime()) ? value : minuteFormatter.format(date);
+}

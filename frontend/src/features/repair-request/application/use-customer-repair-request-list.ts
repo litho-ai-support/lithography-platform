@@ -22,6 +22,7 @@ import type {
  * - 删除命令：进行中防连点（ref 锁），回刷服从**最新分页意图**（见下「游标代际」），
  *   成功后按删除后的 total 计算回退页避免停留在空页，
  *   失败（业务拒绝或 transport）给明确反馈并刷新数据态，不做乐观成功；
+ *   返回 boolean 供调用方编排导航（true 表示删除成功；并发拦下可返回 false）；
  * - 错误归一（GraphQLIngressError 用户文案 / 兜底文案）与分页回退参数都在本层，
  *   页面不再感知 adapter、分页游标与竞态细节；
  * - 反馈经注入的窄 port（NotifyFeedback）上报，由 ui 层决定呈现方式——本层不得依赖
@@ -147,10 +148,14 @@ export function useCustomerRepairRequestList(notify: NotifyFeedback, pageSize = 
     [loadList],
   );
 
+  /**
+   * 发起删除。返回 true 表示删除成功（调用方可据此编排导航）；
+   * 防连点锁拦截重复发起或删除失败时返回 false。
+   */
   const deleteRequest = useCallback(
-    async (id: number) => {
+    async (id: number): Promise<boolean> => {
       if (deletingRef.current) {
-        return;
+        return false;
       }
 
       deletingRef.current = true;
@@ -201,6 +206,8 @@ export function useCustomerRepairRequestList(notify: NotifyFeedback, pageSize = 
         deletingRef.current = false;
         setDeletingId(null);
       }
+
+      return deleteSucceeded;
     },
     [machine, loadList, notify],
   );
