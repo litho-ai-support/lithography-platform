@@ -22,9 +22,10 @@
  *     B 仍按旧观察动作、C 趁机插入」的三进程交错）。
  *
  * 场景 7 / 8 通过 Vitest hoisted partial mock 包装 `node:fs.unlinkSync` 注入 errno：
- * 只对当前用例的精确锁路径抛指定错误，其余路径与用例一律委托真实实现，注入由
- * afterEach 清除（2026-10-02 复审：旧夹具用 `chmodSync(dir, 0o500)` 制造 EACCES，
- * Windows 上权限位不生效、夹具无法成立，已移除）。
+ * 只对当前用例的精确锁路径生效，其余路径与用例一律委托真实实现，注入由 afterEach
+ * 清除（2026-10-02 复审：旧夹具用 `chmodSync(dir, 0o500)` 制造 EACCES，Windows 上
+ * 权限位不生效、夹具无法成立，已移除；ENOENT 竞态夹具先真实移除目标锁再抛错，
+ * 使后置状态与「他方已删除」的真实时序一致）。
  *
  * 多进程夹具见 `execution-lock-race-child.ts`（非 `*.spec.ts`，不被测试收集器执行）。
  */
@@ -52,6 +53,8 @@ const { unlinkFault } = vi.hoisted(() => ({
   unlinkFault: {
     error: null as NodeJS.ErrnoException | null,
     path: null as string | null,
+    /** true 时先对精确目标调用真实 unlink（模拟他方已移除锁），再抛出注入错误 */
+    removeBeforeThrow: false,
   },
 }));
 
@@ -64,6 +67,13 @@ vi.mock('node:fs', async (importOriginal) => {
       const isTarget = unlinkFault.path !== null && String(target) === unlinkFault.path;
 
       if (isTarget && unlinkFault.error !== null) {
+        if (unlinkFault.removeBeforeThrow) {
+          // ENOENT 竞态的真实时序：他方在归属检查与实际删除之间移除了锁——
+          // 先把目标真实删掉，本调用才体验到「文件已不存在」的 ENOENT，
+          // 保证用例结束时可观察状态是「锁不存在」而非「锁仍在」
+          actual.unlinkSync(target);
+        }
+
         throw unlinkFault.error;
       }
 
@@ -98,16 +108,35 @@ function writeOwnerFile(lockPath: string, owner: Record<string, unknown>): void 
 }
 
 /**
- * 给「当前用例的精确锁路径」注入一次 unlink errno 故障；返回注入的错误对象，
- * 供断言「原样上抛同一引用」。非目标路径不受影响，afterEach 统一清除。
+ * 注入「删除失败」（EACCES/EPERM）：不触碰真实文件，只让精确锁路径上的 unlink
+ * 抛出注入错误；返回注入对象供断言「原样上抛同一引用」，锁必须保持原样。
  */
-function injectUnlinkFault(lockPath: string, code: string): NodeJS.ErrnoException {
+function injectUnlinkFailure(lockPath: string, code: 'EACCES' | 'EPERM'): NodeJS.ErrnoException {
   const injected: NodeJS.ErrnoException = Object.assign(
     new Error(`${code}: 注入的 unlink 故障（${lockPath}）`),
     { code, path: lockPath, syscall: 'unlink' },
   );
 
   unlinkFault.path = lockPath;
+  unlinkFault.removeBeforeThrow = false;
+  unlinkFault.error = injected;
+
+  return injected;
+}
+
+/**
+ * 注入「ENOENT 竞态」：他方在 release 的归属检查通过之后、实际删除之前移除了锁。
+ * 精确锁路径上的 unlink 会先真实删除目标（锁自此不存在），再抛出 ENOENT；
+ * 注入后、release 前锁必须仍在——否则 token 检查会提前失败，unlink 根本不被调用。
+ */
+function injectUnlinkAlreadyRemovedRace(lockPath: string): NodeJS.ErrnoException {
+  const injected: NodeJS.ErrnoException = Object.assign(
+    new Error(`ENOENT: 注入的 unlink 竞态（${lockPath} 已被他方移除）`),
+    { code: 'ENOENT', path: lockPath, syscall: 'unlink' },
+  );
+
+  unlinkFault.path = lockPath;
+  unlinkFault.removeBeforeThrow = true;
   unlinkFault.error = injected;
 
   return injected;
@@ -117,6 +146,7 @@ afterEach(() => {
   // 先恢复真实 unlink 行为，再回收临时目录：注入夹具绝不跨用例泄漏
   unlinkFault.path = null;
   unlinkFault.error = null;
+  unlinkFault.removeBeforeThrow = false;
 
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -233,11 +263,15 @@ describe('acquireExecutionLockAt 的失败关闭与归属校验', () => {
 });
 
 /**
- * 释放（unlink）故障的跨平台确定性传播（2026-10-02 复审 P2）。
+ * 释放（unlink）故障的跨平台确定性传播（2026-10-02 复审 P2，ENOENT 真实性修订）。
  *
  * 旧夹具依赖目录权限位制造 EACCES，Windows 上权限位不生效，用例无法成立；
  * 改为对精确锁路径注入 errno，断言「非 ENOENT 原样上抛 + 锁保持原样」与
- * 「ENOENT 竞态不抛」两条互补契约，不依赖宿主文件系统的权限模型。
+ * 「ENOENT 竞态不抛 + 锁已消失」两条互补契约，不依赖宿主文件系统的权限模型。
+ *
+ * ENOENT 用例必须真实模拟「锁先被他方移除」：夹具先真实删除、后抛出注入 errno，
+ * 后置断言因此收紧为「不抛且锁不存在」——只抛错而锁仍在的旧夹具会让「锁已消失」
+ * 这一前提永远不被验证。
  */
 describe('释放（unlink）故障的确定性传播', () => {
   it.each(['EACCES', 'EPERM'] as const)(
@@ -245,7 +279,7 @@ describe('释放（unlink）故障的确定性传播', () => {
     (code) => {
       const lockPath = makeLockPath();
       const release = acquireExecutionLockAt(lockPath);
-      const injected = injectUnlinkFault(lockPath, code);
+      const injected = injectUnlinkFailure(lockPath, code);
 
       let caught: unknown = null;
 
@@ -266,10 +300,16 @@ describe('释放（unlink）故障的确定性传播', () => {
     const lockPath = makeLockPath();
     const release = acquireExecutionLockAt(lockPath);
 
-    injectUnlinkFault(lockPath, 'ENOENT');
+    injectUnlinkAlreadyRemovedRace(lockPath);
 
-    // 「只忽略 ENOENT」契约的另一半：竞态删除不得升级为错误
+    // 时序守卫：删除发生在 release 的 unlink 时刻。若夹具在注入时就删锁，
+    // release 的 token 检查会提前失败、unlink 根本不被调用，用例会假绿
+    expect(existsSync(lockPath)).toBe(true);
+
+    // 「只忽略 ENOENT」契约的另一半：竞态删除不得升级或包装为其他错误
     expect(() => release()).not.toThrow();
+    // 真实竞态的后置状态：锁已被移除（而不是「只抛错、锁仍在」的旧夹具语义）
+    expect(existsSync(lockPath)).toBe(false);
   });
 });
 
