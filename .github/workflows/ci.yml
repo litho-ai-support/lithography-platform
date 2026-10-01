@@ -69,3 +69,36 @@ jobs:
       - name: Build
         run: npm --prefix frontend run build
 
+  windows-unit:
+    name: Frontend unit (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Record tested revision
+        shell: bash
+        run: |
+          echo "checked-out HEAD = $(git rev-parse HEAD)"
+          echo "workflow SHA = ${{ github.sha }}"
+          echo "PR head SHA = ${{ github.event.pull_request.head.sha || 'n/a' }}"
+
+      - name: Execution lock spec (targeted)
+        run: npx vitest run e2e/helpers/execution-lock.spec.ts
+
+      - name: Unit tests (full)
+        run: npm run test:unit
+
