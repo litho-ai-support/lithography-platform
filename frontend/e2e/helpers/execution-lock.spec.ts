@@ -7,44 +7,70 @@
  * 守住的不变量：同一隔离库上任意时刻只有一个进程能进入 Migration/Seed/物理清理窗口，
  * 且任何进程都不得删除或搬走「不是自己建立的、或未经原子确认已废弃的」锁文件。
  *
- * 覆盖 8 个确定性场景 + 2 个真实多进程竞争场景：
+ * 覆盖 9 个确定性场景 + 2 个真实多进程竞争场景：
  * 1. 不可解析锁（旧实现「已创建未写入」窗口的产物）不得被抢占；
  * 2. 持有者存活时硬失败，释放后可重新获取（释放与重新获取交错）；
  * 3. 持有者已退出的废弃锁可被接管，且落盘归属 token 为接管者；
  * 4. 释放只在 token 一致时删除（仅比 pid 会误删他人新锁）；
  * 5. 释放严格一次性：第二次调用不再触碰锁路径；
  * 6. 「另一进程正在接管同一把废弃锁」（接管凭证已存在）时失败关闭且不动原锁；
- * 7. 非 ENOENT 的删除失败（EACCES）必须抛出，不得被吞成静默假成功；
- * 8. 缺 token 的历史锁文件同样不被抢占（仅 pid 不足以判定归属）；
- * 9. 两个真实子进程同时接管同一把废弃锁：恰好一个进入临界区；
- * 10. 三个真实子进程同时竞争：仍然恰好一个进入临界区（覆盖「A 接管发布后、
+ * 7. 释放的非 ENOENT unlink 故障（EACCES / EPERM）必须原样上抛，不得被吞成静默假成功；
+ * 8. 释放的 ENOENT 竞态（锁已被他方删除）不抛：释放对已消失的锁幂等；
+ * 9. 缺 token 的历史锁文件同样不被抢占（仅 pid 不足以判定归属）；
+ * 10. 两个真实子进程同时接管同一把废弃锁：恰好一个进入临界区；
+ * 11. 三个真实子进程同时竞争：仍然恰好一个进入临界区（覆盖「A 接管发布后、
  *     B 仍按旧观察动作、C 趁机插入」的三进程交错）。
+ *
+ * 场景 7 / 8 通过 Vitest hoisted partial mock 包装 `node:fs.unlinkSync` 注入 errno：
+ * 只对当前用例的精确锁路径抛指定错误，其余路径与用例一律委托真实实现，注入由
+ * afterEach 清除（2026-10-02 复审：旧夹具用 `chmodSync(dir, 0o500)` 制造 EACCES，
+ * Windows 上权限位不生效、夹具无法成立，已移除）。
  *
  * 多进程夹具见 `execution-lock-race-child.ts`（非 `*.spec.ts`，不被测试收集器执行）。
  */
 
 import { type ChildProcess, fork, spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { acquireExecutionLockAt, readExecutionLockOwner } from './execution-lock';
 import type { ChildMessage, ParentCommand } from './execution-lock-race-child';
 
 const RACE_CHILD_PATH = fileURLToPath(new URL('./execution-lock-race-child.ts', import.meta.url));
 
-/** root 下目录权限不生效，EACCES 用例无法成立（本仓库 CI 与开发机均为普通用户） */
-const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+/**
+ * 释放故障注入槽（跨平台确定性的 errno 夹具）：
+ * 旧夹具用 `chmodSync(dir, 0o500)` 让 unlink 触发 EACCES，但 Windows 上权限位不生效、
+ * root 下同样可写，用例无法成立。改为 partial mock 包装 `node:fs.unlinkSync`——
+ * 只对「当前用例的精确锁路径」抛指定 errno，其余路径（暂存文件、接管目录等）与其他
+ * 用例一律走真实实现；afterEach 清除后行为立即恢复真实。
+ */
+const { unlinkFault } = vi.hoisted(() => ({
+  unlinkFault: {
+    error: null as NodeJS.ErrnoException | null,
+    path: null as string | null,
+  },
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+
+  return {
+    ...actual,
+    unlinkSync: (target: Parameters<typeof actual.unlinkSync>[0]) => {
+      const isTarget = unlinkFault.path !== null && String(target) === unlinkFault.path;
+
+      if (isTarget && unlinkFault.error !== null) {
+        throw unlinkFault.error;
+      }
+
+      return actual.unlinkSync(target);
+    },
+  };
+});
 
 const tempDirs: string[] = [];
 
@@ -71,7 +97,27 @@ function writeOwnerFile(lockPath: string, owner: Record<string, unknown>): void 
   writeFileSync(lockPath, `${JSON.stringify(owner)}\n`);
 }
 
+/**
+ * 给「当前用例的精确锁路径」注入一次 unlink errno 故障；返回注入的错误对象，
+ * 供断言「原样上抛同一引用」。非目标路径不受影响，afterEach 统一清除。
+ */
+function injectUnlinkFault(lockPath: string, code: string): NodeJS.ErrnoException {
+  const injected: NodeJS.ErrnoException = Object.assign(
+    new Error(`${code}: 注入的 unlink 故障（${lockPath}）`),
+    { code, path: lockPath, syscall: 'unlink' },
+  );
+
+  unlinkFault.path = lockPath;
+  unlinkFault.error = injected;
+
+  return injected;
+}
+
 afterEach(() => {
+  // 先恢复真实 unlink 行为，再回收临时目录：注入夹具绝不跨用例泄漏
+  unlinkFault.path = null;
+  unlinkFault.error = null;
+
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
 
@@ -184,23 +230,46 @@ describe('acquireExecutionLockAt 的失败关闭与归属校验', () => {
     // 失败关闭：不删、不搬、不改写那把废弃锁（由仍在接管的进程负责）
     expect(readExecutionLockOwner(lockPath)?.token).toBe('stale-token');
   });
+});
 
-  it.skipIf(isRoot)('释放时非 ENOENT 的删除失败必须抛出，不得静默假成功（EACCES）', () => {
+/**
+ * 释放（unlink）故障的跨平台确定性传播（2026-10-02 复审 P2）。
+ *
+ * 旧夹具依赖目录权限位制造 EACCES，Windows 上权限位不生效，用例无法成立；
+ * 改为对精确锁路径注入 errno，断言「非 ENOENT 原样上抛 + 锁保持原样」与
+ * 「ENOENT 竞态不抛」两条互补契约，不依赖宿主文件系统的权限模型。
+ */
+describe('释放（unlink）故障的确定性传播', () => {
+  it.each(['EACCES', 'EPERM'] as const)(
+    '非 ENOENT 的删除失败（%s）原样上抛同一错误对象，锁保持原样，不得静默假成功',
+    (code) => {
+      const lockPath = makeLockPath();
+      const release = acquireExecutionLockAt(lockPath);
+      const injected = injectUnlinkFault(lockPath, code);
+
+      let caught: unknown = null;
+
+      try {
+        release();
+      } catch (error) {
+        caught = error;
+      }
+
+      // 原样上抛注入的错误对象（同一引用）：不得包装、不得改写 code、不得吞掉
+      expect(caught).toBe(injected);
+      // 锁确实还在：失败没有被吞成「已释放」
+      expect(existsSync(lockPath)).toBe(true);
+    },
+  );
+
+  it('ENOENT 竞态（锁已被他方删除）不抛：释放对已消失的锁幂等', () => {
     const lockPath = makeLockPath();
-    const dir = path.dirname(lockPath);
     const release = acquireExecutionLockAt(lockPath);
 
-    // 去掉目录写权限：unlink 必然失败（非 ENOENT）
-    chmodSync(dir, 0o500);
+    injectUnlinkFault(lockPath, 'ENOENT');
 
-    try {
-      expect(() => release()).toThrow(/EACCES|EPERM/);
-    } finally {
-      chmodSync(dir, 0o700);
-    }
-
-    // 锁确实还在：失败没有被吞成「已释放」
-    expect(existsSync(lockPath)).toBe(true);
+    // 「只忽略 ENOENT」契约的另一半：竞态删除不得升级为错误
+    expect(() => release()).not.toThrow();
   });
 });
 

@@ -10,7 +10,7 @@
  * 导航意图；列表 / 详情 / 创建状态机的时序行为由各自 application spec 与面板 spec 覆盖。
  */
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -211,7 +211,7 @@ function listItemOf(requestNo: string): HTMLElement {
 
 function renderWorkspace(props: {
   mode: 'create' | 'history-list' | 'history-detail';
-  requestId?: number;
+  requestId?: number | null;
 }) {
   return render(
     <MessageFeedbackProvider>
@@ -528,6 +528,45 @@ describe('CustomerRepairWorkspace 的删除编排', () => {
     });
 
     expect(navigateMock).not.toHaveBeenCalled();
+  });
+});
+
+// 2026-10-02 复审 P2：history-detail + null（非法 / 缺失 URL 参数经路由边界归一）与
+// 「列表暂无默认目标」语义不同——非法详情 URL 直显统一 not-found，不挂载详情 hook、
+// 不发详情 Query、不暴露删除入口；列表态空库仍走右栏占位。
+describe('CustomerRepairWorkspace 的非法详情 URL（history-detail + null）', () => {
+  it('直显统一 not-found 与返回入口：不挂载详情 hook、无删除入口', () => {
+    setupReadyList();
+    const { container } = renderWorkspace({ mode: 'history-detail', requestId: null });
+
+    expect(screen.getByText('维修申请不存在或不可查看。')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '返回历史列表' })).toBeTruthy();
+    // 未挂载 WorkspaceDetailPane：详情 flow 未被创建（无详情 Query / 无删除命令）
+    expect(detailFlowCalls).toHaveLength(0);
+    const detailPane = container.querySelector('.customer-workspace-detail-pane');
+    expect(detailPane).not.toBeNull();
+    expect(
+      within(detailPane as HTMLElement).queryByRole('button', { name: '删除申请' }),
+    ).toBeNull();
+  });
+
+  it('点击「返回历史列表」只导航到列表路由', () => {
+    setupReadyList();
+    renderWorkspace({ mode: 'history-detail', requestId: null });
+
+    fireEvent.click(screen.getByRole('button', { name: '返回历史列表' }));
+
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith('/customer/repair-requests');
+  });
+
+  it('与「列表暂无默认目标」区分：history-list 空库仍走占位而非 not-found', () => {
+    listHook.current.state = { status: 'ready', data: makePage({ items: [], total: 0 }) };
+    renderWorkspace({ mode: 'history-list' });
+
+    expect(screen.queryByText('维修申请不存在或不可查看。')).toBeNull();
+    expect(screen.getAllByText('还没有维修申请。').length).toBeGreaterThanOrEqual(1);
+    expect(detailFlowCalls).toHaveLength(0);
   });
 });
 

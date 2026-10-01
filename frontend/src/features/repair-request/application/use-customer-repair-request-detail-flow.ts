@@ -22,7 +22,9 @@ import type { RepairRequestDetail } from '../infrastructure/repair-request-read.
  *   避免切换申请后在新数据到达前继续展示上一份申请；
  * - 删除命令绑定发起时的「目标代次」：await 之后代次不一致（requestId 已切换或组件已卸载）
  *   即整体丢弃结果，不提示、不回刷、不返回成功；在途锁按代次记录，finally 只释放自身代次，
- *   跨目标不串锁；失败（业务拒绝或 transport）给明确反馈并回刷详情，不做乐观成功；
+ *   跨目标不串锁；删除 pending 按钮态与「目标 + 代次」绑定并以纯派生呈现（render 期间
+ *   无 setState；2026-10-02 复审移除了 deleteSessionId 的 render-phase 复位）；
+ *   失败（业务拒绝或 transport）给明确反馈并回刷详情，不做乐观成功；
  * - deleteRequest 返回 boolean：true 表示删除成功且目标仍有效，调用方（页面）据此导航回列表；
  * - 反馈经注入的窄 port（NotifyFeedback）上报，由 ui 层决定呈现方式——本层不得依赖
  *   具体 UI 组件实现（docs/stable-clean/architecture.md 最小落地规则第 6 条）；
@@ -58,10 +60,15 @@ export function useCustomerRepairRequestDetailFlow(requestId: number, notify: No
     requestId,
     status: 'loading',
   });
-  const [deleting, setDeleting] = useState(false);
-  // 删除按钮态与「它属于哪一次 requestId」绑定：目标切换时要退出旧目标的 pending 按钮态，
-  // 否则新目标的删除入口会被旧目标在途的删除永久置灰（在途锁按代次记录，本就不命中新代次）。
-  const [deleteSessionId, setDeleteSessionId] = useState(requestId);
+  // 删除在途的可见 pending 态与「发起它的目标 + 代次」绑定（不单独存布尔）：
+  // 目标切换时可见态由渲染期纯派生（deletePending.requestId === requestId）自然退出，
+  // 不再需要、也不允许在 render 期间 setState 复位。旧实现用 `deleteSessionId !== requestId`
+  // 触发 setState，NaN 使比较恒真，会形成无限重渲染（2026-10-02 复审修复；
+  // 非法 ID 现已在路由边界被拒绝，hook 保持「只接收已验证正整数」的窄契约）。
+  const [deletePending, setDeletePending] = useState<{
+    generation: number;
+    requestId: number;
+  } | null>(null);
   // 每次加载递增的代次令牌：只有最新一次请求可以把结果写入状态，
   // 否则切换 requestId 后前一个请求晚到，会覆盖当前详情。
   const loadGenerationRef = useRef(0);
@@ -151,7 +158,7 @@ export function useCustomerRepairRequestDetailFlow(requestId: number, notify: No
     }
 
     deletingGenerationRef.current = generation;
-    setDeleting(true);
+    setDeletePending({ generation, requestId });
 
     try {
       const result = await deleteMyRepairRequest(requestId);
@@ -191,17 +198,19 @@ export function useCustomerRepairRequestDetailFlow(requestId: number, notify: No
       // 只释放归属自身代次的锁：旧代次的收尾不得解锁新目标在途的删除
       if (deletingGenerationRef.current === generation) {
         deletingGenerationRef.current = null;
-        setDeleting(false);
       }
+
+      // 可见 pending 态同样只清「自己那一笔」：按代次精确匹配，
+      // 旧 finally 不得清掉新目标在途的 pending
+      setDeletePending((current) =>
+        current !== null && current.generation === generation ? null : current,
+      );
     }
   }, [loadDetail, notify, requestId]);
 
-  // 目标已切换：退出旧目标的 pending 删除按钮态（在途锁按代次记录，
-  // 旧代次的锁本就不会命中新代次，无需在此改写）
-  if (deleteSessionId !== requestId) {
-    setDeleteSessionId(requestId);
-    setDeleting(false);
-  }
+  // 可见 pending 态绑在发起目标上：切换目标后同一帧即按新目标的可用状态渲染
+  // （纯派生，无 render 期间 setState；旧目标的在途锁按代次记录，不命中新代次）
+  const deleting = deletePending !== null && deletePending.requestId === requestId;
 
   // 状态与当前 requestId 不匹配（切换申请）→ 立即按 loading 渲染：
   // 不在新数据到达前展示上一份申请的编号、故障内容、回复与删除按钮。

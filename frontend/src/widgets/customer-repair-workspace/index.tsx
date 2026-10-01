@@ -41,6 +41,11 @@ import { PageHeader } from '@/shared/ui/page-header';
  * 选中项真值（计划 S0-6）：URL 的 requestId 是详情目标唯一真值；列表态以当前页第一项
  * 作为默认详情；create 态不派生任何历史详情；仅当目标存在于当前已加载分页时才显示
  * active；深链目标不在本页时不误选、不伪造。
+ *
+ * 非法详情 URL（2026-10-02 复审 P2）：history-detail 且 requestId 为 null（路由边界
+ * parseRepairRequestIdParam 把非规范 / 越界 ID 归一为 null）与「列表暂无默认目标」
+ * 是两种语义——前者直显统一 not-found 外观与「返回历史列表」入口（不挂载详情 hook、
+ * 不发详情 Query、不暴露删除入口）；后者仍走列表占位（加载中 / 失败 / 空库 / 越界空页）。
  */
 
 const CUSTOMER_CREATE_PATH = '/customer';
@@ -53,8 +58,12 @@ export type CustomerRepairWorkspaceMode = 'create' | 'history-list' | 'history-d
 
 type CustomerRepairWorkspaceProps = {
   mode: CustomerRepairWorkspaceMode;
-  /** history-detail 的目标申请 ID（路由参数解析结果；非数字时为 NaN，走详情 not-found 口径） */
-  requestId?: number;
+  /**
+   * history-detail 的目标申请 ID：只接收路由边界（parseRepairRequestIdParam）解析出的
+   * 有效正整数；非法 / 缺失 URL 参数由路由层归一为 null，工作台据此直显 not-found，
+   * 不把非法值下传详情 hook（hook 保持「只接收已验证 ID」的窄契约）。
+   */
+  requestId?: number | null;
 };
 
 /**
@@ -153,6 +162,25 @@ function ListPlaceholderPane({
 }
 
 /**
+ * 非法详情 URL 右栏（2026-10-02 复审 P2）：history-detail 且目标为 null 时直显统一
+ * not-found 外观（与后端防探测一致，复用详情面板 failed 态；该态不渲染删除入口，
+ * onDelete 不可达）。不挂载 WorkspaceDetailPane 即不创建详情 hook、不发详情 Query、
+ * 不暴露删除命令；左栏列表不受影响，仍由其自身 hook 正常加载。
+ */
+const INVALID_DETAIL_TARGET_MESSAGE = '维修申请不存在或不可查看。';
+
+function InvalidDetailPane({ onBackToList }: { onBackToList: () => void }) {
+  return (
+    <CustomerRepairRequestDetailPanel
+      deleting={false}
+      onBackToList={onBackToList}
+      onDelete={() => undefined}
+      state={{ message: INVALID_DETAIL_TARGET_MESSAGE, notFound: true, status: 'failed' }}
+    />
+  );
+}
+
+/**
  * create 态右栏：RepairRequestForm 作为卡片完整单列主体（2026-09-30 复审移除独立
  * 「填写提示」侧栏；字段级短提示就近挂在对应 Form.Item 小标题旁，整体业务规则放操作行，
  * 均见 RepairRequestForm，不在本层复制业务文案）。
@@ -212,7 +240,8 @@ export function CustomerRepairWorkspace({ mode, requestId }: CustomerRepairWorks
   const listItems = state.status === 'ready' ? state.data.items : [];
 
   // 详情目标：create 态不派生（计划 S0-6 第一条）；列表态在 ready 且非空时以当前页
-  // 第一项作为右栏默认详情；详情态以 URL requestId 为唯一真值（含 NaN 的 not-found 口径）。
+  // 第一项作为右栏默认详情；详情态以 URL requestId 为唯一真值——路由层已把非法 /
+  // 缺失参数归一为 null，null 在此表示「非法详情 URL」，与列表态「暂无默认目标」区分。
   const detailTargetId: number | null =
     mode === 'history-detail'
       ? (requestId ?? null)
@@ -329,6 +358,8 @@ export function CustomerRepairWorkspace({ mode, requestId }: CustomerRepairWorks
               onOpenMyRequests={handleOpenMyRequests}
               onViewCreated={(record) => navigate(repairRequestDetailPath(record.id))}
             />
+          ) : mode === 'history-detail' && detailTargetId === null ? (
+            <InvalidDetailPane onBackToList={navigateToList} />
           ) : detailTargetId !== null ? (
             <WorkspaceDetailPane
               deleteViaDetailFlow={mode === 'history-detail'}
