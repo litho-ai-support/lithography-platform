@@ -1149,7 +1149,8 @@ describe('real-backend 存储物理文件清理（0909 第二轮：按精确引�
 
     const removedPath = rmSyncMock.mock.calls[0]?.[0] as string;
 
-    expect(removedPath).toContain('var/reference-documents');
+    // 路径由 path.resolve 构造：Windows 产出 `\` 分隔符，断言需同时接受两种分隔符（跨平台）
+    expect(removedPath).toMatch(/var[\\/]reference-documents/);
     expect(removedPath.endsWith(VALID_REFERENCE)).toBe(true);
     expect(removedPath).not.toContain('..');
   });
