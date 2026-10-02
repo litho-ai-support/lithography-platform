@@ -183,10 +183,14 @@ async function createUserViaPage(
   const dialog = page.getByRole('dialog');
 
   await expect(dialog).toBeVisible();
-  // AntD Select 交互按仓库先例（reference-document-real.spec.ts）：点击 label 不展开下拉，
-  // 必须先点 combobox 打开下拉；选项以 aria-label（中文角色名）锚定，不依赖 DOM 顺序。
+  // AntD Select 交互按仓库先例（engineer-repair-request-real / reference-document-real）：
+  // 点击 label 不展开下拉，必须先点 combobox 打开下拉。这里必须用 `.ant-select-item-option`
+  // （title 为中文标签）而非 getByRole('option')：AntD 6 的 role="option" 节点是零宽内部
+  // 元素（实测 rect 宽为 0），Playwright 判为不可见并一直等待。
   await dialog.getByRole('combobox').click();
-  await page.getByRole('option', { name: input.roleLabel }).click();
+  await page
+    .locator(`.ant-select-dropdown .ant-select-item-option[title="${input.roleLabel}"]`)
+    .click();
   await dialog.getByLabel('昵称', { exact: true }).fill(input.nickname);
   await dialog.getByLabel('登录名（登录凭据之一）', { exact: true }).fill(input.loginName);
   await dialog.getByLabel('初始密码', { exact: true }).fill(input.password);
@@ -540,10 +544,16 @@ test.describe('auth & admin real backend flow（隔离库 lithography_e2e）', (
       //（graphql-exception.filter.ts），不是 UNAUTHENTICATED
       expect(blockedLogin.errorCode).toBe('FORBIDDEN');
 
-      // 3) 前端携旧会话访问真实受保护页 → 会话被清理并跳登录页（携带固定失效原因）
+      // 3) 停用后前端不再持有可用会话：真实受保护页不可达，会话真源被清理。
+      // 应用在旧 Token 的受保护请求被拒（UNAUTHENTICATED）时收敛一次失效周期：
+      // 清理会话真源并跳登录页。清理可能由停用后 /engineer 页的受保护请求先触发
+      // （走失败处理器，URL 带 reason=session-expired），也可能由本步重载受保护页时
+      // 的路由守卫触发（URL 为 /login?returnTo=...）；两者都是合法收敛路径，故此处
+      // 只断言「落到登录页 + 会话真源为空」，reason=session-expired 的精确形态由
+      // 「真实 Token 自然过期」用例专门断言。
       await page.goto('/account/settings');
-      await page.waitForURL(/\/login\?reason=session-expired/, { timeout: 15_000 });
-      await expect(page.getByText(AUTH_SESSION_EXPIRED_NOTICE_MESSAGE)).toBeVisible();
+      await page.waitForURL(/\/login(\?|$)/, { timeout: 15_000 });
+      await expect(page.getByLabel('账号或邮箱')).toBeVisible();
       expect(await readStoredAuthSession(page)).toBeNull();
 
       // 管理员重新启用
