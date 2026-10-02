@@ -184,7 +184,8 @@ export const REFERENCE_DOCUMENT_E2E_TITLE_PREFIX = 'E2E 参考资料验收行';
 
 // 服务端生成的存储引用格式（与 backend local-storage 实现同口径白名单）：
 // 32 位小写 hex + 白名单扩展名，天然无路径语义；任何白名单外的引用都拒绝清理。
-const STORAGE_REFERENCE_PATTERN = /^[0-9a-f]{32}\.[a-z0-9]{1,8}$/;
+// 导出供 PR5 归属核验 helper 复用同一白名单（避免两套口径漂移）。
+export const STORAGE_REFERENCE_PATTERN = /^[0-9a-f]{32}\.[a-z0-9]{1,8}$/;
 
 // 物理清理安全门：物理 DELETE 只允许发生在「显式 opt-in + 库名属测试库」的配置上。
 // 共享开发库（DB_NAME 不含 e2e/test 标记）一律在启动 mysql 进程前拒绝；
@@ -876,6 +877,32 @@ export function findReferenceDocumentStorageReferenceById(id: number): string | 
 }
 
 /**
+ * 按精确存储引用删除单个物理文件（PR5 归属核验后调用：先核验行归属并取引用，再删文件）。
+ * 引用必须命中服务端生成格式白名单，且解析后必须落在存储目录内，否则拒绝删除。
+ */
+export function deleteE2EReferenceDocumentStorageFileByReference(reference: string): void {
+  if (!STORAGE_REFERENCE_PATTERN.test(reference)) {
+    throw new Error(`存储文件引用未通过白名单校验，拒绝删除：${JSON.stringify(reference)}`);
+  }
+
+  const env = readBackendEnv();
+  const storageDir = path.resolve(
+    fileURLToPath(new URL('../../../backend', import.meta.url)),
+    env.REFERENCE_DOCUMENT_STORAGE_DIR || 'var/reference-documents',
+  );
+  const filePath = path.resolve(storageDir, reference);
+
+  // 双保险：断言解析后的精确路径仍在存储目录内（与后端 resolve 防御同口径）
+  if (!filePath.startsWith(`${storageDir}${path.sep}`)) {
+    throw new Error(`存储文件路径越界，拒绝删除：${JSON.stringify(filePath)}`);
+  }
+
+  if (existsSync(filePath)) {
+    rmSync(filePath, { force: true });
+  }
+}
+
+/**
  * 按本次运行上传产生的精确 ID 清理存储物理文件（0909 计划要求：按精确引用路径，不扫描批量删）。
  * 引用必须命中服务端生成格式白名单，且解析后必须落在存储目录内，否则拒绝删除。
  */
@@ -890,29 +917,15 @@ export function deleteE2EReferenceDocumentStorageFilesByIds(ids: readonly number
     }
   }
 
-  const env = readBackendEnv();
-  const storageDir = path.resolve(
-    fileURLToPath(new URL('../../../backend', import.meta.url)),
-    env.REFERENCE_DOCUMENT_STORAGE_DIR || 'var/reference-documents',
-  );
-
   for (const id of ids) {
     const reference = findReferenceDocumentStorageReferenceById(id);
 
+    // 无引用（纯文本资料）或引用不符合服务端生成格式：跳过（既有行为不变）
     if (reference === null || !STORAGE_REFERENCE_PATTERN.test(reference)) {
       continue;
     }
 
-    const filePath = path.resolve(storageDir, reference);
-
-    // 双保险：断言解析后的精确路径仍在存储目录内（与后端 resolve 防御同口径）
-    if (!filePath.startsWith(`${storageDir}${path.sep}`)) {
-      throw new Error(`存储文件路径越界，拒绝删除：${JSON.stringify(filePath)}`);
-    }
-
-    if (existsSync(filePath)) {
-      rmSync(filePath, { force: true });
-    }
+    deleteE2EReferenceDocumentStorageFileByReference(reference);
   }
 }
 

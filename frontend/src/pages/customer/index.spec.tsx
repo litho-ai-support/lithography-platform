@@ -1,67 +1,42 @@
 // src/pages/customer/index.spec.tsx
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+/**
+ * 客户首页路由壳单测（PR5 整合工作台）。
+ *
+ * 首页只选择工作台模式（create）；固定页头、模式装配与表单协作端口由
+ * widgets/customer-repair-workspace 的 spec 覆盖，本 spec 只验证壳的装配意图：
+ * 单一工作台实例、create 模式与 barrel 对 router 的路由组件导出。
+ */
 
-import { CustomerPage } from './index';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
-const { navigateMock, authSessionViewMock } = vi.hoisted(() => ({
-  navigateMock: vi.fn(),
-  authSessionViewMock: vi.fn(),
+import {
+  CustomerPage,
+  CustomerRepairRequestDetailRoute,
+  CustomerRepairRequestsPage,
+} from './index';
+
+// 工作台用桩只记录装配 props：壳不复制工作台实现，只传模式
+vi.mock('@/widgets/customer-repair-workspace', () => ({
+  CustomerRepairWorkspace: ({ mode }: { mode: string }) => (
+    <div data-mode={mode} data-testid="customer-repair-workspace" />
+  ),
 }));
 
-vi.mock('react-router', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router')>();
-
-  return { ...actual, useNavigate: () => navigateMock };
-});
-
-// 页面测试只关心本页的入口行为：会话面板内部逻辑由其自身测试覆盖，此处替换为桩；
-// useAuthSession 用桩按角色返回会话视图，其余（含放行判断函数）保留真实实现。
-vi.mock('@/features/auth-session', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/features/auth-session')>();
-
-  return { ...actual, AuthSessionPanel: () => null, useAuthSession: () => authSessionViewMock() };
-});
-
-function setRole(role: 'CUSTOMER' | 'SUPER_ADMIN') {
-  authSessionViewMock.mockReturnValue({
-    session: { accountId: 900101, role, userInfo: null },
-    status: 'authenticated',
-  });
-}
-
-describe('客户首页的维修申请入口', () => {
-  beforeEach(() => {
-    navigateMock.mockReset();
-  });
-
-  it('展示明显的「发起维修申请」入口，点击跳转到受保护的创建路由', () => {
-    setRole('CUSTOMER');
+describe('客户首页壳', () => {
+  it('以 create 模式装配唯一的工作台实例', () => {
     render(<CustomerPage />);
 
-    const entry = screen.getByRole('button', { name: '发起维修申请' });
-    expect(entry).toBeTruthy();
-    expect((entry as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText('超管不能代客户发起维修申请')).toBeNull();
-
-    fireEvent.click(entry);
-
-    // 唯一可发现入口指向正式受保护路由，不允许手输 URL 才能到达的落点
-    expect(navigateMock).toHaveBeenCalledWith('/customer/repair-requests/new');
+    const workspaces = screen.getAllByTestId('customer-repair-workspace');
+    expect(workspaces).toHaveLength(1);
+    expect(workspaces[0].getAttribute('data-mode')).toBe('create');
   });
 
-  it('SUPER_ADMIN 的入口按钮置灰并附文字说明，点击不跳转（路由层同口径拒绝）', () => {
-    setRole('SUPER_ADMIN');
-    render(<CustomerPage />);
-
-    const entry = screen.getByRole('button', { name: '发起维修申请' });
-    expect((entry as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('超管不能代客户发起维修申请')).toBeTruthy();
-
-    fireEvent.click(entry);
-
-    expect(navigateMock).not.toHaveBeenCalled();
+  // app/router 经本 barrel 引用三个路由组件（跨模块只走公开出口）
+  it('barrel 为 router 提供列表与详情路由组件导出', () => {
+    expect(typeof CustomerRepairRequestDetailRoute).toBe('function');
+    expect(typeof CustomerRepairRequestsPage).toBe('function');
   });
 });

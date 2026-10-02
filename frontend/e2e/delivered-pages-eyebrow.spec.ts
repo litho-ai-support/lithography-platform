@@ -35,9 +35,14 @@ const CASES: readonly EyebrowCase[] = [
   { eyebrow: 'Reference Document Detail', path: '/reference-documents/501', role: 'SUPER_ADMIN' },
   { eyebrow: 'Repair Requests', path: '/engineer/repair-requests', role: 'ENGINEER' },
   { eyebrow: 'Repair Request Detail', path: '/engineer/repair-requests/901', role: 'ENGINEER' },
-  { eyebrow: 'My Repair Requests', path: '/customer/repair-requests', role: 'CUSTOMER' },
-  { eyebrow: 'New Repair Request', path: '/customer/repair-requests/new', role: 'CUSTOMER' },
-  { eyebrow: 'Repair Request Detail', path: '/customer/repair-requests/901', role: 'CUSTOMER' },
+  // 客户四页（PR5 整合工作台）：首页 / 创建 / 列表 / 详情四个 URL 复用同一
+  // CustomerRepairWorkspace 与同一固定页头（eyebrow 恒为 Customer Workspace、
+  // 标题恒为「客户页面」）；ENGINEER / SUPER_ADMIN 的角色主页仍为开发期占位
+  //（PR6 归属），故本清单暂不收录。
+  { eyebrow: 'Customer Workspace', path: '/customer', role: 'CUSTOMER' },
+  { eyebrow: 'Customer Workspace', path: '/customer/repair-requests', role: 'CUSTOMER' },
+  { eyebrow: 'Customer Workspace', path: '/customer/repair-requests/new', role: 'CUSTOMER' },
+  { eyebrow: 'Customer Workspace', path: '/customer/repair-requests/901', role: 'CUSTOMER' },
 ];
 
 for (const item of CASES) {

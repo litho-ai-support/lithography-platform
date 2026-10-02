@@ -26,11 +26,16 @@
 // docs/tmp/PR 证据目录（本地可追溯，不随 PR 提交）。
 
 import { expect, type Locator, type Page, test } from '@playwright/test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { installAdminDocumentKbGraphqlMocks } from './helpers/admin-document-kb-mocks';
 import { seedAuthSession } from './helpers/auth-session-seed';
+import {
+  captureStableViewport,
+  prepareStableViewport,
+  readPngDimensions,
+} from './helpers/visual-evidence';
 
 const PAGE_PATH = '/admin/document-database';
 const MODEL_WARNING_TEXT = '设备型号选项加载失败';
@@ -194,20 +199,6 @@ async function focusTab(page: Page, name: string): Promise<void> {
     const at = activeTab.getBoundingClientRect();
     return Math.abs(ib.left - at.left) < 2 && Math.abs(ib.width - at.width) < 2;
   });
-}
-
-/** 读取 PNG 物理像素尺寸（IHDR：宽偏移 16、高偏移 20，大端 uint32），
-    用于机械断言截图物理尺寸严格等于指定视口（0922 复查 B2）。 */
-function readPngDimensions(filePath: string): { height: number; width: number } {
-  const buffer = readFileSync(filePath);
-  if (
-    buffer.length < 24 ||
-    buffer.readUInt32BE(0) !== 0x89504e47 ||
-    buffer.readUInt32BE(4) !== 0x0d0a1a0a
-  ) {
-    throw new Error(`不是合法 PNG：${filePath}`);
-  }
-  return { height: buffer.readUInt32BE(20), width: buffer.readUInt32BE(16) };
 }
 
 /** AI 浮动入口（entry-trigger-shell）为全局组件：1440/1366 套按复查建议隐藏减少
@@ -503,14 +494,16 @@ async function waitForFontsReady(page: Page): Promise<void> {
   await page.evaluate(() => document.fonts.ready);
 }
 
-/** 采集 1:1 局部图：元素截图物理尺寸必须等于元素 CSS 尺寸（dpr=1、不二次缩放）。 */
+/** 采集 1:1 局部图：元素截图物理尺寸必须等于元素 CSS 尺寸（dpr=1、不二次缩放）。
+ *  局部截图例外（登记于 frontend/docs/testing.md）：元素截图非全视口；
+ *  截图前仍复用统一稳定前置（滚动复位 + 布局稳定）。 */
 async function shootLocal(
-  page: Page,
   locator: Locator,
   filePath: string,
   evidence: Record<string, unknown>,
   name: string,
 ): Promise<void> {
+  await prepareStableViewport(locator.page(), path.basename(filePath));
   await locator.screenshot({ path: filePath });
   const box = await locator.boundingBox();
   if (box === null) throw new Error(`局部图 ${name} 无 boundingBox`);
@@ -520,7 +513,9 @@ async function shootLocal(
   evidence[name] = { png, boxHeight: +box.height.toFixed(2), boxWidth: +box.width.toFixed(2) };
 }
 
-/** 表头 + 一行正文跨元素：用 clip 合成连续区域（同 1:1 校验）。 */
+/** 表头 + 一行正文跨元素：用 clip 合成连续区域（同 1:1 校验）。
+ *  局部 clip 截图例外（登记于 frontend/docs/testing.md）：非全视口；
+ *  截图前复用统一稳定前置（滚动复位 + 布局稳定），再按元素几何合成 clip。 */
 async function shootTheadFirstRow(
   page: Page,
   pane: Locator,
@@ -528,6 +523,8 @@ async function shootTheadFirstRow(
   evidence: Record<string, unknown>,
   name: string,
 ): Promise<void> {
+  // 先稳定（滚动复位后 boundingBox 与 clip 坐标才与全视口约定一致）
+  await prepareStableViewport(page, path.basename(filePath));
   const theadBox = await pane.locator('.kb-table-scope .ant-table-thead').boundingBox();
   const rowBox = await pane
     .locator('.kb-table-scope .ant-table-tbody tr.ant-table-row')
@@ -559,21 +556,18 @@ async function captureImplementationLocals(
   const pane = activePane(page);
   const evidence: Record<string, unknown> = {};
   await shootLocal(
-    page,
     page.locator('.page-header--kb'),
     path.join(outputDir, `kb-local-${tag}-header.png`),
     evidence,
     'header',
   );
   await shootLocal(
-    page,
     page.locator('.kb-card.kb-summary'),
     path.join(outputDir, `kb-local-${tag}-summary.png`),
     evidence,
     'summary',
   );
   await shootLocal(
-    page,
     pane.locator('.kb-toolbar'),
     path.join(outputDir, `kb-local-${tag}-toolbar.png`),
     evidence,
@@ -608,6 +602,8 @@ test.describe('mocked admin document database - knowledge base visual baseline (
 
     const evidence: Record<string, unknown> = {};
     const tables: Record<string, unknown> = {};
+    // 同轮四标签三视口全部整页截图必须共享同一干净 SHA（逐张记录，结束时断言一致）
+    const captureShas: string[] = [];
 
     for (const viewport of VIEWPORTS) {
       const tag = `${viewport.width}x${viewport.height}`;
@@ -632,10 +628,13 @@ test.describe('mocked admin document database - knowledge base visual baseline (
         expectKbPageBaseline(pageSnapshot, viewport.width);
         expectKbPaneBaseline(paneSnapshot);
 
-        // 复查 B2：viewport 截图（不加 fullPage），物理尺寸必须严格等于指定视口
+        // 复查 B2：viewport 截图（不加 fullPage），物理尺寸必须严格等于指定视口；
+        // P2-2 起一律经 captureStableViewport（滚动复位 + 工作区干净断言 + 元数据）
         const key = `kb-visual-${tab.fileStem}-M-${tag}`;
-        const pngPath = path.join(evidenceDir, `${key}.png`);
-        await page.screenshot({ path: pngPath });
+        const fileName = `${key}.png`;
+        const pngPath = path.join(evidenceDir, fileName);
+        const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
+        captureShas.push(capture.gitSha);
         const png = readPngDimensions(pngPath);
         expect(png).toEqual({ height: viewport.height, width: viewport.width });
 
@@ -663,7 +662,13 @@ test.describe('mocked admin document database - knowledge base visual baseline (
           expect(pillRadius, `${tab.name} 状态胶囊半径规则`).toBe('999px');
         }
 
-        tabEvidence[tab.fileStem] = { page: pageSnapshot, pane: paneSnapshot, png, tab: tab.name };
+        tabEvidence[tab.fileStem] = {
+          capture,
+          page: pageSnapshot,
+          pane: paneSnapshot,
+          png,
+          tab: tab.name,
+        };
       }
 
       // 每视口实现侧 1:1 局部图（供与原型人工并排对照）
@@ -680,6 +685,8 @@ test.describe('mocked admin document database - knowledge base visual baseline (
       }
     }
 
+    expect(new Set(captureShas).size, '四标签三视口全部整页截图必须共享同一 SHA').toBe(1);
+    evidence.gitSha = captureShas[0];
     evidence.tableScroll = tables;
     const evidenceJson = path.join(evidenceDir, 'kb-visual-evidence.json');
     writeFileSync(evidenceJson, JSON.stringify(evidence, null, 2));
@@ -744,15 +751,25 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     expect(geometry.gapAfterToolbar).toBe(geometry.blockPaddingTop);
     expect(geometry.gapBeforeTable).toBe(geometry.blockPaddingBottom);
 
-    const pngPath = testInfo.outputPath('kb-repair-requests-M-model-warning-1440x900.png');
-    await page.screenshot({ path: pngPath });
+    const warningFileName = 'kb-repair-requests-M-model-warning-1440x900.png';
+    const pngPath = testInfo.outputPath(warningFileName);
+    const capture = await captureStableViewport(page, {
+      fileName: warningFileName,
+      filePath: pngPath,
+    });
     expect(readPngDimensions(pngPath)).toEqual({ height: 900, width: 1440 });
 
     const evidenceJson = path.join(testInfo.outputPath(), 'kb-evidence-model-warning.json');
     writeFileSync(
       evidenceJson,
       JSON.stringify(
-        { 'kb-repair-requests-M-model-warning-1440x900': { geometry, page: pageSnapshot } },
+        {
+          'kb-repair-requests-M-model-warning-1440x900': {
+            capture,
+            geometry,
+            page: pageSnapshot,
+          },
+        },
         null,
         2,
       ),
@@ -851,7 +868,7 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     expect(restored).toEqual(baseline);
   });
 
-  test('共享外观回归：登录/用户管理/客户申请/独立参考资料页保持默认外观', async ({
+  test('共享外观回归：登录/用户管理/客户申请保持默认外观，独立参考资料页走自己的整页变体', async ({
     page,
   }, testInfo) => {
     test.setTimeout(120_000);
@@ -861,6 +878,8 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     const evidence: Record<string, unknown> = {};
 
     /** 默认外观探针：不得出现知识库变体类；工作区保持渐变 + 内容 1280px 上限。 */
+    // 同轮四个页面截图必须共享同一干净 SHA（逐张记录，结束时断言一致）
+    const captureShas: string[] = [];
     const readShell = () =>
       page.evaluate(() => {
         const workspace = document.querySelector<HTMLElement>('.app-workspace');
@@ -868,6 +887,11 @@ test.describe('mocked admin document database - knowledge base visual baseline (
         return {
           kbVariantNodes: document.querySelectorAll(
             '.kb-page, .kb-card, .page-header--kb, .app-workspace--knowledge-base, .app-main--knowledge-base',
+          ).length,
+          // PR5 整页视觉计划起，独立资料列表是第二个工作区变体：与知识库变体互不借用
+          // （两个路由各自 0/非 0 互斥），故单独计数，不作为「默认外观」的一部分。
+          referenceLibraryVariantNodes: document.querySelectorAll(
+            '.reference-library-page, .page-header--reference-library, .app-workspace--reference-library, .app-main--reference-library',
           ).length,
           mainMaxWidth: main === null ? null : getComputedStyle(main).maxWidth,
           workspaceBackgroundColor:
@@ -880,6 +904,7 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     const expectDefaultShell = async (label: string): Promise<void> => {
       const shell = await readShell();
       expect(shell.kbVariantNodes, `${label} 不应出现知识库变体节点`).toBe(0);
+      expect(shell.referenceLibraryVariantNodes, `${label} 不应出现参考资料列表变体节点`).toBe(0);
       if (shell.mainMaxWidth !== null) {
         expect(shell.mainMaxWidth, `${label} 应保持 1280px 上限`).toBe('1280px');
       }
@@ -891,10 +916,29 @@ test.describe('mocked admin document database - knowledge base visual baseline (
       evidence[label] = shell;
     };
 
+    /**
+     * 独立参考资料页探针（PR5 整页视觉计划 S1-4：该页不再是默认工作区外观）：
+     * 自己的一整套 modifier 必须齐备且纯色铺满；知识库变体节点仍必须为 0。
+     */
+    const expectReferenceLibraryShell = async (label: string): Promise<void> => {
+      const shell = await readShell();
+      expect(shell.kbVariantNodes, `${label} 不应借用知识库变体节点`).toBe(0);
+      expect(shell.referenceLibraryVariantNodes, `${label} 应具备完整的参考资料列表变体节点`).toBe(
+        4,
+      );
+      expect(shell.workspaceBackgroundImage, `${label} 应为纯色（不再渐变）`).toBe('none');
+      expect(shell.workspaceBackgroundColor, `${label} 应为纯色 #f3f4f6`).toBe(
+        'rgb(243, 244, 246)',
+      );
+      expect(shell.mainMaxWidth, `${label} 应取消 1280px 上限`).toBe('none');
+      evidence[label] = shell;
+    };
+
     const shoot = async (fileName: string): Promise<void> => {
       const pngPath = path.join(evidenceDir, fileName);
-      await page.screenshot({ path: pngPath });
-      evidence[fileName] = readPngDimensions(pngPath);
+      const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
+      captureShas.push(capture.gitSha);
+      evidence[fileName] = { capture, png: readPngDimensions(pngPath) };
     };
 
     await page.setViewportSize({ height: 900, width: 1440 });
@@ -912,10 +956,11 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     await expectDefaultShell('admin-users');
     await shoot('kb-shared-admin-users-1440x900.png');
 
-    // 3) 独立参考资料页（SUPER_ADMIN）
+    // 3) 独立参考资料页（SUPER_ADMIN）：PR5 整页视觉计划起切换为自己的工作区变体，
+    //    不再属于「保持默认外观」集合（S1-4 更新旧回归假设）
     await page.goto('/reference-documents');
     await expect(page.getByRole('heading', { name: '参考资料库' })).toBeVisible();
-    await expectDefaultShell('reference-documents');
+    await expectReferenceLibraryShell('reference-documents');
     await shoot('kb-shared-reference-documents-1440x900.png');
 
     // 对照：知识库页确实启用了变体（同登录态下页面之间互不影响）
@@ -936,6 +981,8 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     await expectDefaultShell('customer-repair-requests');
     await shoot('kb-shared-customer-repair-requests-1440x900.png');
 
+    expect(new Set(captureShas).size, '共享外观四页截图必须共享同一 SHA').toBe(1);
+    evidence.gitSha = captureShas[0];
     const evidenceJson = path.join(evidenceDir, 'kb-shared-look-regression.json');
     writeFileSync(evidenceJson, JSON.stringify(evidence, null, 2));
     console.log(`[visual-evidence] ${evidenceJson}`);

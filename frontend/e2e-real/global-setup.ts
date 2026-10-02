@@ -14,11 +14,18 @@
 // 4. 专用后端由 playwright 配置的 webServer 以进程级环境变量启动
 //    （APP_PORT=3100 / 完整五项 DB 连接 / NODE_ENV=development），不修改任何 .env；
 // 5. npm 子进程经 process.execPath + process.env.npm_execpath 启动 npm CLI，
-//    Linux / macOS / Windows 共用同一条实现。
+//    Linux / macOS / Windows 共用同一条实现；
+// 6. 专用库跨进程执行锁：实现抽取到 `e2e/helpers/execution-lock.ts`（可单测，
+//    含真实多进程竞争回归）。锁文件落在 os.tmpdir()，owner 为 {pid, startedAt, token}；
+//    载荷先完整写盘再原子发布，废弃锁经「凭证目录 + token CAS 复核 + 原子覆盖」接管，
+//    释放只删除 token 一致的那把锁且严格一次性。持锁进程仍在运行则硬失败，避免两条
+//    链路同时对同一专用库执行 Migration/Seed 与物理清理。**setup 自身失败时自行释放锁**
+//    （Playwright 不会调用抛错 setup 的返回值），setup 与释放同时失败则抛 AggregateError。
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { acquireExecutionLock } from '../e2e/helpers/execution-lock';
 import { assertPhysicalCleanupAllowed, readBackendEnv } from '../e2e/helpers/real-backend';
 
 import {
@@ -95,32 +102,61 @@ function assertSqlHelperConfigurationConsistency(dedicated: DedicatedE2EDatabase
   }
 }
 
-export default function globalSetup(): void {
+// 返回值即 Playwright teardown：本轮结束时释放专用库执行锁
+export default function globalSetup(): () => void {
   // 授权缺失 / 库名不合法：直接失败（不得以 skip 掩盖）
   assertPhysicalCleanupAllowed(readBackendEnv());
 
   // 一次性解析并校验专用配置（含失败关闭策略），校验完成前不启动任何破坏性子进程
   const dedicated = resolveDedicatedE2EDatabase();
 
-  // 将完整五项连接写入当前 Playwright 测试进程环境：SQL helper（readBackendEnv）
-  // 与测试内物理清理 helper 由此读取到与 Migration/Seed/webServer 完全相同的值
-  process.env.DB_HOST = dedicated.host;
-  process.env.DB_PORT = dedicated.port;
-  process.env.DB_USER = dedicated.user;
-  process.env.DB_PASS = dedicated.pass;
-  process.env.DB_NAME = dedicated.name;
+  // 拿下专用库执行锁后，才允许进入本轮的 Migration/Seed/物理清理窗口；
+  // teardown 由 Playwright 在本轮结束时调用，正常退出即释放锁
+  const releaseExecutionLock = acquireExecutionLock(dedicated.name);
 
-  assertSqlHelperConfigurationConsistency(dedicated);
+  try {
+    // 将完整五项连接写入当前 Playwright 测试进程环境：SQL helper（readBackendEnv）
+    // 与测试内物理清理 helper 由此读取到与 Migration/Seed/webServer 完全相同的值
+    process.env.DB_HOST = dedicated.host;
+    process.env.DB_PORT = dedicated.port;
+    process.env.DB_USER = dedicated.user;
+    process.env.DB_PASS = dedicated.pass;
+    process.env.DB_NAME = dedicated.name;
 
-  // 第一个破坏性子进程之前的只读连接探针：确认实际连接的库与端口与配置一致
-  probeDedicatedDatabaseConnection(dedicated);
+    assertSqlHelperConfigurationConsistency(dedicated);
 
-  // 官方 baseline：空库演练脚本（清空 lithography_e2e 全部表 → 全量迁移 → 结构校验）。
-  // 五项连接经子进程环境显式锁定，dotenv 不覆盖已存在的进程变量，故绝不影响
-  // lithography_drill 或其他库；DB 名不含 test/drill/ci 段，按脚本要求显式授权。
-  runBackendScript('migration:drill:empty-db', buildMigrationChildEnv(process.env, dedicated));
+    // 第一个破坏性子进程之前的只读连接探针：确认实际连接的库与端口与配置一致
+    probeDedicatedDatabaseConnection(dedicated);
 
-  // 官方 Mock Seed：与 migration 完全相同的五项连接（lithography_e2e）。库名不含
-  // test/drill/dev/local 段，按 seed 脚本自身安全门的要求以进程级变量显式授权。
-  runBackendScript('seed:mock', buildSeedChildEnv(process.env, dedicated));
+    // 官方 baseline：空库演练脚本（清空 lithography_e2e 全部表 → 全量迁移 → 结构校验）。
+    // 五项连接经子进程环境显式锁定，dotenv 不覆盖已存在的进程变量，故绝不影响
+    // lithography_drill 或其他库；DB 名不含 test/drill/ci 段，按脚本要求显式授权。
+    runBackendScript('migration:drill:empty-db', buildMigrationChildEnv(process.env, dedicated));
+
+    // 官方 Mock Seed：与 migration 完全相同的五项连接（lithography_e2e）。库名不含
+    // test/drill/dev/local 段，按 seed 脚本自身安全门的要求以进程级变量显式授权。
+    runBackendScript('seed:mock', buildSeedChildEnv(process.env, dedicated));
+  } catch (setupError) {
+    // setup 抛错时 Playwright 不会调用其返回值，故必须在此自行释放：否则一次失败的
+    // setup 会把执行锁永久留在 tmpdir，此后所有联调都以「已有真实联调在执行」莫名失败。
+    let releaseError: unknown;
+
+    try {
+      releaseExecutionLock();
+    } catch (error) {
+      releaseError = error;
+    }
+
+    if (releaseError !== undefined) {
+      throw new AggregateError(
+        [setupError, releaseError],
+        '专用库真实联调 global setup 失败，且释放执行锁同样失败（锁可能仍残留在临时目录）',
+        { cause: setupError },
+      );
+    }
+
+    throw setupError;
+  }
+
+  return releaseExecutionLock;
 }

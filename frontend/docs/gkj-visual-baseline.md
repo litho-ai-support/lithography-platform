@@ -57,20 +57,22 @@ M 档的含义：**保留原型字号层级**（导航 12px、胶囊 10px、页�
 | 工程师信息条结构 | 横向卡片（对照原型 `.engineer-strip`）：左栏头像 + 昵称 + 角色，右侧「标签 + 值」分栏（标签 8px/800 `#94a3b8` + letter-spacing .12em，值 11px/700 `#334155`），右上角 28×28、radius 8px 设置入口；原型右侧 Position / Access Level / Region / Specialty 无数据契约，栏目数少于原型属预期 |
 | 工作区           | 背景 **`linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)`**，padding `22px 26px 32px`                                                                                                                                                                                                   |
 | 内容容器         | 工作区先占剩余宽度；**内层内容 `max-width: 1280px`**（两级容器，不得把 max-width 和 padding 混在同一层）                                                                                                                                                                                 |
-| 页头             | 标题行**无下边框、无额外 padding-bottom**；可选 eyebrow（10px/800/0.16em/uppercase/#2563eb）仅工作台页传入                                                                                                                                                                               |
+| 页头             | 标题行**无下边框、无额外 padding-bottom**；文字块与右侧 extra 间距 **16px**（原型 `gap-4`）；可选 eyebrow（10px/700/0.18em/uppercase/#2563eb）仅工作台页传入                                                                                                                             |
 
 ### 2.6 共享组件映射与声明式偏差（负责人 0916 逐条复核裁定）
 
-| 组件                      | 映射与基准                                                                                                                                                                                                             |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| DataCard / TableContainer | gkj `.panel-card`：半透明白底 `rgba(255,255,255,.92)`、1px `#e2e8f0`、14px 圆角、`0 10px 30px rgba(15,23,42,.06)` 投影                                                                                                 |
-| StatCard                  | gkj `.metric-tile`：`linear-gradient(180deg,#fff,#f8fbff)`、1px `#dbeafe`、14px 圆角、padding 16px、**无投影**；统计卡片不是普通 panel-card                                                                            |
-| StatCard 文字层级         | 标签 `12px/400/#64748b`；数值 `30px/700/36px/#1e293b`；辅助文字 `11px/#94a3b8`、上间距 8px。不得混用原型 `.health-score` 的局部样式。                                                                                  |
-| FilterBar                 | gkj `.platform-search` 的**容器语言**：底色 `#f8fafc`、1px `#dbe3ee`、10px 圆角、margin `12 0 14`；内含多个 AntD 筛选控件故高度自适应，不强制单框 36px                                                                 |
-| EmptyState / ErrorState   | gkj `.platform-empty`：`#f8fafc` 底、1px dashed `#cbd5e1`、12px 圆角、padding `22px 14px`、`#94a3b8` 文本（原型源码字号 11px）                                                                                         |
-| 单行空态                  | 无说明/操作时采用 `11px/400/#94a3b8` 单行提示；标题+说明+操作为扩展态，不宣称与原型单行提示完全相同。                                                                                                                  |
-| PageHeader eyebrow        | 可选 API；gkj `.atta-eyebrow` 10px/800/letter-spacing .16em/uppercase/#2563eb；仅在 gkj 对应工作台页传入                                                                                                               |
-| 声明式偏差                | ① S/M/L 字号档位控件（原型无此功能）：安置在用户区上方独立行；② 折叠导航控件（原型无此功能）：绝对定位于品牌区右侧 48px 保留区，不参与品牌链接 flex 宽度计算；③ 不渲染原型的 Access L4 / Online 演示徽标（假身份红线） |
+| 组件                       | 映射与基准                                                                                                                                                                                                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DataCard / TableContainer  | gkj `.panel-card`：半透明白底 `rgba(255,255,255,.92)`、1px `#e2e8f0`、14px 圆角、`0 10px 30px rgba(15,23,42,.06)` 投影                                                                                                                                            |
+| StatCard                   | gkj `.metric-tile`：`linear-gradient(180deg,#fff,#f8fbff)`、1px `#dbeafe`、14px 圆角、padding 16px、**无投影**；统计卡片不是普通 panel-card                                                                                                                       |
+| StatCard 文字层级          | 标签 `12px/400/#64748b`；数值 `30px/700/36px/#1e293b`；辅助文字 `11px/#94a3b8`、上间距 8px。不得混用原型 `.health-score` 的局部样式。                                                                                                                             |
+| FilterBar                  | gkj `.platform-search` 的**容器语言**：底色 `#f8fafc`、1px `#dbe3ee`、10px 圆角、margin `12 0 14`；内含多个 AntD 筛选控件故高度自适应，不强制单框 36px                                                                                                            |
+| EmptyState / ErrorState    | gkj `.platform-empty`：`#f8fafc` 底、1px dashed `#cbd5e1`、12px 圆角、padding `22px 14px`、`#94a3b8` 文本（原型源码字号 11px）                                                                                                                                    |
+| 单行空态                   | 无说明/操作时采用 `11px/400/#94a3b8` 单行提示；标题+说明+操作为扩展态，不宣称与原型单行提示完全相同。                                                                                                                                                             |
+| PageHeader eyebrow         | 可选 API；基准取原型**主壳静态页头** 10px/700/letter-spacing 0.18em/uppercase/#2563eb（`.atta-eyebrow` 的 800/.16em 属生成页另一套语言，不得引用）；仅在原型对应工作台页传入                                                                                      |
+| 页头宽度上限（声明式偏差） | `.page-header-content` `max-width: 820px`、`.page-description` `max-width: 760px`：本项目可读性约束，原型无对应约束（逐项核查报告 20260928 §3 第 4、5 项）                                                                                                        |
+| 导航项过渡（登记项）       | 原型为 `transition: all .2s ease`；实现收窄为 `background-color/color .2s`，仅缩小过渡属性范围，终态外观一致（不可见差异，逐项核查报告 20260928 §3 末条）                                                                                                         |
+| 声明式偏差                 | ① S/M/L 字号档位控件（原型无此功能）：安置在用户区上方独立行；② 折叠导航控件（原型无此功能）：绝对定位于品牌区右侧 48px 保留区，不参与品牌链接 flex 宽度计算，折叠态侧栏宽 **64px**、品牌区仅保留折叠钮；③ 不渲染原型的 Access L4 / Online 演示徽标（假身份红线） |
 
 ### 2.4 颜色 / 背景 / 阴影
 
@@ -151,7 +153,7 @@ ok/warn/critical 三种胶囊 `background-color` 均非 transparent。仅断言 
 > CDN**。原型并排对照仅作为可选人工流程：在相同视口与 M 档下，将实现截图与本地原型
 > `#knowledge-base-page` 并排核对（本文件不随附原型文件）。
 >
-> 适用范围：仅 `/admin/document-database`。开启方式：AppLayout 按**精确路由**加
+> 适用范围：`/admin/document-database` 全量消费本节基准。开启方式：AppLayout 按**精确路由**加
 > `.app-workspace--knowledge-base` / `.app-main--knowledge-base` modifier（不用前缀匹配），
 > 页面内消费 `.kb-*` opt-in 类与 `--kb-*` 变量。其他页面一律保持第 1–4 节基准。
 >
@@ -159,7 +161,31 @@ ok/warn/critical 三种胶囊 `background-color` 均非 transparent。仅断言 
 > `shared/ui/toolbar-controls`，外观值见 2.4「中性工具控件文字」；工程师维修申请列表直接
 > 消费中性组件，知识库页由 `shared/ui/knowledge-base` 薄包装追加 `.kb-*` 覆盖层。
 > 两处当前渲染结果相同，日后若分叉必须同步更新本节与 2.4，不得只改一边；
-> `.kb-*` 类与 `--kb-*` 变量的适用范围仍限 `/admin/document-database`。
+> `.kb-*` 类的适用范围仅限 `/admin/document-database`；`--kb-*` 变量另见下方紧凑控件白名单。
+>
+> **紧凑控件作用域白名单（本节为唯一登记处，PR5 S3-1 起；PR5 R1/R2 补全）**：`/reference-documents`
+> （列表与详情）以**窄作用域**消费本节「紧凑几何 + `--kb-*` 受控变量」的**同一份定义**——
+> 直接消费 `shared/ui/toolbar-controls` 的中性组件（DOM 保留中性基类），并传入
+> `.reference-library-*` 页面作用域覆盖层类；不引入 `.kb-*` 壳类、也不加 workspace / page modifier。
+> 允许的作用域类为：
+>
+> | 用途                  | 独立资料页（白名单）                                                                    | 与知识库页共用同一条 CSS 规则                                |
+> | --------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+> | 卡壳                  | `.reference-library-card .ant-card`（祖先作用域，消费卡壳 token；替代 `.kb-card` 外壳） | 同一套 `--kb-card-*` token（`.kb-card`）                     |
+> | 列表容器              | `.reference-library-list-body`、`.reference-library-card .ant-card-body`                | 独立页专属（知识库由 `.kb-card` 外壳直接承载，无 AntD Card） |
+> | 工具区                | `.reference-library-toolbar`                                                            | 同几何（`.kb-toolbar`）                                      |
+> | 主搜索框              | `.reference-library-search`                                                             | `.kb-search`                                                 |
+> | 清除按钮              | `.reference-library-search-clear`                                                       | `.kb-search-clear`                                           |
+> | 工具按钮（筛选/重置） | `.reference-library-toolbar-button`（`--active` 同源）                                  | `.kb-toolbar-button`（`--active`）                           |
+> | 筛选展开区            | `.reference-library-filter-panel`（默认收起，由工具按钮展开）                           | `.kb-filter-panel`                                           |
+> | 表格作用域            | `.reference-library-table-scope`（含表格顶角归零）                                      | `.kb-table-scope`                                            |
+> | 卡底分页行            | `.reference-library-card-footer`                                                        | `.kb-card-footer`                                            |
+> | 卡内状态区            | `.reference-library-card-state`                                                         | `.kb-card-state`                                             |
+>
+> 新增第三个作用域前缀前，必须先在本表登记，并同步 `src/index.css` 的成对规则与
+> `scripts/lint-colors.mjs` 的 `--kb-*` 白名单；未登记前缀一律按越界处理。
+> 除 `/admin/document-database`（知识库页）、`/reference-documents` **精确列表路由**
+> （见 6.6）与上述白名单外，其他页面一律保持第 1–4 节基准。
 
 ### 6.1 工作区与页面节奏
 
@@ -203,6 +229,12 @@ ok/warn/critical 三种胶囊 `background-color` 均非 transparent。仅断言 
 2. 不复制原型非激活进度条占位的 48.5px、向量化 / 检索开关、分块数、批量操作与演示假数据。
 3. 本页新增写操作仅沿用既有参考资料管理权限（仅默认 Tab 右上入口）；三个只读 Tab 不新增写能力。
 4. 必要横滚只允许发生在表格内部（`.ant-table-content`），不得整页横滚、不得删字段。
+5. 独立资料页（`/reference-documents`）与知识库页共用同一套卡壳（白底 / 1px `#e5e7eb` /
+   10px 圆角 / `0 1px 3px rgba(15,23,42,.05)` / `overflow:hidden`，卡内 AntD Table 顶角归零）、
+   紧凑表格与卡底分页语言；差异项：①筛选区**默认收起**（原型知识库无展开态，属业务扩展：
+   主搜索之外的文档类型 / 设备型号条件，由工具区「筛选」按钮展开，收起不清值）；
+   ②卡底分页行自 PR5 整页视觉计划（20260929，见 6.6）起收敛为 **39px**（7.5px 上下 padding
+   承载 AntD 紧凑分页器 24px 行高），与原型实测一致，24px 点击目标不压缩。
 
 ### 6.5 按钮半径规则（全局，第三轮 Review S2 定 rules）
 
@@ -221,3 +253,59 @@ ok/warn/critical 三种胶囊 `background-color` 均非 transparent。仅断言 
 搜索框/工具按钮 6px、状态胶囊 999px 与卡片 10px 的 computed style；四个 Tab 的表格内
 操作按钮、列表失败态「重试」与 Drawer 弹层「重试」（均为 `size="small"`）按 6px 断言，
 主按钮按 8px 断言（第三轮修复补齐 Drawer / 重试 / 各 Tab 覆盖）。
+
+### 6.6 参考资料精确列表路由的整页骨架（PR5 整页视觉计划，20260929）
+
+范围变更：本轮把 `/reference-documents` **精确列表路由**的验收从「表格局部一致」升级为
+「整页骨架对齐 `gkj.html#knowledge-base-page`」。它替代旧结论「独立资料页必须保持通用渐变
+工作区与默认 PageHeader」，但不改变其权限、数据契约与「禁止假字段」结论。
+
+实现方式（类名与知识库页严格隔离，取值同源）：
+
+| 落点         | 参考资料列表精确路由                         | 知识库页（6.1–6.3）                           |
+| ------------ | -------------------------------------------- | --------------------------------------------- |
+| 工作区变体   | `.app-workspace--reference-library`          | `.app-workspace--knowledge-base`              |
+| 内容宽度变体 | `.app-main--reference-library`               | `.app-main--knowledge-base`                   |
+| 页面根       | `.reference-library-page`                    | `.kb-page`                                    |
+| 页头变体     | `.page-header--reference-library`            | `.page-header--kb`                            |
+| 汇总条       | `.reference-library-summary`（三列真实统计） | `.kb-summary`（四分区真实统计）               |
+| 顶部节奏     | `--reference-library-top-rhythm: 48.5px`     | 原型进度宿主 48.5px（本项目不复制假进度 DOM） |
+
+数值契约（1440×900，M 档 / 16px 根字号，100% 缩放）：
+
+| 项         | 目标值                                     | 说明                                                        |
+| ---------- | ------------------------------------------ | ----------------------------------------------------------- |
+| 页头 top   | `70.5±0.5px`                               | 22（工作区顶距）+ 48.5（顶部节奏，仅 >1024px）              |
+| 页头高度   | `67px`                                     | eyebrow 15 + 下距 4 + 标题 28 + 说明(4 + 16)                |
+| 页头下距   | `20px`                                     | 显式 `margin-bottom`，页面根 `gap: 0` 覆盖通用 `page-stack` |
+| 汇总条 top | `157.5px`                                  | 70.5 + 67 + 20                                              |
+| 汇总条高度 | `67.5px`（border-box）                     | 三列三等分、单元 padding 16px、列间 1px `#f1f5f9` 竖分隔    |
+| 汇总条下距 | `16px`                                     |                                                             |
+| 列表卡 top | `241±0.5px`                                | 22 + 48.5 + 67 + 20 + 67.5 + 16                             |
+| 工作区背景 | 纯色 `#f3f4f6`（`background-image: none`） | 取消通用渐变                                                |
+| 内容几何   | 左边界固定 236px；宽度 = 视口 − 262px      | 1920 → x236 / w1658，不再居中回 1280px                      |
+| 卡底分页行 | `39px`（padding `7.5px 16px`）             | 保留 24px 真实分页器点击目标，不压缩                        |
+
+汇总条取值出处（禁止固定数字与演示字段）：参考资料 = 列表状态机 `state.total`；
+支持类型 = 后端契约枚举 `REFERENCE_DOCUMENT_TYPE_LABELS`；适用型号 =
+`useReferenceEquipmentModels()` 的真实型号条数（loading / failed 显示对应状态）。
+均复用列表组件已取得的现有状态源，**不新增第二次请求**，不引入 Embedding Model、向量化、
+分块数、参与检索、Batch Actions、L4/Online 等无业务支持内容。
+
+登记偏差（不作为失败）：
+
+1. 搜索框宽度由真实按钮数量决定（原型含 Batch Actions，本项目无批量业务），保持 `flex: 1`，
+   不得硬编码原型 977px；
+2. 表格保留七列真实后端字段（原型十列为演示字段），只比较密度、边线、ellipsis 与内部横滚；
+3. 右下角 AI 浮动入口属全局真实能力（原型知识库页无此入口），保留；375px 下需确认不遮挡
+   分页与关键操作；
+4. 375×667 不复制桌面 48.5px 节奏与原型「窄屏仍占 210px 侧栏」的不可用行为：保留 64px 折叠
+   侧栏、工作区自身 30px 顶距，汇总条改单列堆叠（竖分隔线换横分隔线）。
+
+自动化断言：`e2e/reference-library-visual.spec.ts`（整页坐标 / 汇总条 / 卡底 39px /
+1366×768、1440×900、1920×1080、375×667 四视口无整页横滚）、
+`src/pages/reference-documents/index.spec.tsx` 与
+`src/features/reference-document/ui/reference-document-list.spec.tsx`（变体落点与四态取值）、
+`src/app/layout/app-layout.spec.tsx`（精确列表路由 modifier，新增 / 详情不继承）、
+`e2e/admin-document-database-visual.spec.ts`「共享外观回归」（该页不再断言渐变 + 1280px，
+改断言自身变体齐备且知识库变体节点为 0）。

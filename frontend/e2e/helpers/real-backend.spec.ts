@@ -657,7 +657,7 @@ describe('real-backend 已回复维修申请的精确清理（负责人单卡片
     expect(childRowsExpression).toContain('FROM ai_report WHERE request_id IN (920006)');
   });
 
-  it.each<[string, Partial<RepairRequestCleanupResponseTarget['expected']>, string]>([
+  it.each<[string, RepairRequestCleanupResponseTarget['expected'], string]>([
     [
       '回复归属申请与目标不一致',
       { ...RESPONSE_TARGET.expected, requestId: 920007 },
@@ -1149,7 +1149,8 @@ describe('real-backend 存储物理文件清理（0909 第二轮：按精确引�
 
     const removedPath = rmSyncMock.mock.calls[0]?.[0] as string;
 
-    expect(removedPath).toContain('var/reference-documents');
+    // 路径由 path.resolve 构造：Windows 产出 `\` 分隔符，断言需同时接受两种分隔符（跨平台）
+    expect(removedPath).toMatch(/var[\\/]reference-documents/);
     expect(removedPath.endsWith(VALID_REFERENCE)).toBe(true);
     expect(removedPath).not.toContain('..');
   });

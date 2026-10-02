@@ -84,6 +84,45 @@ export const REFERENCE_DOCUMENT_TYPE_LABELS: Record<string, string> = {
   SAFETY_STANDARD: '安全规范',
 };
 
+/**
+ * 字段长度上限与上传策略（本切片内唯一前端真源，表单与 Mock adapter 共用）。
+ *
+ * 权威在服务端，本处仅为输入 / 选文件时的即时反馈镜像：
+ * - 字段上限见 backend dto/reference-document-write.dto.ts；
+ * - 上传大小与类型白名单见后端 env（REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES /
+ *   REFERENCE_DOCUMENT_ALLOWED_MIME_TYPES，类型判定以扩展名为主）。
+ *
+ * 因此本地预检不得被当作权威判定：服务端拒绝必须能覆盖本地放行结果
+ * （例如服务端上限更小时，本地预检通过仍会被服务端拒绝并展示后端消息）。
+ * 后端默认值变化时需同步本处常量。
+ */
+export const REFERENCE_DOCUMENT_TITLE_MAX_LENGTH = 255;
+export const REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH = 100;
+
+/** 单文件大小上限（字节）与提示文案 */
+export const REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+export const REFERENCE_DOCUMENT_UPLOAD_MAX_BYTES_TEXT = '20MB';
+
+/**
+ * 允许上传的扩展名 → MIME（键集合即白名单，插入顺序即表单提示的展示顺序）。
+ * Mock adapter 取 MIME 做文件元数据模拟，表单由此派生扩展名白名单与提示文案。
+ */
+export const REFERENCE_DOCUMENT_UPLOAD_EXTENSION_MIME: Record<string, string> = {
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+};
+
 /** 创建输入（contentText 本周必填：仅文本来源；双来源约束由后端兜底） */
 export type CreateReferenceDocumentInput = {
   title: string;

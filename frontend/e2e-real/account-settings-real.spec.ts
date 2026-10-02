@@ -413,7 +413,6 @@ test.describe('account settings real backend flow', () => {
 
   /** Node 侧真实登录尝试：不抛错，返回是否拿到 Token 与首个错误大类（供断言用） */
   async function attemptRealLogin(
-    env: Record<string, string>,
     loginName: string,
     loginPassword: string,
   ): Promise<LoginAttemptResult> {
@@ -514,7 +513,7 @@ test.describe('account settings real backend flow', () => {
         expect(await readStoredAuthSession(page)).toBeNull();
 
         // 旧密码经真实登录入口已失效
-        const oldAttempt = await attemptRealLogin(env, dedicatedLoginName, INITIAL_PASSWORD);
+        const oldAttempt = await attemptRealLogin(dedicatedLoginName, INITIAL_PASSWORD);
 
         expect(oldAttempt.accessToken).toBeNull();
         expect(oldAttempt.errorCode).toBe('UNAUTHENTICATED');

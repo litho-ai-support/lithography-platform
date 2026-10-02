@@ -13,6 +13,8 @@ import { type Dispatch, type SetStateAction, useState } from 'react';
 import { Alert, Button, Input, message, Select, Space, Table, Tag, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 
+import { formatDateTimeText } from '@/shared/ui/format-date-time';
+
 import type {
   AdminUserCommandResult,
   AdminUserCreateDraft,
@@ -53,13 +55,6 @@ const ROLE_TAG_COLORS: Record<AdminUserRole, string> = {
 type AdminUserDialogKey = 'create' | 'profile' | 'status' | 'reset-password';
 
 type AdminUserRowSetter = Dispatch<SetStateAction<AdminUserRow | null>>;
-
-/** 展示时间的切片内唯一实现；解析失败时占位，不展示原始值误导用户 */
-function formatDateTimeText(value: string): string {
-  const date = new Date(value);
-
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false });
-}
 
 function renderOptionalText(value: string | null): string {
   return value ?? '—';

@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { REFERENCE_DOCUMENT_UPLOAD_EXTENSION_MIME } from './reference-document.types';
 import { resetReferenceDocumentMockState } from './reference-document-mock-adapter';
 import {
   createReferenceDocument,
@@ -318,6 +319,64 @@ describe('createReferenceDocumentWithFile（REST 同签名模拟）', () => {
       );
     }
   });
+});
+
+/**
+ * 上传策略同源契约：扩展名白名单的唯一定义在 reference-document.types
+ * （表单由此派生即时提示，Mock 由此取 MIME）。
+ *
+ * 断言「表内全量被接受 + 表外一律拒绝」，使「允许类型变化」只需改一处常量：
+ * 若有人在任一消费方另写一份白名单，本组用例会因表内/表外集合不一致而失败，
+ * 而不是靠默认环境下的等值断言自证。
+ */
+describe('上传扩展名策略与 Mock 文件通道同源', () => {
+  it.each(Object.entries(REFERENCE_DOCUMENT_UPLOAD_EXTENSION_MIME))(
+    '策略表内的 .%s 被接受，并按表回填 MIME %s',
+    async (extension, mimeType) => {
+      const result = await createReferenceDocumentWithFile({
+        title: `扩展名契约 ${extension}`,
+        documentType: 'MAINTENANCE_GUIDE',
+        equipmentModelId: null,
+        description: null,
+        contentText: null,
+        file: new File(['bytes'], `sample.${extension}`, { type: 'application/octet-stream' }),
+      });
+
+      expect(result.ok).toBe(true);
+
+      if (result.ok) {
+        const detail = await fetchReferenceDocument(result.id);
+
+        expect(detail.ok).toBe(true);
+
+        if (detail.ok) {
+          expect(detail.detail.mimeType).toBe(mimeType);
+        }
+      }
+    },
+  );
+
+  it.each(['exe', 'sh', 'zip', ''])(
+    '策略表外的 .%s 一律拒绝为 file-type-not-allowed',
+    async (extension) => {
+      const result = await createReferenceDocumentWithFile({
+        title: '表外扩展名',
+        documentType: 'MAINTENANCE_GUIDE',
+        equipmentModelId: null,
+        description: null,
+        contentText: null,
+        file: new File(['bytes'], extension ? `sample.${extension}` : 'sample', {
+          type: 'application/octet-stream',
+        }),
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        reason: 'file-type-not-allowed',
+        message: '不允许上传该类型的文件。',
+      });
+    },
+  );
 });
 
 describe('downloadReferenceDocumentFile（REST 同签名模拟）', () => {

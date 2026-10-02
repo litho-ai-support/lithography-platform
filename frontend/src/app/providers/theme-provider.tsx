@@ -5,6 +5,8 @@ import { ConfigProvider } from 'antd';
 
 import { createAppThemeConfig } from '@/app/theme';
 
+import { MessageFeedbackProvider } from '@/shared/ui/message-feedback';
+
 import { FONT_SCALE_CONFIG, type FontScale } from './theme-constants';
 import { ThemeContext } from './use-theme';
 
@@ -41,7 +43,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   return (
     <ThemeContext.Provider value={{ fontScale, setFontScale }}>
-      <ConfigProvider theme={themeConfig}>{children}</ConfigProvider>
+      <ConfigProvider theme={themeConfig}>
+        <MessageFeedbackProvider>{children}</MessageFeedbackProvider>
+      </ConfigProvider>
     </ThemeContext.Provider>
   );
 }

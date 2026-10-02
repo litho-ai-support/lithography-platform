@@ -14,6 +14,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as sharedGraphql from '@/shared/graphql';
 import { GraphQLIngressError } from '@/shared/graphql';
 
+// adapter 单测直接面向 concrete adapter 模块：创建写 adapter 已按 review P2-3 从 barrel 收敛
+// （改由 useReferenceDocumentCreate 在 feature 内装配），经公共出口取会被公开面裁剪挡住。
 import {
   createReferenceDocument,
   deleteReferenceDocument,
@@ -21,7 +23,7 @@ import {
   fetchReferenceDocuments,
   fetchReferenceEquipmentModels,
   updateReferenceDocument,
-} from './index';
+} from './infrastructure/reference-document-adapter';
 
 vi.mock('@/shared/graphql', async (importOriginal) => {
   const actual = await importOriginal<typeof sharedGraphql>();

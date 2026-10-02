@@ -85,6 +85,12 @@ const NARROW_VIEWPORT_QUERY = '(max-width: 1024px)';
 // 其他页面继续通用渐变 + 1280px 上限（frontend/docs/gkj-visual-baseline.md 第 6 节）。
 const KNOWLEDGE_BASE_PATH = '/admin/document-database';
 
+// 参考资料列表精确路由（PR5 整页视觉计划 20260929）：仅精确列表页应用工作区变体——
+// 纯色工作区底 + 占满侧栏后剩余宽度；新增（/reference-documents/new）与详情
+// （/reference-documents/:id）继续通用渐变 + 1280px 上限。
+// 有意与知识库变体分开命名：两者取值同源但不互相扩散，便于独立登记与回归。
+const REFERENCE_LIBRARY_PATH = '/reference-documents';
+
 export function AppLayout({ children }: AppLayoutProps = {}) {
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isSidecarOpen, setIsSidecarOpen] = useState(false);
@@ -102,6 +108,8 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
   const activeRole = session?.role ?? null;
   // 知识库页工作区变体按精确路由开启（PR3 R7），不用前缀匹配避免误伤其他页面
   const isKnowledgeBasePage = location.pathname === KNOWLEDGE_BASE_PATH;
+  // 参考资料列表工作区变体同样按精确路由开启（PR5 整页计划）：新增/详情路由不继承
+  const isReferenceLibraryPage = location.pathname === REFERENCE_LIBRARY_PATH;
   const navigationItems = useMemo(() => getNavigationItems(undefined, activeRole), [activeRole]);
   const activeNavigationPath = useMemo(
     () => resolveActiveNavigationPath(location.pathname, navigationItems),
@@ -169,8 +177,14 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
 
   const workspaceClassName = isKnowledgeBasePage
     ? 'app-workspace app-workspace--knowledge-base'
-    : 'app-workspace';
-  const mainClassName = isKnowledgeBasePage ? 'app-main app-main--knowledge-base' : 'app-main';
+    : isReferenceLibraryPage
+      ? 'app-workspace app-workspace--reference-library'
+      : 'app-workspace';
+  const mainClassName = isKnowledgeBasePage
+    ? 'app-main app-main--knowledge-base'
+    : isReferenceLibraryPage
+      ? 'app-main app-main--reference-library'
+      : 'app-main';
 
   return (
     <div className={`app-shell ${APP_THEME_CSS_VAR_KEY}`}>

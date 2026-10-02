@@ -118,7 +118,7 @@ export function AdminDocumentDatabasePage() {
           activeKey={activeTabKey}
           items={[
             {
-              children: <ReferenceDocumentList canManage variant="knowledge-base" />,
+              children: <ReferenceDocumentList variant="knowledge-base" />,
               key: 'reference-documents',
               label: '参考资料',
             },

@@ -18,20 +18,22 @@ import {
 } from './dedicated-e2e-environment';
 import globalSetup from './global-setup';
 
-const { execFileSyncMock, assertPhysicalCleanupAllowedMock, readBackendEnvMock } = vi.hoisted(
-  () => ({
-    execFileSyncMock:
-      vi.fn<
-        (
-          file: string,
-          args: readonly string[],
-          options?: { env?: Record<string, string> },
-        ) => string
-      >(),
-    assertPhysicalCleanupAllowedMock: vi.fn(),
-    readBackendEnvMock: vi.fn<() => Record<string, string>>(),
-  }),
-);
+const {
+  execFileSyncMock,
+  assertPhysicalCleanupAllowedMock,
+  acquireExecutionLockMock,
+  readBackendEnvMock,
+  releaseMock,
+} = vi.hoisted(() => ({
+  execFileSyncMock:
+    vi.fn<
+      (file: string, args: readonly string[], options?: { env?: Record<string, string> }) => string
+    >(),
+  assertPhysicalCleanupAllowedMock: vi.fn(),
+  acquireExecutionLockMock: vi.fn<(dbName: string) => () => void>(),
+  readBackendEnvMock: vi.fn<() => Record<string, string>>(),
+  releaseMock: vi.fn<() => void>(),
+}));
 
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
@@ -50,6 +52,14 @@ vi.mock('node:fs', async (importOriginal) => ({
 vi.mock('../e2e/helpers/real-backend', () => ({
   assertPhysicalCleanupAllowed: assertPhysicalCleanupAllowedMock,
   readBackendEnv: readBackendEnvMock,
+}));
+
+// 执行锁是本 spec 的纯副作用依赖：真实实现落在 os.tmpdir()，跨用例复用同一锁路径
+// 会与 execution-lock.spec.ts 的真实多进程竞争互相干扰。此处只验证「先取锁、再跑
+// 破坏性子进程、teardown 即释放」的调用顺序；并发与归属语义由
+// e2e/helpers/execution-lock.spec.ts 真实多进程回归覆盖。
+vi.mock('../e2e/helpers/execution-lock', () => ({
+  acquireExecutionLock: acquireExecutionLockMock,
 }));
 
 const VALID_DB: Record<string, string> = {
@@ -88,6 +98,21 @@ function setEnv(values: Record<string, string | undefined>): void {
 // npm 子进程调用与探针调用共用 execFileSync mock：按 file 参数分流返回值
 function stubChildProcesses(): void {
   execFileSyncMock.mockImplementation((file: string) => (file === 'mysql' ? PROBE_OUTPUT : ''));
+}
+
+// 探针成功、指定 npm 脚本失败：用于验证「setup 中途失败也必须释放执行锁」
+function stubChildProcessFailure(failingScript: string): void {
+  execFileSyncMock.mockImplementation((file: string, args: readonly string[]) => {
+    if (file === 'mysql') {
+      return PROBE_OUTPUT;
+    }
+
+    if (args.includes(failingScript)) {
+      throw new Error(`${failingScript} boom`);
+    }
+
+    return '';
+  });
 }
 
 // 从 execFileSync 调用中提取 npm 子进程调用（排除 mysql 探针调用）
@@ -298,6 +323,9 @@ describe('只读连接探针', () => {
 describe('globalSetup 防回退（mock runner，不连真实数据库）', () => {
   beforeEach(() => {
     execFileSyncMock.mockReset();
+    acquireExecutionLockMock.mockReset();
+    acquireExecutionLockMock.mockReturnValue(releaseMock);
+    releaseMock.mockReset();
     for (const key of MANAGED_ENV_KEYS) {
       originalEnvValues[key] = process.env[key];
     }
@@ -339,6 +367,36 @@ describe('globalSetup 防回退（mock runner，不连真实数据库）', () =>
     }
   });
 
+  it('执行锁先于探针与破坏性子进程获取，且返回值即释放锁的 teardown', () => {
+    const order: string[] = [];
+
+    acquireExecutionLockMock.mockImplementation(() => {
+      order.push('acquire-lock');
+
+      return () => {
+        order.push('release-lock');
+      };
+    });
+    execFileSyncMock.mockImplementation((file: string) => {
+      order.push(file === 'mysql' ? 'probe' : 'destructive-child');
+
+      return file === 'mysql' ? PROBE_OUTPUT : '';
+    });
+
+    const teardown = globalSetup();
+
+    // 取锁必须先于只读探针，探针必须先于两个破坏性子进程（Migration → Seed）
+    expect(order).toEqual(['acquire-lock', 'probe', 'destructive-child', 'destructive-child']);
+    // 锁按专用库名获取：两条链路只有命中同一把锁才可能互斥
+    expect(acquireExecutionLockMock).toHaveBeenCalledExactlyOnceWith(DEDICATED_E2E_DB_NAME);
+
+    // 未启动 teardown 时绝不提前释放锁：破坏性窗口全程持锁
+    expect(releaseMock).not.toHaveBeenCalled();
+
+    teardown();
+    expect(order.at(-1)).toBe('release-lock');
+  });
+
   it('DB_NAME 不是专用库时不启动任何子进程（含探针）', () => {
     setEnv({ DB_NAME: 'lithography_platform' });
 
@@ -376,6 +434,7 @@ describe('globalSetup 防回退（mock runner，不连真实数据库）', () =>
 
     expect(execFileSyncMock).toHaveBeenCalledTimes(1);
     expect(execFileSyncMock.mock.calls[0]?.[0]).toBe('mysql');
+    expect(releaseMock).toHaveBeenCalledTimes(1);
   });
 
   it('模拟 Windows npm CLI 路径：以 process.execPath + npm_execpath 构造参数', () => {
@@ -389,13 +448,15 @@ describe('globalSetup 防回退（mock runner，不连真实数据库）', () =>
     expect(migration.args.slice(1)).toEqual(['run', 'migration:drill:empty-db']);
   });
 
-  it('只读探针失败时 Migration/Seed 均不得启动', () => {
+  it('只读探针失败时 Migration/Seed 均不得启动，且释放已获取的执行锁', () => {
     execFileSyncMock.mockImplementation(() => {
       throw new Error('connect timeout');
     });
 
     expect(() => globalSetup()).toThrow('只读连接探针失败');
     expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    // setup 抛错时 Playwright 不会调用返回值，必须自行释放，否则锁永久残留
+    expect(releaseMock).toHaveBeenCalledTimes(1);
   });
 
   it('只读探针返回其他数据库时 Migration/Seed 均不得启动', () => {
@@ -420,5 +481,49 @@ describe('globalSetup 防回退（mock runner，不连真实数据库）', () =>
 
     expect(() => globalSetup()).toThrow('配置不一致');
     expect(execFileSyncMock).not.toHaveBeenCalled();
+    // 取锁之后才做一致性校验，故此处同样必须释放
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('执行锁被占用（acquire 抛错）时机制不变：错误原样抛出，无需释放', () => {
+    acquireExecutionLockMock.mockImplementationOnce(() => {
+      throw new Error('已有真实联调在执行');
+    });
+
+    expect(() => globalSetup()).toThrow('已有真实联调在执行');
+    // 未取到锁，不得调用释放（否则会删掉他人的锁）
+    expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it.each([['migration:drill:empty-db'], ['seed:mock']])(
+    '%s 失败时原样抛出原因，并释放执行锁恰好一次',
+    (script) => {
+      stubChildProcessFailure(script);
+
+      expect(() => globalSetup()).toThrow(`${script} boom`);
+      expect(releaseMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('setup 与释放锁同时失败时抛 AggregateError，并同时保留两个原因', () => {
+    stubChildProcessFailure('seed:mock');
+    releaseMock.mockImplementation(() => {
+      throw new Error('release boom');
+    });
+
+    let caught: unknown;
+
+    try {
+      globalSetup();
+      expect.unreachable('应当抛错');
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError);
+    const reasons = (caught as AggregateError).errors as unknown as Error[];
+    expect(reasons.map((error) => error.message)).toEqual(['seed:mock boom', 'release boom']);
+    // 释放只尝试一次，不因失败而重试
+    expect(releaseMock).toHaveBeenCalledTimes(1);
   });
 });

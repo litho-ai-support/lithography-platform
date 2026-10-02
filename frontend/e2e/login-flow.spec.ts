@@ -3,6 +3,7 @@
 import { expect, test } from '@playwright/test';
 
 import { readStoredAuthSession, seedAuthSession } from './helpers/auth-session-seed';
+import { installCustomerRepairRequestMocks } from './helpers/customer-repair-request-mocks';
 
 test('anonymous engineer visit completes the public login flow and returns to the target', async ({
   page,
@@ -66,8 +67,11 @@ test('anonymous engineer visit completes the public login flow and returns to th
   await page.getByLabel('密码').fill('test-only-password');
   await page.getByRole('button', { name: /登\s*录/ }).click();
 
+  // 成功契约（docs/development/task-acceptance.md「登录」）：判据是「进入目标工作区 +
+  // 会话持久化」，不是瞬时文案。LoginForm 的成功反馈与 onAuthenticated 跳转在同一事件里提交，
+  // 表单随即卸载，目标工程师首页也不再渲染该文案；原 `登录成功` 断言只在 dev server 冷启动
+  // 首屏较慢时偶然可见，暖缓存下必然失败，故移除，改由下方「URL + 角色 + sessionStorage」承担。
   await expect(page).toHaveURL(/\/engineer$/);
-  await expect(page.getByText('登录成功')).toBeVisible();
   await expect(page.getByText('ENGINEER').first()).toBeVisible();
   expect(loginAuthorization).toBeUndefined();
 
@@ -110,6 +114,12 @@ test('credential rejection keeps the login name, clears the password and creates
 });
 
 test('entry route dispatches by login state', async ({ page }) => {
+  // 登录态目标页（/customer = 默认 create 态工作台）会发出受保护的 MyRepairRequests /
+  // EquipmentModels 查询；seed 会话是占位 token，若落到真实后端会收到 UNAUTHENTICATED，
+  // 触发全局清会话跳登录，覆盖「按登录态分发」断言。与 customer-repair-request-states
+  // 同口径：mock 先于会话预置安装（seedAuthSession 内部也会载入应用源）。
+  await installCustomerRepairRequestMocks(page);
+
   await page.goto('/');
   await expect(page).toHaveURL(/\/login$/);
 

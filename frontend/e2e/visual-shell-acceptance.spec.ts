@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { seedAuthSession } from './helpers/auth-session-seed';
+import { captureStableViewport, readPngDimensions } from './helpers/visual-evidence';
 
 // 与 visual-shell.spec.ts 保持一致：壳层验收不依赖业务后端，但访问管理员页时
 // 必须给 mapper 一个合法的空 DTO，不能让空响应把已种入的会话误判成失效。
@@ -49,6 +52,13 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
     const statValue = style('.stat-card-value');
     const statHint = style('.stat-card-hint');
     const simpleEmpty = style('.empty-state--simple .empty-state-title');
+    const eyebrow = style('.page-eyebrow');
+    const header = style('.page-header');
+    const headerContent = style('.page-header-content');
+    const sidebarBrand = style('.app-sidebar-brand');
+    const sidebarNav = style('.app-sidebar-nav');
+    const sidebarFooter = style('.app-sidebar-footer');
+    const userCard = style('.app-user-card');
     const brandLink = document.querySelector<HTMLElement>('.app-sidebar-brand-link')!;
     const collapseButton = document.querySelector<HTMLElement>('.app-sidebar-collapse-button')!;
 
@@ -58,8 +68,24 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
         fontSize: description.fontSize,
         lineHeight: description.lineHeight,
         marginTop: description.marginTop,
+        maxWidth: description.maxWidth,
       },
+      // 页头 eyebrow：基准为主壳静态页头（10px/700/.18em），非生成页 .atta-eyebrow
+      eyebrow: { fontWeight: eyebrow.fontWeight, letterSpacing: eyebrow.letterSpacing },
+      header: { gap: header.gap },
+      headerContent: { maxWidth: headerContent.maxWidth },
       nav: { color: nav.color, fontSize: nav.fontSize, fontWeight: nav.fontWeight },
+      navContainer: { gap: sidebarNav.gap, padding: sidebarNav.padding },
+      // 导航描边图标为内联 SVG（属性级契约），AntD 图标 viewBox 不同故被选择器过滤
+      navIcons: Array.from(
+        document.querySelectorAll<SVGElement>('.app-sidebar-nav svg[viewBox="0 0 24 24"]'),
+      ).map((icon) => ({
+        stroke: icon.getAttribute('stroke'),
+        strokeLinecap: icon.getAttribute('stroke-linecap'),
+        strokeLinejoin: icon.getAttribute('stroke-linejoin'),
+        strokeWidth: icon.getAttribute('stroke-width'),
+        viewBox: icon.getAttribute('viewBox'),
+      })),
       panel: {
         backgroundColor: panel.backgroundColor,
         borderRadius: panel.borderRadius,
@@ -105,12 +131,30 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
         nameClientWidth: style('.app-sidebar-brand-name').width,
         nameScrollWidth:
           document.querySelector<HTMLElement>('.app-sidebar-brand-name')!.scrollWidth,
+        padding: sidebarBrand.padding,
+        minHeight: sidebarBrand.minHeight,
       },
+      sidebarFooter: {
+        minHeight: sidebarFooter.minHeight,
+        padding: sidebarFooter.padding,
+      },
+      userCard: { gap: userCard.gap },
     };
   });
 
   expect(snapshot.rootFontSize).toBe('16px');
   expect(snapshot.nav).toEqual({ color: 'rgb(71, 85, 105)', fontSize: '12px', fontWeight: '600' });
+  expect(snapshot.navContainer).toEqual({ gap: '4px', padding: '12px' });
+  expect(snapshot.navIcons.length).toBeGreaterThan(0);
+  for (const icon of snapshot.navIcons) {
+    expect(icon).toEqual({
+      stroke: 'currentColor',
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      strokeWidth: '2',
+      viewBox: '0 0 24 24',
+    });
+  }
   expect(snapshot.title).toEqual({
     color: 'rgb(30, 41, 59)',
     fontSize: '24px',
@@ -121,7 +165,12 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
     fontSize: '14px',
     lineHeight: '20px',
     marginTop: '4px',
+    maxWidth: '760px',
   });
+  // 页头：eyebrow 取主壳静态页头（700/0.18em），文字块-extra 间距 16px
+  expect(snapshot.eyebrow).toEqual({ fontWeight: '700', letterSpacing: '1.8px' });
+  expect(snapshot.header).toEqual({ gap: '16px' });
+  expect(snapshot.headerContent).toEqual({ maxWidth: '820px' });
   expect(snapshot.pill).toEqual({
     backgroundColor: 'rgb(220, 252, 231)',
     color: 'rgb(22, 101, 52)',
@@ -153,15 +202,30 @@ test('M 档在真实 AppLayout 中匹配 gkj 共享视觉数值', async ({ page 
     Number.parseFloat(snapshot.brand.nameClientWidth),
   );
   expect(snapshot.brand.linkRight).toBeLessThan(snapshot.brand.buttonLeft);
+  // 品牌区几何与底部用户区（原型 atta-brand-wrap / nav-engineer-card 实测值）
+  expect(snapshot.brand.padding).toBe('20px 48px 20px 20px');
+  expect(snapshot.brand.minHeight).toBe('88px');
+  expect(snapshot.sidebarFooter).toEqual({ minHeight: '87.5px', padding: '14px' });
+  expect(snapshot.userCard).toEqual({ gap: '12px' });
 
   await testInfo.attach('computed-style-M-1440x900.json', {
     body: JSON.stringify(snapshot, null, 2),
     contentType: 'application/json',
   });
-  await page.screenshot({
-    path: testInfo.outputPath('shared-shell-M-1440x900.png'),
-    fullPage: true,
+  // P2-2 起统一经 captureStableViewport（工作区干净断言 + 滚动复位 + 布局稳定 + 元数据），
+  // 语义由 fullPage 整页改为标准视口截图：物理尺寸必须严格等于 1440×900
+  const capture1440FileName = 'shared-shell-M-1440x900.png';
+  const capture1440Path = testInfo.outputPath(capture1440FileName);
+  const capture1440 = await captureStableViewport(page, {
+    fileName: capture1440FileName,
+    filePath: capture1440Path,
   });
+  expect(readPngDimensions(capture1440Path)).toEqual({ height: 900, width: 1440 });
+  // 证据 JSON 以 writeFileSync 落盘（testInfo.attach 的 body 在默认 reporter 下不写盘）：
+  // 阶段验收需能从磁盘直接核对 JSON 内 gitSha 与 PR head 一致
+  const capture1440Json = path.join(testInfo.outputPath(), 'shared-shell-M-1440x900-evidence.json');
+  writeFileSync(capture1440Json, JSON.stringify(capture1440, null, 2));
+  console.log(`[visual-evidence] ${capture1440Json}`);
 });
 
 test('导航 hover/active、三种状态底色和 S/M/L 往返均在真实浏览器生效', async ({
@@ -256,8 +320,16 @@ test('导航 hover/active、三种状态底色和 S/M/L 往返均在真实浏览
     expect(layout.logoutBottom).toBeLessThanOrEqual(viewport.height);
     await clickFontScale(page, 'M');
   }
-  await page.screenshot({
-    path: testInfo.outputPath('shared-shell-M-1366x768.png'),
-    fullPage: true,
+  // P2-2 起统一经 captureStableViewport（工作区干净断言 + 滚动复位 + 布局稳定 + 元数据），
+  // 语义由 fullPage 整页改为标准视口截图：物理尺寸必须严格等于 1366×768
+  const capture1366FileName = 'shared-shell-M-1366x768.png';
+  const capture1366Path = testInfo.outputPath(capture1366FileName);
+  const capture1366 = await captureStableViewport(page, {
+    fileName: capture1366FileName,
+    filePath: capture1366Path,
   });
+  expect(readPngDimensions(capture1366Path)).toEqual({ height: 768, width: 1366 });
+  const capture1366Json = path.join(testInfo.outputPath(), 'shared-shell-M-1366x768-evidence.json');
+  writeFileSync(capture1366Json, JSON.stringify(capture1366, null, 2));
+  console.log(`[visual-evidence] ${capture1366Json}`);
 });

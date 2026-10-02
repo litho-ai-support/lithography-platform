@@ -1,19 +1,13 @@
 // src/pages/reference-document-new/index.tsx
 
-import { useCallback, useRef, useState } from 'react';
 import { Button, Result } from 'antd';
 import { useNavigate } from 'react-router';
 
 import {
   buildReferenceDocumentDetailPath,
-  createReferenceDocument,
-  type CreateReferenceDocumentInput,
-  type CreateReferenceDocumentResult,
-  createReferenceDocumentWithFile,
   REFERENCE_DOCUMENTS_LIST_PATH,
   ReferenceDocumentForm,
-  type ReferenceDocumentFormOutput,
-  type ReferenceDocumentFormSubmitResult,
+  useReferenceDocumentCreate,
 } from '@/features/reference-document';
 
 import { PageHeader } from '@/shared/ui/page-header';
@@ -24,66 +18,13 @@ import { PageHeader } from '@/shared/ui/page-header';
  * 路由 /reference-documents/new 在 app/router 注册：CUSTOMER 被角色根路径表拦截，
  * ENGINEER 被角色路径拒绝清单拦截（对应后端写接口仅 SUPER_ADMIN 的精确口径，
  * 避免出现「能进页面但提交必被拒」的残缺中间态）。
- * 页面只装配 feature 公开表单组件并处理成功后的跳转，不持有另一份校验规则；
- * 创建通道按表单输出分流：带文件走 REST multipart 上传（contentText 可空），
- * 纯文本走 GraphQL mutation（双空拦截已由表单预检承担）。创建成功后进入新资料详情页。
+ * 页面只装配 feature 公开表单组件与创建流程 hook，并渲染成功态与处理跳转，
+ * 不持有另一份校验规则、通道分流、在途锁或 concrete adapter（均由 application 承担）。
+ * 创建成功后进入新资料详情页。
  */
 export function ReferenceDocumentNewPage() {
   const navigate = useNavigate();
-  const [createdId, setCreatedId] = useState<number | null>(null);
-  const creatingRef = useRef(false);
-
-  const handleSubmit = useCallback(
-    async (output: ReferenceDocumentFormOutput): Promise<ReferenceDocumentFormSubmitResult> => {
-      if (creatingRef.current) {
-        return { ok: false, message: '正在提交中，请稍候。' };
-      }
-
-      creatingRef.current = true;
-
-      try {
-        if (output.file !== null) {
-          const result = await createReferenceDocumentWithFile({
-            title: output.title,
-            documentType: output.documentType,
-            equipmentModelId: output.equipmentModelId,
-            description: output.description,
-            contentText: output.contentText,
-            file: output.file,
-          });
-
-          if (result.ok) {
-            setCreatedId(result.id);
-
-            return { ok: true };
-          }
-
-          return { ok: false, message: result.message };
-        }
-
-        // 纯文本通道：双空预检保证 contentText 非空，类型上仍需收窄为 string
-        const input: CreateReferenceDocumentInput = {
-          title: output.title,
-          documentType: output.documentType,
-          equipmentModelId: output.equipmentModelId,
-          description: output.description,
-          contentText: output.contentText ?? '',
-        };
-        const result: CreateReferenceDocumentResult = await createReferenceDocument(input);
-
-        if (result.ok) {
-          setCreatedId(result.id);
-
-          return { ok: true };
-        }
-
-        return { ok: false, message: result.message };
-      } finally {
-        creatingRef.current = false;
-      }
-    },
-    [],
-  );
+  const { createdId, submit } = useReferenceDocumentCreate();
 
   if (createdId !== null) {
     return (
@@ -121,7 +62,7 @@ export function ReferenceDocumentNewPage() {
         title="新增参考资料"
       />
       <div className="surface-panel">
-        <ReferenceDocumentForm submitText="创建资料" onSubmit={handleSubmit} />
+        <ReferenceDocumentForm submitText="创建资料" onSubmit={submit} />
       </div>
     </div>
   );

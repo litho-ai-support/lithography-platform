@@ -1,28 +1,15 @@
 // src/pages/repair-request-create/index.tsx
 
-import { RepairRequestForm } from '@/features/repair-request';
-
-import { PageHeader } from '@/shared/ui/page-header';
+import { CustomerRepairWorkspace } from '@/widgets/customer-repair-workspace';
 
 /**
- * 创建维修申请页面。
+ * 创建维修申请兼容入口路由壳（挂受保护路由 /customer/repair-requests/new）。
  *
- * 挂受保护路由 /customer/repair-requests/new（见 app/router），
- * 角色入口治理由蔡的 protectedRouteLoader / auth-session 策略承担。
+ * PR5 整合工作台裁定：本路由与客户首页默认态渲染完全一致的 create 态工作台
+ * （不生成第二标题、不复制表单实现）；表单继续复用 RepairRequestForm，
+ * 由 CustomerRepairWorkspace 统一组合。角色入口治理由 protectedRouteLoader /
+ * auth-session 策略承担（拒绝清单仍仅拒本路径）。
  */
 export function RepairRequestCreatePage() {
-  return (
-    <div className="page-stack">
-      <PageHeader
-        description="提交设备故障信息，创建维修申请。"
-        eyebrow="New Repair Request"
-        title="创建维修申请"
-      />
-      <div className="surface-panel">
-        <div className="max-w-xl">
-          <RepairRequestForm />
-        </div>
-      </div>
-    </div>
-  );
+  return <CustomerRepairWorkspace mode="create" />;
 }

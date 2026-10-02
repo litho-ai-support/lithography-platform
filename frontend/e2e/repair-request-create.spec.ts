@@ -56,7 +56,20 @@ function fulfillUnauthenticated(route: Route) {
   });
 }
 
-// 按操作名分派：型号查询放行，创建 Mutation 按测试预期处理。
+/** 客户工作台左栏「我的维修申请」列表查询的合法应答（空页 / 指定条目页），隔离数据层。 */
+function fulfillMyRepairRequests(route: Route, items: unknown[]) {
+  return route.fulfill({
+    body: JSON.stringify({
+      data: {
+        myRepairRequests: { items, page: 1, pageSize: 10, total: items.length },
+      },
+    }),
+    contentType: 'application/json',
+    status: 200,
+  });
+}
+
+// 按操作名分派：型号查询与工作台列表查询放行，创建 Mutation 按测试预期处理。
 async function routeGraphQL(page: Page, onCreate: (route: Route) => Promise<void>) {
   let createCount = 0;
 
@@ -71,6 +84,12 @@ async function routeGraphQL(page: Page, onCreate: (route: Route) => Promise<void
 
     if (payload.query?.includes('query EquipmentModels')) {
       await fulfillModelsSuccess(route);
+      return;
+    }
+
+    // 2026-09-29 整合工作台：create 态左栏同时查询列表（不属本用例断言范围，返回空页）
+    if (payload.query?.includes('query MyRepairRequests')) {
+      await fulfillMyRepairRequests(route, []);
       return;
     }
 
@@ -142,9 +161,24 @@ test('super admin visit is redirected to the admin home, like engineer', async (
   // 路由层与 ENGINEER 一致拒绝进入创建页，不保留「可进页面、后端全拒」的残缺中间态。
   await seedAuthSession(page, 'SUPER_ADMIN');
 
+  // 客户首页整合工作台会查询左栏列表：只隔离该操作返回空页，其余请求保持真实网络行为
+  await page.route('**/graphql', async (route) => {
+    const payload = route.request().postDataJSON() as GraphQLOperationPayload;
+
+    if (payload.query?.includes('query MyRepairRequests')) {
+      await fulfillMyRepairRequests(route, []);
+      return;
+    }
+
+    await route.continue();
+  });
+
   // 客户首页可继承访问，但入口按钮置灰并附说明，避免「点了被弹回」的无提示体验。
+  // 空态左栏的「发起维修申请」与页头同名，限定页头区域断言（strict mode）。
   await page.goto(CUSTOMER_HOME_PATH);
-  await expect(page.getByRole('button', { name: '发起维修申请' })).toBeDisabled();
+  await expect(
+    page.locator('.page-header').getByRole('button', { name: '发起维修申请' }),
+  ).toBeDisabled();
   await expect(page.getByText('超管不能代客户发起维修申请')).toBeVisible();
 
   await page.goto(CREATE_PAGE_PATH);
@@ -152,18 +186,33 @@ test('super admin visit is redirected to the admin home, like engineer', async (
   expect(await readStoredAuthSession(page)).not.toBeNull();
 });
 
-test('customer reaches the create page by clicking the entry on the customer home', async ({
-  page,
-}) => {
-  // 可发现性（负责人裁定）：不允许只能手输 URL 到达的页面，首页入口点击即达创建页。
+test('customer home opens in create mode without manual URL entry', async ({ page }) => {
+  // 可发现性（2026-09-29 整合裁定）：首页即创建态，表单无需点击跳转即可使用；
+  // 页头「发起维修申请」在 create 态为 no-op（URL 不变、表单保留）。
   await seedAuthSession(page, 'CUSTOMER');
-  await page.route('**/graphql', (route) => fulfillModelsSuccess(route));
+  await page.route('**/graphql', async (route) => {
+    const payload = route.request().postDataJSON() as GraphQLOperationPayload;
+
+    if (payload.query?.includes('query EquipmentModels')) {
+      await fulfillModelsSuccess(route);
+      return;
+    }
+
+    if (payload.query?.includes('query MyRepairRequests')) {
+      await fulfillMyRepairRequests(route, []);
+      return;
+    }
+
+    await route.fulfill({ status: 500 });
+  });
 
   await page.goto(CUSTOMER_HOME_PATH);
-  await page.getByRole('button', { name: '发起维修申请' }).click();
+  await expect(page.locator('.customer-workspace-grid[data-mode="create"]')).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: '客户页面' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
 
-  await expect(page).toHaveURL(new RegExp(CREATE_PAGE_PATH));
-  await expect(page.getByText('创建维修申请').first()).toBeVisible();
+  await page.locator('.page-header').getByRole('button', { name: '发起维修申请' }).click();
+  await expect(page).toHaveURL(new RegExp(`${CUSTOMER_HOME_PATH}$`));
   await expect(page.getByRole('button', { name: '提交申请' })).toBeEnabled();
 });
 
@@ -175,9 +224,9 @@ test('expired token on page load clears the session and returns to login once', 
 }) => {
   await seedAuthSession(page, 'CUSTOMER');
 
-  let modelsRequests = 0;
+  let expiredRequests = 0;
   await page.route('**/graphql', async (route) => {
-    modelsRequests += 1;
+    expiredRequests += 1;
     await fulfillUnauthenticated(route);
   });
 
@@ -189,8 +238,10 @@ test('expired token on page load clears the session and returns to login once', 
   await expect(page.getByText('登录状态已失效，请重新登录')).toBeVisible();
   // 不展示后端原始错误内容（mock 故意携带 internal auth detail）
   await expect(page.getByText('internal auth detail')).toHaveCount(0);
-  // 一次失效周期只允许一次清理与一次跳转：请求不循环
-  expect(modelsRequests).toBe(1);
+  // 一次失效周期只允许一次清理与一次跳转：初始渲染并行至多两笔查询
+  //（左栏列表 + 表单型号），跳转登录页后不得再产生任何循环请求
+  expect(expiredRequests).toBeGreaterThanOrEqual(1);
+  expect(expiredRequests).toBeLessThanOrEqual(2);
   expect(await readStoredAuthSession(page)).toBeNull();
 });
 
@@ -251,6 +302,11 @@ test('same-role re-login after expiry returns to the original business page', as
       return fulfillModelsSuccess(route);
     }
 
+    // 2026-09-29 整合工作台：左栏列表查询返回空页（不参与失效计数）
+    if (payload.query?.includes('query MyRepairRequests')) {
+      return fulfillMyRepairRequests(route, []);
+    }
+
     return route.fulfill({ status: 500 });
   });
 
@@ -306,10 +362,24 @@ test('business rejection keeps the form and shows the backend message', async ({
 test('client-side validation blocks empty submit without any request', async ({ page }) => {
   await seedAuthSession(page, 'CUSTOMER');
 
-  let graphqlRequests = 0;
+  let modelsRequests = 0;
+  let listRequests = 0;
   await page.route('**/graphql', async (route) => {
-    graphqlRequests += 1;
-    await fulfillModelsSuccess(route);
+    const payload = route.request().postDataJSON() as GraphQLOperationPayload;
+
+    if (payload.query?.includes('query EquipmentModels')) {
+      modelsRequests += 1;
+      await fulfillModelsSuccess(route);
+      return;
+    }
+
+    if (payload.query?.includes('query MyRepairRequests')) {
+      listRequests += 1;
+      await fulfillMyRepairRequests(route, []);
+      return;
+    }
+
+    await route.fulfill({ status: 500 });
   });
 
   await page.goto(CREATE_PAGE_PATH);
@@ -321,8 +391,9 @@ test('client-side validation blocks empty submit without any request', async ({ 
   ).toBeVisible();
   await expect(page.getByText('请输入设备错误码')).toBeVisible();
   await expect(page.getByText('请输入故障描述')).toBeVisible();
-  // 仅初始型号查询一次，校验拦截不产生 Mutation
-  expect(graphqlRequests).toBe(1);
+  // 初始仅并行两笔查询（左栏列表 + 表单型号），校验拦截不产生 Mutation
+  expect(modelsRequests).toBe(1);
+  expect(listRequests).toBe(1);
 });
 
 test('double click sends exactly one mutation and shows the result', async ({ page }) => {
@@ -370,10 +441,10 @@ test('double click sends exactly one mutation and shows the result', async ({ pa
   await expect(page.getByText('申请编号：RR-2026-0001')).toBeVisible();
   expect(getCreateCount()).toBe(1);
 
-  // T-05：创建成功页跳维修申请列表（本用例 route 已 mock 成 create 响应形状，
-  // 列表页数据态不属本用例范围，仅断言导航路径；数据流断言见 manage 系列 spec）
+  // T-05：创建成功页「查看维修申请」进入该申请详情路由（2026-09-29 整合裁定：不再回列表）；
+  // 详情数据态不属本用例范围，仅断言导航目标 ID；数据流断言见 manage 系列 spec。
   await page.getByRole('button', { name: '查看维修申请' }).click();
-  await expect(page).toHaveURL(/\/customer\/repair-requests$/);
+  await expect(page).toHaveURL(/\/customer\/repair-requests\/900401$/);
 });
 
 // ---------- 提交期 transport 失败（区别于业务拒绝与 UNAUTHENTICATED 的第三条错误路径） ----------
@@ -538,9 +609,12 @@ test.describe('real backend mutation', () => {
     await page.getByRole('button', { name: /登\s*录/ }).click();
     await expect(page).toHaveURL(/\/admin$/);
 
-    // 客户首页可继承访问，但创建入口置灰并附说明（与路由层拒绝同口径）
+    // 客户首页可继承访问，但创建入口置灰并附说明（与路由层拒绝同口径）；
+    // 空态左栏的「发起维修申请」与页头同名，限定页头区域断言（strict mode）。
     await page.goto(CUSTOMER_HOME_PATH);
-    await expect(page.getByRole('button', { name: '发起维修申请' })).toBeDisabled();
+    await expect(
+      page.locator('.page-header').getByRole('button', { name: '发起维修申请' }),
+    ).toBeDisabled();
     await expect(page.getByText('超管不能代客户发起维修申请')).toBeVisible();
 
     // 直输创建页路径：路由层拒绝，跳回管理主页；会话保留（非 auth 失效）

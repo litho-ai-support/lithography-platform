@@ -15,6 +15,11 @@ import type {
   UpdateReferenceDocumentPatch,
   UpdateReferenceDocumentResult,
 } from './reference-document.types';
+import {
+  REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH,
+  REFERENCE_DOCUMENT_TITLE_MAX_LENGTH,
+  REFERENCE_DOCUMENT_UPLOAD_EXTENSION_MIME,
+} from './reference-document.types';
 import type { MockReferenceDocumentRecord } from './reference-document-mock-data';
 import {
   buildMockReferenceDocumentRecords,
@@ -34,29 +39,8 @@ import {
  * - 软删：不存在 / 已软删统一 not-found（注意：本模块不幂等，区别于维修申请）。
  */
 
-/** 字段长度上限与后端契约对齐（backend dto/reference-document-write.dto.ts），修改需同步 */
-const TITLE_MAX_LENGTH = 255;
-const DOCUMENT_TYPE_MAX_LENGTH = 100;
-
 /** Mock 创建人昵称：阶段三由后端按 Session 实时富集，Mock 固定为管理员语义 */
 const MOCK_CREATOR_NICKNAME = '系统管理员';
-
-/** Mock 扩展名 → MIME（与后端 EXTENSION_TO_MIME 同口径的最小子集，仅用于文件元数据模拟） */
-const MOCK_EXTENSION_MIME: Record<string, string> = {
-  pdf: 'application/pdf',
-  doc: 'application/msword',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xls: 'application/vnd.ms-excel',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  ppt: 'application/vnd.ms-powerpoint',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  txt: 'text/plain',
-  md: 'text/markdown',
-  csv: 'text/csv',
-};
 
 let repository: MockReferenceDocumentRecord[] = buildMockReferenceDocumentRecords();
 let nextId = 970007 + 1000;
@@ -178,8 +162,11 @@ export async function fetchReferenceDocument(id: number): Promise<ReferenceDocum
 export async function createReferenceDocument(
   input: CreateReferenceDocumentInput,
 ): Promise<CreateReferenceDocumentResult> {
-  const title = requireNormalizedText(input.title, TITLE_MAX_LENGTH);
-  const documentType = requireNormalizedText(input.documentType, DOCUMENT_TYPE_MAX_LENGTH);
+  const title = requireNormalizedText(input.title, REFERENCE_DOCUMENT_TITLE_MAX_LENGTH);
+  const documentType = requireNormalizedText(
+    input.documentType,
+    REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH,
+  );
 
   if (title === null || documentType === null) {
     return {
@@ -187,8 +174,8 @@ export async function createReferenceDocument(
       reason: 'invalid-input',
       message:
         title === null
-          ? '标题为必填项，且不能超过 255 个字符。'
-          : '文档类型为必填项，且不能超过 100 个字符。',
+          ? `标题为必填项，且不能超过 ${REFERENCE_DOCUMENT_TITLE_MAX_LENGTH} 个字符。`
+          : `文档类型为必填项，且不能超过 ${REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH} 个字符。`,
     };
   }
 
@@ -277,13 +264,13 @@ export async function updateReferenceDocument(
   }
 
   if (patch.title !== undefined) {
-    const title = requireNormalizedText(patch.title, TITLE_MAX_LENGTH);
+    const title = requireNormalizedText(patch.title, REFERENCE_DOCUMENT_TITLE_MAX_LENGTH);
 
     if (title === null) {
       return {
         ok: false,
         reason: 'invalid-input',
-        message: '标题为必填项，且不能超过 255 个字符。',
+        message: `标题为必填项，且不能超过 ${REFERENCE_DOCUMENT_TITLE_MAX_LENGTH} 个字符。`,
       };
     }
 
@@ -291,13 +278,16 @@ export async function updateReferenceDocument(
   }
 
   if (patch.documentType !== undefined) {
-    const documentType = requireNormalizedText(patch.documentType, DOCUMENT_TYPE_MAX_LENGTH);
+    const documentType = requireNormalizedText(
+      patch.documentType,
+      REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH,
+    );
 
     if (documentType === null) {
       return {
         ok: false,
         reason: 'invalid-input',
-        message: '文档类型为必填项，且不能超过 100 个字符。',
+        message: `文档类型为必填项，且不能超过 ${REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH} 个字符。`,
       };
     }
 
@@ -371,8 +361,11 @@ function extractFileExtension(fileName: string): string {
 export async function createReferenceDocumentWithFile(
   input: CreateReferenceDocumentWithFileInput,
 ): Promise<CreateReferenceDocumentWithFileResult> {
-  const title = requireNormalizedText(input.title, TITLE_MAX_LENGTH);
-  const documentType = requireNormalizedText(input.documentType, DOCUMENT_TYPE_MAX_LENGTH);
+  const title = requireNormalizedText(input.title, REFERENCE_DOCUMENT_TITLE_MAX_LENGTH);
+  const documentType = requireNormalizedText(
+    input.documentType,
+    REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH,
+  );
 
   if (title === null || documentType === null) {
     return {
@@ -380,13 +373,13 @@ export async function createReferenceDocumentWithFile(
       reason: 'invalid-input',
       message:
         title === null
-          ? '标题为必填项，且不能超过 255 个字符。'
-          : '文档类型为必填项，且不能超过 100 个字符。',
+          ? `标题为必填项，且不能超过 ${REFERENCE_DOCUMENT_TITLE_MAX_LENGTH} 个字符。`
+          : `文档类型为必填项，且不能超过 ${REFERENCE_DOCUMENT_DOCUMENT_TYPE_MAX_LENGTH} 个字符。`,
     };
   }
 
   const extension = extractFileExtension(input.file.name);
-  const mimeType = MOCK_EXTENSION_MIME[extension];
+  const mimeType = REFERENCE_DOCUMENT_UPLOAD_EXTENSION_MIME[extension];
 
   if (mimeType === undefined) {
     return {

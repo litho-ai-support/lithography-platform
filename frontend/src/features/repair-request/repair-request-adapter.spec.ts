@@ -11,7 +11,7 @@ import {
   fetchEquipmentModels,
   fetchMyRepairRequest,
   fetchMyRepairRequests,
-} from './index';
+} from './infrastructure/repair-request-adapter';
 
 vi.mock('@/shared/graphql', async (importOriginal) => {
   const actual = await importOriginal<typeof sharedGraphql>();
