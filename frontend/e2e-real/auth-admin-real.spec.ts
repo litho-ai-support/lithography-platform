@@ -195,7 +195,9 @@ async function createUserViaPage(
   await dialog.getByLabel('登录名（登录凭据之一）', { exact: true }).fill(input.loginName);
   await dialog.getByLabel('初始密码', { exact: true }).fill(input.password);
   await dialog.getByLabel('确认初始密码', { exact: true }).fill(input.password);
-  await dialog.getByRole('button', { name: '创建', exact: true }).click();
+  // 弹窗底部确认按钮的可访问名是「创 建」：AntD 会在两个汉字间自动插空格
+  //（与登录按钮 /登\s*录/ 同一现象），故不能用 exact: true 的「创建」。
+  await dialog.getByRole('button', { name: /创\s*建/ }).click();
   await expect(dialog).toBeHidden();
 }
 
