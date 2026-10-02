@@ -183,7 +183,9 @@ async function createUserViaPage(
   const dialog = page.getByRole('dialog');
 
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel('角色').click();
+  // AntD Select 交互按仓库先例（reference-document-real.spec.ts）：点击 label 不展开下拉，
+  // 必须先点 combobox 打开下拉；选项以 aria-label（中文角色名）锚定，不依赖 DOM 顺序。
+  await dialog.getByRole('combobox').click();
   await page.getByRole('option', { name: input.roleLabel }).click();
   await dialog.getByLabel('昵称', { exact: true }).fill(input.nickname);
   await dialog.getByLabel('登录名（登录凭据之一）', { exact: true }).fill(input.loginName);
@@ -534,7 +536,9 @@ test.describe('auth & admin real backend flow（隔离库 lithography_e2e）', (
       const blockedLogin = await attemptRealLogin(loginName, CREATE_PASSWORD);
 
       expect(blockedLogin.accessToken).toBeNull();
-      expect(blockedLogin.errorCode).toBe('UNAUTHENTICATED');
+      // 停用账户登录：后端 AUTH_ERROR.ACCOUNT_INACTIVE 经异常过滤器映射为 FORBIDDEN
+      //（graphql-exception.filter.ts），不是 UNAUTHENTICATED
+      expect(blockedLogin.errorCode).toBe('FORBIDDEN');
 
       // 3) 前端携旧会话访问真实受保护页 → 会话被清理并跳登录页（携带固定失效原因）
       await page.goto('/account/settings');
