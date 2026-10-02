@@ -9,12 +9,25 @@
  * 弹窗内部的错误区另由弹窗侧的 `useStaleSubmitGuard` 把守，两层互不代替。
  */
 
-import { type Dispatch, type SetStateAction, useState } from 'react';
-import { Alert, Button, Input, message, Select, Space, Table, Tag, Tooltip } from 'antd';
+import { type Dispatch, type SetStateAction, useEffect, useState } from 'react';
+import { CopyOutlined } from '@ant-design/icons';
+import { Button, message, Select, Space, Table, Tag, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 
+import { EmptyState } from '@/shared/ui/empty-state';
+import { ErrorState } from '@/shared/ui/error-state';
+import { FilterBar } from '@/shared/ui/filter-bar';
 import { formatDateTimeText } from '@/shared/ui/format-date-time';
+import { LoadingState } from '@/shared/ui/loading-state';
+import { TableContainer } from '@/shared/ui/table-container';
+import { ToolbarButton, ToolbarSearchField } from '@/shared/ui/toolbar-controls';
 
+import {
+  ADMIN_USER_CONTACT_LINES,
+  buildAdminUserContactCopyText,
+  normalizeAdminUserContactValue,
+  writeAdminUserContactCopyText,
+} from '../application/admin-user-contact-copy';
 import type {
   AdminUserCommandResult,
   AdminUserCreateDraft,
@@ -51,6 +64,9 @@ const ROLE_TAG_COLORS: Record<AdminUserRole, string> = {
   SUPER_ADMIN: 'gold',
 };
 
+/** 主搜索防抖节奏：与工程师维修申请列表保持一致（输入即时回显、防抖值才提交筛选） */
+const SEARCH_DEBOUNCE_MS = 300;
+
 /** 四个弹窗的会话标识：创建弹窗没有 accountId，会话代次就是它的完整身份；行级弹窗都以目标 accountId 为身份 */
 type AdminUserDialogKey = 'create' | 'profile' | 'status' | 'reset-password';
 
@@ -69,15 +85,112 @@ function toTargetedSuccessMessage(nickname: string | null, noun: string, verb: s
   return nickname === null ? `${noun}${verb}。` : `「${nickname}」的${noun}${verb}。`;
 }
 
+/**
+ * 「联系方式」区块。
+ *
+ * - 三行仍是列表已返回的既有字段，继续按现有列宽省略，不因本区块加宽表格；
+ *   被省略的值悬停或键盘聚焦时用项目现有 Tooltip 展示完整值，空值只显示占位符、不挂提示。
+ * - 整块（含区块内空白）就是复制区域：点击 / Enter / Space 复制本行非空基本信息。
+ *   复制只读取行内既有字段，不发起任何请求，也不介入同行的编辑 / 启停 / 重置密码入口。
+ */
+function AdminUserContactCell({ row }: { row: AdminUserRow }) {
+  const copyContact = () => {
+    void writeAdminUserContactCopyText(buildAdminUserContactCopyText(row)).then((written) => {
+      // 剪贴板不可用或写入失败时必须明确告知，不能静默当成功
+      if (written) {
+        message.success('用户信息已复制。');
+      } else {
+        message.error('用户信息复制失败，请手动选择文本复制。');
+      }
+    });
+  };
+
+  return (
+    <div
+      aria-label={`复制「${row.nickname}」的用户信息`}
+      className="admin-user-contact flex min-w-0 flex-col gap-0.5"
+      onClick={copyContact}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') {
+          return;
+        }
+
+        // Space 默认滚动页面、Enter 默认会再触发一次按钮语义：截断以保证只复制一次
+        event.preventDefault();
+        copyContact();
+      }}
+      role="button"
+      tabIndex={0}
+    >
+      {ADMIN_USER_CONTACT_LINES.map((line) => {
+        const value = normalizeAdminUserContactValue(line.read(row));
+
+        return (
+          <span className="truncate text-text-secondary text-xs" key={line.label}>
+            {line.label}：
+            {value === null ? (
+              renderOptionalText(value)
+            ) : (
+              <Tooltip title={value} trigger={['hover', 'focus']}>
+                <span className="admin-user-contact-value" tabIndex={0}>
+                  {value}
+                </span>
+              </Tooltip>
+            )}
+          </span>
+        );
+      })}
+      {/* 悬停 / 聚焦时才出现的轻量复制提示图标，绝对定位，不参与列宽与换行计算 */}
+      <CopyOutlined aria-hidden="true" className="admin-user-contact-copy-icon" />
+    </div>
+  );
+}
+
 export function AdminUserManagementPanel() {
   const list = useAdminUserList();
   const commands = useAdminUserCommands(list.reload);
   const dialogSession = useDialogSessionSeq<AdminUserDialogKey>();
   const [keywordDraft, setKeywordDraft] = useState('');
+  const [debouncedKeyword, setDebouncedKeyword] = useState('');
+  // 筛选条件默认收起：常驻行只保留主搜索、筛选开关与创建入口（工程师维修申请列表同一模式）
+  const [filterOpen, setFilterOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [profileRow, setProfileRow] = useState<AdminUserRow | null>(null);
   const [statusRow, setStatusRow] = useState<AdminUserRow | null>(null);
   const [resetPasswordRow, setResetPasswordRow] = useState<AdminUserRow | null>(null);
+
+  // 主搜索防抖：输入即时回显，防抖到期才把草稿交给下一步的应用 effect
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedKeyword(keywordDraft);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [keywordDraft]);
+
+  // 防抖到期后应用主搜索：trim 后提交，空串回到不筛选语义；值未变化时早退，
+  // 不因引用变化重复发请求。角色 / 状态筛选走展开区控件自身的 applyFilters，互不覆盖。
+  useEffect(() => {
+    const trimmed = debouncedKeyword.trim();
+    const nextKeyword = trimmed === '' ? null : trimmed;
+
+    if (list.query.keyword !== nextKeyword) {
+      list.applyFilters({ keyword: nextKeyword });
+    }
+  }, [debouncedKeyword, list]);
+
+  const hasActiveFilter =
+    list.query.keyword !== null || list.query.role !== null || list.query.status !== null;
+
+  // 清除筛选：草稿与防抖值必须同时复位，否则防抖值里的旧关键字会被上面的应用 effect
+  // 回填成一次多余请求（列表闪回筛选无结果态）
+  const clearFilters = () => {
+    setKeywordDraft('');
+    setDebouncedKeyword('');
+    list.applyFilters({ keyword: null, role: null, status: null });
+  };
 
   const isCreateSubmitting = commands.isPending('create');
   const isProfileSubmitting = commands.isPending('profile');
@@ -293,37 +406,37 @@ export function AdminUserManagementPanel() {
   };
 
   const columns: ColumnsType<AdminUserRow> = [
-    { dataIndex: 'accountId', title: 'ID', width: 64 },
-    { dataIndex: 'nickname', ellipsis: true, title: '昵称' },
     {
-      dataIndex: 'loginName',
+      dataIndex: 'nickname',
       ellipsis: true,
-      render: renderOptionalText,
-      title: '登录名',
+      render: (_, row) => (
+        <div className="flex min-w-0 items-center gap-3">
+          {/* 列表 DTO 无头像字段，不为显示效果伪造图片；沿用导航头像的首字母回退与方形（12px 圆角）配方 */}
+          <span aria-hidden="true" className="user-avatar user-avatar--md">
+            {row.nickname.trim().charAt(0).toUpperCase()}
+          </span>
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="truncate font-bold text-text">{row.nickname}</span>
+            <span className="truncate text-text-secondary text-xs">
+              {renderOptionalText(row.loginName)}
+            </span>
+            <span className="truncate text-text-tertiary text-xs">账号 ID：{row.accountId}</span>
+          </div>
+        </div>
+      ),
+      title: '用户信息',
     },
     {
       dataIndex: 'loginEmail',
       ellipsis: true,
-      render: renderOptionalText,
-      title: '登录邮箱',
-    },
-    {
-      dataIndex: 'contactEmail',
-      ellipsis: true,
-      render: renderOptionalText,
-      title: '联系邮箱',
+      render: (_, row) => <AdminUserContactCell row={row} />,
+      title: '联系方式',
     },
     {
       dataIndex: 'companyName',
       ellipsis: true,
       render: renderOptionalText,
-      title: '公司名称',
-    },
-    {
-      dataIndex: 'phone',
-      ellipsis: true,
-      render: renderOptionalText,
-      title: '电话',
+      title: '所属公司',
     },
     {
       dataIndex: 'role',
@@ -340,20 +453,23 @@ export function AdminUserManagementPanel() {
           {isAdminUserStatusWritable(status) ? ADMIN_USER_STATUS_LABELS[status] : status}
         </Tag>
       ),
-      title: '状态',
-      width: 100,
+      title: '账号状态',
+      width: 110,
     },
     {
       dataIndex: 'createdAt',
-      render: formatDateTimeText,
-      title: '创建时间',
-      width: 160,
-    },
-    {
-      dataIndex: 'updatedAt',
-      render: formatDateTimeText,
-      title: '最近变更',
-      width: 160,
+      render: (_, row) => (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-text-secondary text-xs">
+            创建：{formatDateTimeText(row.createdAt)}
+          </span>
+          <span className="text-text-secondary text-xs">
+            最近更新：{formatDateTimeText(row.updatedAt)}
+          </span>
+        </div>
+      ),
+      title: '创建时间 / 最近更新',
+      width: 180,
     },
     {
       fixed: 'right',
@@ -405,98 +521,114 @@ export function AdminUserManagementPanel() {
         );
       },
       title: '操作',
-      width: 280,
+      width: 220,
     },
   ];
 
   const state = list.state;
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="w-72">
-          <Input.Search
-            allowClear
-            enterButton="搜索"
-            placeholder="搜索登录名 / 登录邮箱 / 昵称"
-            style={{ width: '100%' }}
-            value={keywordDraft}
-            onChange={(event) => setKeywordDraft(event.target.value)}
-            onSearch={(value) => list.applyFilters({ keyword: value.trim() || null })}
-          />
-        </div>
+    <>
+      <TableContainer>
+        <div className="flex flex-col gap-4">
+          <FilterBar>
+            <ToolbarSearchField
+              clearLabel="清除用户搜索"
+              onChange={setKeywordDraft}
+              placeholder="搜索登录名 / 登录邮箱 / 昵称"
+              value={keywordDraft}
+            />
+            <ToolbarButton
+              active={hasActiveFilter}
+              aria-expanded={filterOpen}
+              onClick={() => setFilterOpen((previous) => !previous)}
+            >
+              筛选
+            </ToolbarButton>
 
-        <div className="w-44">
-          <Select<AdminUserRole | undefined>
-            allowClear
-            placeholder="角色筛选"
-            style={{ width: '100%' }}
-            value={list.query.role ?? undefined}
-            onChange={(role) => list.applyFilters({ role: role ?? null })}
-            options={ADMIN_USER_ROLE_FILTER_OPTIONS.map((role) => ({
-              value: role,
-              label: ADMIN_USER_ROLE_LABELS[role],
-            }))}
-          />
-        </div>
+            <div className="flex-1" />
 
-        <div className="w-36">
-          <Select<AdminUserStatusFilter | undefined>
-            allowClear
-            placeholder="状态筛选"
-            style={{ width: '100%' }}
-            value={list.query.status ?? undefined}
-            onChange={(status) => list.applyFilters({ status: status ?? null })}
-            options={ADMIN_USER_STATUS_FILTER_OPTIONS.map((status) => ({
-              value: status,
-              label: ADMIN_USER_STATUS_LABELS[status],
-            }))}
-          />
-        </div>
-
-        <div className="flex-1" />
-
-        <Button type="primary" onClick={openCreateDialog}>
-          创建用户
-        </Button>
-      </div>
-
-      {state.status === 'failed' ? (
-        <Alert
-          action={
-            <Button size="small" type="primary" onClick={list.reload}>
-              重试
+            <Button type="primary" onClick={openCreateDialog}>
+              创建用户
             </Button>
-          }
-          message={state.message}
-          showIcon
-          type="error"
-        />
-      ) : null}
 
-      <Table<AdminUserRow>
-        columns={columns}
-        dataSource={state.status === 'ready' && list.isCurrentQueryDomain ? state.page.items : []}
-        loading={state.status === 'loading' || !list.isCurrentQueryDomain}
-        locale={{
-          emptyText: state.status === 'failed' ? '请求失败，请重试。' : '暂无用户数据。',
-        }}
-        pagination={{
-          current:
-            state.status === 'ready' && list.isCurrentQueryDomain
-              ? state.page.page
-              : list.query.page,
-          onChange: list.goToPage,
-          pageSize: list.query.pageSize,
-          showSizeChanger: false,
-          showTotal: (total) => `共 ${total} 条`,
-          // 只展示当前查询域的最近成功 total；筛选域切换后立即归零
-          total: list.isCurrentQueryDomain ? state.lastTotal : 0,
-        }}
-        rowKey="accountId"
-        scroll={{ x: 1280 }}
-        size="middle"
-      />
+            {/* 展开区：主搜索之外的精确条件收在这里，收起时不渲染；
+                条件与查询语义沿用原有实现，不新增筛选能力 */}
+            {filterOpen ? (
+              <div className="flex w-full flex-wrap items-center gap-3">
+                <div className="w-44">
+                  <Select<AdminUserRole | undefined>
+                    allowClear
+                    placeholder="角色筛选"
+                    style={{ width: '100%' }}
+                    value={list.query.role ?? undefined}
+                    onChange={(role) => list.applyFilters({ role: role ?? null })}
+                    options={ADMIN_USER_ROLE_FILTER_OPTIONS.map((role) => ({
+                      value: role,
+                      label: ADMIN_USER_ROLE_LABELS[role],
+                    }))}
+                  />
+                </div>
+
+                <div className="w-36">
+                  <Select<AdminUserStatusFilter | undefined>
+                    allowClear
+                    placeholder="状态筛选"
+                    style={{ width: '100%' }}
+                    value={list.query.status ?? undefined}
+                    onChange={(status) => list.applyFilters({ status: status ?? null })}
+                    options={ADMIN_USER_STATUS_FILTER_OPTIONS.map((status) => ({
+                      value: status,
+                      label: ADMIN_USER_STATUS_LABELS[status],
+                    }))}
+                  />
+                </div>
+
+                <ToolbarButton onClick={clearFilters}>清除筛选</ToolbarButton>
+              </div>
+            ) : null}
+          </FilterBar>
+
+          {state.status === 'failed' && list.isCurrentQueryDomain ? (
+            <ErrorState
+              action={
+                <Button size="small" onClick={list.reload}>
+                  重试
+                </Button>
+              }
+              title={state.message}
+            />
+          ) : null}
+
+          {state.status === 'loading' || !list.isCurrentQueryDomain ? (
+            <LoadingState label="正在加载用户…" />
+          ) : null}
+
+          {state.status === 'ready' && list.isCurrentQueryDomain && state.page.items.length > 0 ? (
+            <Table<AdminUserRow>
+              columns={columns}
+              dataSource={state.page.items}
+              pagination={{
+                current: state.page.page,
+                onChange: list.goToPage,
+                pageSize: list.query.pageSize,
+                showSizeChanger: false,
+                showTotal: (total) => `共 ${total} 条`,
+                total: state.page.total,
+              }}
+              rowKey="accountId"
+              scroll={{ x: 1140 }}
+              size="middle"
+            />
+          ) : null}
+
+          {state.status === 'ready' &&
+          list.isCurrentQueryDomain &&
+          state.page.items.length === 0 ? (
+            <EmptyState title="暂无用户数据。" />
+          ) : null}
+        </div>
+      </TableContainer>
 
       <AdminUserCreateModal
         open={createOpen}
@@ -525,6 +657,6 @@ export function AdminUserManagementPanel() {
         onCancel={() => closeRowDialog('reset-password', setResetPasswordRow)}
         onSubmit={submitPasswordReset}
       />
-    </div>
+    </>
   );
 }
