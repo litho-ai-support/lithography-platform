@@ -15,23 +15,47 @@ const CUSTOMER_HOME_PATH = '/customer';
 // 详情守卫断言用的样例 ID（不发起该 ID 的数据断言）
 const DETAIL_SAMPLE_ID = 920002;
 
+// 未登记 operation 留痕：mock 组用例不得把请求放行到真实后端（本轮整改 P2），
+// 与 visual-shell / customer-visual 同口径，afterEach 断言为空即为失败依据。
+const unregisteredOperations: string[] = [];
+
+test.beforeEach(() => {
+  unregisteredOperations.length = 0;
+});
+
+test.afterEach(() => {
+  expect(unregisteredOperations, '存在未登记的 GraphQL operation').toEqual([]);
+});
+
 /**
  * 假 Token 角色守卫用例的精确响应拦截（trace 实测，2026-09-25）：
  * ENGINEER 访问 /customer/repair-requests 由路由 loader 直接重定向到 /engineer，
  * 重定向目标页只发起 `query EngineerRepairRequests`（scope AVAILABLE / MINE 各一次）；
  * seedAuthSession 写入的是假 Token，不接管时后端返 UNAUTHENTICATED 会触发全局失效
- * 链路（清会话 + 跳登录），与守卫断言竞态。只接管该操作并返回空页数据，
- * 其余请求不接管（保持真实网络行为，异常操作会照常暴露）。
+ * 链路（清会话 + 跳登录），与守卫断言竞态。只接管该操作并返回空页数据；
+ * 其余 operation 不再 `route.continue()` 放行到真实后端，而是失败关闭并留痕
+ * （本文件是纯 mock 组，真实后端数据流见 repair-request-manage-real.spec.ts）。
  */
 async function fulfillEngineerWorkbenchQuery(page: Page): Promise<void> {
   await page.route('**/graphql', async (route) => {
     const payload = route.request().postDataJSON() as {
+      operationName?: string;
       query?: string;
       variables?: { pagination?: { page?: number; pageSize?: number } };
     };
 
     if (!payload.query?.includes('query EngineerRepairRequests')) {
-      await route.continue();
+      const operationName = payload.operationName ?? '(缺少)';
+      unregisteredOperations.push(operationName);
+
+      await route.fulfill({
+        body: JSON.stringify({
+          errors: [{ message: `repair-request-manage 未登记 operation：${operationName}` }],
+        }),
+        contentType: 'application/json',
+        status: 200,
+      });
+
       return;
     }
 

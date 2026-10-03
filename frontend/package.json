@@ -17,6 +17,7 @@
     "test:e2e:pr5-real": "playwright test --config=playwright.account-settings-real.config.ts e2e-real/pr5-real-flow.spec.ts",
     "test:e2e:pr5-cleanup-safety": "playwright test --config=playwright.pr5-cleanup-safety.config.ts",
     "test:e2e:auth-admin-real": "playwright test --config=playwright.auth-admin-real.config.ts e2e-real/auth-admin-real.spec.ts",
+    "test:e2e:real-backend-dedicated": "playwright test --config=playwright.real-backend-dedicated.config.ts",
     "test:unit:watch": "vitest",
     "check": "npm run format:check && npm run lint && npm run build",
     "security:audit": "npm audit --registry=https://registry.npmjs.org",

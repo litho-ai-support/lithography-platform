@@ -1,5 +1,5 @@
 // e2e-real/global-setup.ts
-// 专用账号设置真实联调的全局前置（R4 复核修正轮 P1/P2/P3）：
+// 多个专用隔离真实 E2E Playwright 配置共用的全局前置：
 //
 // 1. 硬失败门：物理清理授权（E2E_ALLOW_PHYSICAL_CLEANUP=1）缺失、目标库不合法或
 //    与专用库不一致时，联调链路直接失败，不得 skip 掩盖；

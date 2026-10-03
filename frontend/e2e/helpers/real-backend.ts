@@ -1,11 +1,13 @@
 // e2e/helpers/real-backend.ts
 //
 // 真实后端 e2e 的共享工具（自 repair-request-create.spec.ts 提取，供多个 spec 复用）。
-// 前提（不满足时用例应走 test.skip 而不是失败）：
-// 1. 本地 dev 后端在 127.0.0.1:3000 运行，且启动时 APP_CORS_ORIGINS 运行时覆盖含 http://127.0.0.1:4173；
-// 2. backend/env/.env.development 存在（本地文件，不入库）且本机可用 mysql CLI；
-// 3. frontend/env/.env.development.local 提供 VITE_GRAPHQL_ENDPOINT，否则前端回退相对路径 /graphql，
-//    浏览器侧请求到不了本地后端。
+// 前置处理按入口区分：普通 Playwright 入口在本地真实后端、环境文件或浏览器通道不可用时可跳过；
+// 专用隔离入口开启严格模式，前置不满足必须失败，不能以 skipped 代替真实链路验收。
+// 普通入口的本地前提：
+// 1. dev 后端运行于 127.0.0.1:3000，且 APP_CORS_ORIGINS 放行 http://127.0.0.1:4173；
+// 2. backend/env/.env.development 存在（本地文件，不入库），本机可用 mysql CLI；
+// 3. frontend/env/.env.development.local 提供 VITE_GRAPHQL_ENDPOINT，或 Vite 配置了 /graphql 代理。
+// 专用入口的数据库授权、隔离库与连接一致性由专用 Playwright 配置和 global setup 强制校验。
 // 真实链路用例产生的数据由用例自行清理或恢复，不污染共享开发库基线。
 
 import { execFileSync } from 'node:child_process';
@@ -17,6 +19,7 @@ import {
   DEDICATED_BACKEND_ORIGIN,
   DEDICATED_E2E_DB_NAME,
   DEDICATED_E2E_PHYSICAL_CLEANUP_ENV,
+  DEDICATED_E2E_STRICT_MODE_ENV,
 } from '../../e2e-real/dedicated-e2e-environment';
 
 // 后端源（origin）收口：默认仍指向本地 dev 后端 127.0.0.1:3000（既有真实链路 spec 口径不变）。
@@ -121,6 +124,98 @@ export function hasFrontendGraphQLEndpoint(): boolean {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// 真实后端预检策略（共享，唯一判定源）
+//
+// 四个真实 spec 的前置条件完全一致，此前各自复写三连 test.skip，容易出现
+// 「某条路径漏改、严格入口仍静默 skip」的缺口。此处集中为：
+// - decideRealBackendPrerequisite：纯函数判定，可直接单测（配置缺失 / 通道不可达 /
+//   后端不可用 三类原因 + 普通/严格两种模式）；
+// - resolveRealBackendPrerequisite：IO 包装，采集三态后交给纯函数判定；
+// - 专用入口由 playwright 配置注入 DEDICATED_E2E_STRICT_MODE_ENV=1 开启严格模式，
+//   前提不满足时抛错让用例 failed，绝不以 skipped 掩盖；普通入口不注入，
+//   继续返回跳过原因，保持既有 skip 语义。
+// 严格模式的错误文本只含原因常量，不含 env 值、密码或 Token。
+// ---------------------------------------------------------------------------
+
+const ENV_FILE_MISSING_REASON =
+  'backend/env/.env.development 缺失（本地文件，不入库），跳过真实后端用例';
+const FRONTEND_CHANNEL_MISSING_REASON =
+  '前端真实通道不可达（未配置 VITE_GRAPHQL_ENDPOINT 且 vite dev server 无 /graphql 转发），跳过真实后端用例';
+const BACKEND_UNAVAILABLE_REASON = '本地后端不可用或不可登录，跳过真实后端用例';
+
+export interface RealBackendPrerequisiteState {
+  readonly envAvailable: boolean;
+  readonly frontendChannelAvailable: boolean;
+  readonly backendAvailable: boolean;
+}
+
+export interface RealBackendPrerequisiteOptions {
+  /** 是否需要浏览器侧真实通道：纯后端契约用例（如授权矩阵）可置 false */
+  readonly requireFrontendChannel?: boolean;
+  /** 严格模式：前提不满足时抛错而非返回跳过原因；缺省取进程开关 */
+  readonly strict?: boolean;
+}
+
+/** 严格模式开关：专用 playwright 配置注入 '1' 时开启；普通入口不注入即为关闭 */
+export function isRealBackendStrictMode(): boolean {
+  return process.env[DEDICATED_E2E_STRICT_MODE_ENV] === '1';
+}
+
+/**
+ * 纯判定：三态预检结果 → 就绪返回 null；普通模式返回跳过原因；严格模式抛错。
+ * 判定顺序与既有 beforeEach 完全一致：env 文件 → 前端通道 → 后端探针。
+ */
+export function decideRealBackendPrerequisite(
+  state: RealBackendPrerequisiteState,
+  options: RealBackendPrerequisiteOptions = {},
+): string | null {
+  const { requireFrontendChannel = true, strict = isRealBackendStrictMode() } = options;
+
+  let reason: string | null = null;
+
+  if (!state.envAvailable) {
+    reason = ENV_FILE_MISSING_REASON;
+  } else if (requireFrontendChannel && !state.frontendChannelAvailable) {
+    reason = FRONTEND_CHANNEL_MISSING_REASON;
+  } else if (!state.backendAvailable) {
+    reason = BACKEND_UNAVAILABLE_REASON;
+  }
+
+  if (reason === null) {
+    return null;
+  }
+
+  if (strict) {
+    throw new Error(
+      `真实后端预检失败（专用失败关闭严格模式，拒绝以 skipped 掩盖）：${reason}；` +
+        '请确认专用后端已在隔离端口就绪、专用库连接可用后重试。',
+    );
+  }
+
+  return reason;
+}
+
+/**
+ * IO 包装：采集「env 文件 / 前端通道 / 后端健康与登录探针」三态后交给纯判定。
+ * env 文件缺失时不再发起后端探针，避免无意义网络等待。
+ */
+export async function resolveRealBackendPrerequisite(
+  options: RealBackendPrerequisiteOptions = {},
+): Promise<string | null> {
+  const env = readBackendEnvOrNull();
+  const backendAvailable = env === null ? false : await isRealBackendAvailable(env);
+
+  return decideRealBackendPrerequisite(
+    {
+      backendAvailable,
+      envAvailable: env !== null,
+      frontendChannelAvailable: hasFrontendGraphQLEndpoint(),
+    },
+    options,
+  );
 }
 
 // 专用真实链路同一性检查（R4 复核修正轮 P2）：当 E2E_BACKEND_ORIGIN 指向专用后端时，

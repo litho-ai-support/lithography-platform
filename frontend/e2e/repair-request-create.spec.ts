@@ -6,12 +6,10 @@ import { readStoredAuthSession, seedAuthSession } from './helpers/auth-session-s
 import {
   cleanupE2ERepairRequest,
   findRepairRequestByRequestNo,
-  hasFrontendGraphQLEndpoint,
-  isRealBackendAvailable,
   readBackendEnv,
-  readBackendEnvOrNull,
   realLoginAccountId,
   REQUEST_NO_PATTERN,
+  resolveRealBackendPrerequisite,
 } from './helpers/real-backend';
 
 const CREATE_PAGE_PATH = '/customer/repair-requests/new';
@@ -474,20 +472,9 @@ test('transport failure on submit keeps the form and must not clear the session'
 
 test.describe('real backend mutation', () => {
   test.beforeEach(async () => {
-    const env = readBackendEnvOrNull();
-    test.skip(
-      env === null,
-      'backend/env/.env.development 缺失（本地文件，不入库），跳过真实后端用例',
-    );
-    test.skip(
-      !hasFrontendGraphQLEndpoint(),
-      'frontend/env/.env.development.local 未配置 VITE_GRAPHQL_ENDPOINT，真实通道不可达，跳过真实后端用例',
-    );
-    // 走到这里 env 必非 null：test.skip 条件为真时会抛错终止用例。
-    test.skip(
-      !(await isRealBackendAvailable(env as Record<string, string>)),
-      '本地后端不可用或不可登录，跳过真实后端用例',
-    );
+    // 共享预检：普通入口返回跳过原因（保持既有 skip 语义），专用入口严格模式直接失败
+    const skipReason = await resolveRealBackendPrerequisite();
+    test.skip(skipReason !== null, skipReason ?? '');
   });
 
   test('customer completes real login, creates a repair request and the row lands in db', async ({

@@ -16,13 +16,11 @@ import {
   deleteE2EReferenceDocumentRowsByIds,
   deleteE2EReferenceDocumentStorageFilesByIds,
   findReferenceDocumentStorageReferenceById,
-  hasFrontendGraphQLEndpoint,
-  isRealBackendAvailable,
   readBackendEnv,
-  readBackendEnvOrNull,
   realGraphqlCall,
   realRestDownload,
   REFERENCE_DOCUMENT_E2E_TITLE_PREFIX,
+  resolveRealBackendPrerequisite,
 } from './helpers/real-backend';
 
 const LIST_PATH = '/reference-documents';
@@ -108,19 +106,9 @@ async function cleanupE2EDocuments(
 
 test.describe('real backend reference document flow', () => {
   test.beforeEach(async () => {
-    const env = readBackendEnvOrNull();
-    test.skip(
-      env === null,
-      'backend/env/.env.development 缺失（本地文件，不入库），跳过真实后端用例',
-    );
-    test.skip(
-      !hasFrontendGraphQLEndpoint(),
-      '前端真实通道不可达（未配置 VITE_GRAPHQL_ENDPOINT 且 vite dev server 无 /graphql 转发），跳过真实后端用例',
-    );
-    test.skip(
-      !(await isRealBackendAvailable(env as Record<string, string>)),
-      '本地后端不可用或不可登录，跳过真实后端用例',
-    );
+    // 共享预检：普通入口返回跳过原因（保持既有 skip 语义），专用入口严格模式直接失败
+    const skipReason = await resolveRealBackendPrerequisite();
+    test.skip(skipReason !== null, skipReason ?? '');
   });
 
   // T-03 主链路：管理员登录 → 列表（种子可见、已软删不可见）→ 新增指定型号资料 →
