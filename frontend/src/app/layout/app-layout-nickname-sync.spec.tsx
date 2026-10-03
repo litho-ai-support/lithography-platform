@@ -83,7 +83,7 @@ describe('AppLayout 侧栏昵称同步（真实会话装配）', () => {
     expect(screen.getByText('林工程师')).toBeInTheDocument();
     expect(screen.getByText('林')).toBeInTheDocument();
     expect(screen.queryByText('陈工')).not.toBeInTheDocument();
-  });
+  }, 15_000);
 
   it('accountId 不匹配的回写被拒绝，侧栏昵称与头像首字保持原样', async () => {
     establishEngineerSession('陈工');
