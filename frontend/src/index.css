@@ -2065,3 +2065,250 @@ body {
   color: var(--ant-color-text-tertiary);
   font-size: 0.75rem;
 }
+
+/* ===== PR6 登录页壳层与管理员首页卡（登录页 / 管理员工作台）=====
+   登录壳层仅精确路由 /login 消费；本区只做布局 wrapper，颜色一律消费既有主题 Token
+   与语义变量（--workspace-bg / --brand-mark-* / --text-* / --activity-item-* 等），
+   不新增第二套主题、不散落页面私有色值。 */
+
+/* 登录壳层：整页灰蓝底（复用公共工作区背景变量），纵向排列品牌行与居中工作区 */
+.login-shell {
+  background: var(--workspace-bg);
+  flex-direction: column;
+}
+
+/* 左上角品牌：复用侧栏同一个 .brand-mark（32×32 / 8px 圆角 / 深板岩底白字），
+   标识与项目名之间只放一条细竖分隔线，不加英文副标题 */
+.login-brand {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  padding: 24px 28px;
+}
+
+/* 细竖分隔线：1px × 20px，消费公共边框色，不引入新色值 */
+.login-brand-divider {
+  background: var(--panel-border);
+  flex-shrink: 0;
+  height: 20px;
+  width: 1px;
+}
+
+.login-brand-name {
+  color: var(--text-strong);
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  white-space: nowrap;
+}
+
+/* 登录工作区：占满品牌行以外的高度，双栏主体在其中居中 */
+.login-workspace {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  padding: 24px 24px 72px;
+}
+
+/* 双栏主体：左欢迎文案 + 右登录卡作为一组整体（不是各自单独居中）。
+   margin-right 参与 flex 居中计算，使整组视觉重心略偏页面左侧。 */
+.login-layout {
+  align-items: center;
+  display: flex;
+  gap: 72px;
+  margin-right: 10%;
+  max-width: 840px;
+  width: 100%;
+}
+
+/* 左栏欢迎文案：主/副标题只在这里出现一次，登录卡内不重复 */
+.login-intro {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.login-intro-title {
+  color: var(--text-strong);
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.login-intro-subtitle {
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1.5rem;
+  margin: 12px 0 0;
+}
+
+/* 标题下主色短横（原型强调线）：消费 AntD 主色变量，仅装饰 */
+.login-intro-rule {
+  background: var(--ant-color-primary);
+  border-radius: 2px;
+  display: block;
+  height: 4px;
+  margin-top: 20px;
+  width: 36px;
+}
+
+.login-intro-note {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  margin: 16px 0 0;
+}
+
+/* 右栏登录卡外壳：固定基准宽度参与分配，剩余空间归左栏，窄屏只收缩不溢出 */
+.login-panel {
+  flex: 0 1 420px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.login-card-notice {
+  margin-bottom: 16px;
+}
+
+/* 窄屏：双栏改纵向堆叠，欢迎文案在登录卡上方；不缩字号、不横向溢出 */
+@media (max-width: 768px) {
+  .login-workspace {
+    align-items: flex-start;
+    padding: 16px 20px 40px;
+  }
+
+  .login-layout {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 28px;
+    margin-right: 0;
+    max-width: 420px;
+  }
+
+  .login-panel {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+}
+
+/* 管理员首页「当前账号」卡：左侧方形头像 + 身份文字，右侧只放「账号设置」入口
+   （退出登录不再出现在本卡，唯一退出入口是侧栏左下角常驻按钮）。 */
+/* 窄屏由 flex-wrap 自动折到身份信息下方，不挤压头像/昵称/角色/账号 ID */
+.admin-account {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.admin-account-identity {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+
+.admin-account-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.admin-account-name {
+  color: var(--text-strong);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-account-role {
+  align-items: center;
+  display: flex;
+}
+
+.admin-account-id {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+/* 管理员首页功能入口卡：图标 + 文案 + 导航按钮，仅作导航，不承载业务操作 */
+.admin-entry-card {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  min-width: 0;
+}
+
+.admin-entry-icon {
+  align-items: center;
+  background: var(--activity-item-hover-bg);
+  border-radius: 10px;
+  color: var(--ant-color-primary);
+  display: flex;
+  flex-shrink: 0;
+  font-size: 1.125rem;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+
+.admin-entry-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.admin-entry-title {
+  color: var(--text-strong);
+  font-size: 0.875rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.admin-entry-description {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  margin: 0;
+}
+
+/* 用户管理列表「联系方式」区块：整块是复制区域（含区块内空白），悬停 / 聚焦出现复制图标。
+   图标绝对定位，不参与列宽计算，长值仍由各行的 truncate 按现有列宽省略。 */
+.admin-user-contact {
+  cursor: copy;
+  padding-right: 16px;
+  position: relative;
+}
+
+.admin-user-contact-value:focus-visible,
+.admin-user-contact:focus-visible {
+  border-radius: var(--radius-control);
+  outline: 2px solid var(--ant-color-primary);
+  outline-offset: 2px;
+}
+
+.admin-user-contact-copy-icon {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  opacity: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  transition: opacity 0.15s ease-in-out;
+}
+
+.admin-user-contact:focus-within .admin-user-contact-copy-icon,
+.admin-user-contact:hover .admin-user-contact-copy-icon {
+  opacity: 1;
+}

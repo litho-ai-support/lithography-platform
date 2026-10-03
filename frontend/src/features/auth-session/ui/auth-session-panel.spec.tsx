@@ -22,6 +22,20 @@ function renderPanelRoute() {
   );
 }
 
+/** 管理员首页「当前账号」卡形态：挂 /admin，并提供账号设置路由承接导航断言。 */
+function renderAccountPanelRoute() {
+  return render(
+    <AuthSessionProvider>
+      <MemoryRouter initialEntries={['/admin']}>
+        <Routes>
+          <Route element={<AuthSessionPanel variant="account" />} path="/admin" />
+          <Route element={<div>account-settings-page-marker</div>} path="/account/settings" />
+        </Routes>
+      </MemoryRouter>
+    </AuthSessionProvider>,
+  );
+}
+
 describe('AuthSessionPanel', () => {
   afterEach(() => {
     authSessionStore.clearSession();
@@ -48,6 +62,33 @@ describe('AuthSessionPanel', () => {
     expect(screen.getByText('陈工')).toBeInTheDocument();
     expect(screen.getAllByText('ENGINEER').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /退出登录/ })).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('test-only-access-token');
+  });
+
+  it('账号卡只提供「账号设置」快捷入口，不再内嵌退出登录，且导航到既有账号设置路由（PR6）', async () => {
+    authSessionStore.establishSession({
+      accessToken: 'test-only-access-token',
+      accountId: 900201,
+      role: 'SUPER_ADMIN',
+      userInfo: {
+        accessGroup: ['SUPER_ADMIN'],
+        avatarUrl: null,
+        nickname: '系统管理员',
+      },
+    });
+
+    renderAccountPanelRoute();
+
+    expect(screen.getByRole('heading', { name: '当前账号' })).toBeInTheDocument();
+    expect(screen.getByText('账号 ID：900201')).toBeInTheDocument();
+    // 卡内不得再出现退出登录：唯一退出入口是侧栏左下角常驻按钮
+    expect(screen.queryByRole('button', { name: /退出登录/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /账号设置/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText('account-settings-page-marker')).toBeInTheDocument();
+    });
     expect(document.body.textContent).not.toContain('test-only-access-token');
   });
 

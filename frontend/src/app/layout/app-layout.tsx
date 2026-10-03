@@ -91,6 +91,11 @@ const KNOWLEDGE_BASE_PATH = '/admin/document-database';
 // 有意与知识库变体分开命名：两者取值同源但不互相扩散，便于独立登记与回归。
 const REFERENCE_LIBRARY_PATH = '/reference-documents';
 
+// 登录页精确路由（PR6）：登录页不展示工作台侧栏、字号档位与 AI 入口，
+// 改为整页灰蓝底 + 左上角品牌 + 居中登录卡的独立壳层。仅本路由生效，
+// 其他页面继续通用侧栏；不用前缀匹配，避免误伤其他页面。
+const LOGIN_PATH = '/login';
+
 export function AppLayout({ children }: AppLayoutProps = {}) {
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isSidecarOpen, setIsSidecarOpen] = useState(false);
@@ -110,6 +115,8 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
   const isKnowledgeBasePage = location.pathname === KNOWLEDGE_BASE_PATH;
   // 参考资料列表工作区变体同样按精确路由开启（PR5 整页计划）：新增/详情路由不继承
   const isReferenceLibraryPage = location.pathname === REFERENCE_LIBRARY_PATH;
+  // 登录页壳层变体按精确路由开启（PR6）
+  const isLoginPage = location.pathname === LOGIN_PATH;
   const navigationItems = useMemo(() => getNavigationItems(undefined, activeRole), [activeRole]);
   const activeNavigationPath = useMemo(
     () => resolveActiveNavigationPath(location.pathname, navigationItems),
@@ -185,6 +192,24 @@ export function AppLayout({ children }: AppLayoutProps = {}) {
     : isReferenceLibraryPage
       ? 'app-main app-main--reference-library'
       : 'app-main';
+
+  // 登录页壳层：白底工作台侧栏、字号档位与 AI 入口都不渲染，只保留整页灰蓝底、
+  // 固定在左上角的项目品牌与双栏登录主体（品牌沿用侧栏同一个 .brand-mark 与同一组
+  // 颜色 Token；标识与名称之间只加一条细竖分隔线，不出现英文副标题）。
+  if (isLoginPage) {
+    return (
+      <div className={`app-shell login-shell ${APP_THEME_CSS_VAR_KEY}`}>
+        <div className="login-brand">
+          <span aria-hidden="true" className="brand-mark">
+            LF
+          </span>
+          <span aria-hidden="true" className="login-brand-divider" />
+          <span className="login-brand-name">光刻维护平台</span>
+        </div>
+        <main className="login-workspace">{children ?? <Outlet />}</main>
+      </div>
+    );
+  }
 
   return (
     <div className={`app-shell ${APP_THEME_CSS_VAR_KEY}`}>

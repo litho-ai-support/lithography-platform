@@ -17,11 +17,15 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 import {
   assertApiSqlSameDatabase,
+  cleanupRegisteredDedicatedAccounts,
   DEDICATED_LOGIN_NAME_PATTERN,
   deleteE2EDedicatedAccountById,
   preflightDedicatedAccountCleanup,
   readAccountCountByLoginName,
   readDedicatedAccountCleanupResidue,
+  registerCreatedDedicatedAccount,
+  runWithCleanup,
+  toErrorMessage,
 } from './dedicated-account-cleanup';
 
 const { execFileSyncMock, readFileSyncMock } = vi.hoisted(() => ({
@@ -476,5 +480,287 @@ describe('real-backend API/SQL 同库探针（R4 修正轮）', () => {
     await expect(assertApiSqlSameDatabase()).rejects.toThrow('同库探针账号数据异常');
     mockSqlResponses({ isNull: '0', hex: 'NULL' });
     await expect(assertApiSqlSameDatabase()).rejects.toThrow('同库探针账号数据异常');
+  });
+});
+
+// 最小修复计划 P1/P2：创建响应登记 + 逐账号清理编排 + 主流程/清理双错报告。
+// 全部为纯逻辑负例（不启动 mysql、不触真实数据库），只验证编排与错误聚合语义。
+describe('专用账号创建登记与逐账号清理编排（最小修复计划 P1/P2）', () => {
+  /** adminCreateUser 成功响应体（数据库生成 ID） */
+  function createResponseBody(id: number): unknown {
+    return { data: { adminCreateUser: { id } } };
+  }
+
+  function registeredAccount(id: number): { id: number; loginName: string } {
+    return { id, loginName: `e2e-pw-175800000${id}` };
+  }
+
+  function zeroResidue(): { account: number; relatedBusiness: number; userInfo: number } {
+    return { account: 0, relatedBusiness: 0, userInfo: 0 };
+  }
+
+  it('登记必须早于后续步骤：登记后即使后续查询抛错，精确 ID 仍在清理清单（P1）', async () => {
+    const registry: Array<{ id: number; loginName: string }> = [];
+
+    await expect(
+      runWithCleanup(
+        async () => {
+          // 模拟：创建响应成功 → 立即登记 → 随后的列表 / 字段查询失败
+          registerCreatedDedicatedAccount(
+            registry,
+            createResponseBody(970100),
+            'e2e-pw-1758000000100',
+          );
+          throw new Error('后续 adminUsers 查询失败');
+        },
+        () => {
+          /* 清理语义由后续用例覆盖，这里只验证登记未被后续失败回滚 */
+        },
+      ),
+    ).rejects.toThrow('后续 adminUsers 查询失败');
+
+    expect(registry).toEqual([{ id: 970100, loginName: 'e2e-pw-1758000000100' }]);
+  });
+
+  it('登记从创建响应解析精确 ID：无效响应抛错且不登记（P1）', () => {
+    const registry: Array<{ id: number; loginName: string }> = [];
+
+    expect(() =>
+      registerCreatedDedicatedAccount(
+        registry,
+        { data: { adminCreateUser: null } },
+        'e2e-pw-1758000000101',
+      ),
+    ).toThrow('专用账号创建失败');
+    expect(registry).toEqual([]);
+
+    // 登录名未通过专用白名单：拒绝登记，且不登记任何条目
+    expect(() =>
+      registerCreatedDedicatedAccount(registry, createResponseBody(970100), 'mock_customer_alpha'),
+    ).toThrow('未通过白名单校验');
+    expect(registry).toEqual([]);
+  });
+
+  it('首个账号删除失败不阻断后续账号，删除错误被聚合报告（P2）', () => {
+    const attempted: number[] = [];
+    const deleteFn = (id: number) => {
+      attempted.push(id);
+
+      if (id === 101) {
+        throw new Error('账号 101 删除被拒');
+      }
+    };
+
+    let thrown: unknown;
+    try {
+      cleanupRegisteredDedicatedAccounts(
+        [registeredAccount(101), registeredAccount(102)],
+        deleteFn,
+        zeroResidue,
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    // 后续账号仍被尝试清理
+    expect(attempted).toEqual([101, 102]);
+    expect(toErrorMessage(thrown)).toContain('账号 101（e2e-pw-175800000101）物理删除失败');
+    expect(toErrorMessage(thrown)).toContain('账号 101 删除被拒');
+  });
+
+  it('残留非零与残留核对失败分别记录，且不阻断后续账号（P2）', () => {
+    const checked: number[] = [];
+    const residueFn = (id: number) => {
+      checked.push(id);
+
+      if (id === 102) {
+        throw new Error('残留核对 SQL 失败');
+      }
+      if (id === 103) {
+        return { account: 0, relatedBusiness: 0, userInfo: 1 };
+      }
+
+      return zeroResidue();
+    };
+
+    let thrown: unknown;
+    try {
+      cleanupRegisteredDedicatedAccounts(
+        [registeredAccount(101), registeredAccount(102), registeredAccount(103)],
+        () => {},
+        residueFn,
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(checked).toEqual([101, 102, 103]);
+    expect(toErrorMessage(thrown)).toContain('账号 102（e2e-pw-175800000102）残留核对失败');
+    expect(toErrorMessage(thrown)).toContain('残留核对 SQL 失败');
+    expect(toErrorMessage(thrown)).toContain('账号 103（e2e-pw-175800000103）清理后仍有残留');
+  });
+
+  it('正常路径：全部本轮账号被清理且逐账号残留为零，不抛错（P2）', () => {
+    const deleted: number[] = [];
+    const checked: number[] = [];
+
+    expect(() =>
+      cleanupRegisteredDedicatedAccounts(
+        [registeredAccount(101), registeredAccount(102)],
+        (id) => deleted.push(id),
+        (id) => {
+          checked.push(id);
+
+          return zeroResidue();
+        },
+      ),
+    ).not.toThrow();
+
+    expect(deleted).toEqual([101, 102]);
+    expect(checked).toEqual([101, 102]);
+  });
+
+  it('空清单为 no-op：不执行任何删除 / 残留核对（P2）', () => {
+    const deleteFn = vi.fn();
+    const residueFn = vi.fn();
+
+    expect(() => cleanupRegisteredDedicatedAccounts([], deleteFn, residueFn)).not.toThrow();
+    expect(deleteFn).not.toHaveBeenCalled();
+    expect(residueFn).not.toHaveBeenCalled();
+  });
+
+  it('主流程与清理同时失败：两类错误都被报告（P2）', async () => {
+    let thrown: unknown;
+    try {
+      await runWithCleanup(
+        async () => {
+          throw new Error('主断言失败：角色字段不符');
+        },
+        () => {
+          throw new Error('专用账号清理失败——账号 101（e2e-pw-175800000101）物理删除失败：x');
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(toErrorMessage(thrown)).toContain('主断言失败：角色字段不符');
+    expect(toErrorMessage(thrown)).toContain('专用账号清理失败——账号 101');
+    expect(toErrorMessage(thrown)).toContain('此外清理失败');
+  });
+
+  it('主流程成功但清理失败：清理错误被抛出（不被 finally 之后的断言吞掉）（P2）', async () => {
+    await expect(
+      runWithCleanup(
+        async () => {},
+        () => {
+          throw new Error('清理失败：账号 101 残留非零');
+        },
+      ),
+    ).rejects.toThrow('清理失败：账号 101 残留非零');
+  });
+
+  it('主流程失败但清理成功：主流程错误被保留（P2）', async () => {
+    await expect(
+      runWithCleanup(
+        async () => {
+          throw new Error('主断言失败：状态非 ACTIVE');
+        },
+        () => {},
+      ),
+    ).rejects.toThrow('主断言失败：状态非 ACTIVE');
+  });
+});
+
+// 最小修复计划：账号清理与 context.close() 共用的收尾路径——两者独立执行、错误互不覆盖。
+// 全部为纯逻辑负例（mock 步骤函数，不启动 mysql、不触真实数据库）。
+describe('收尾步骤独立执行与错误合并（最小修复计划）', () => {
+  it('账号清理与关闭上下文同时失败：两类错误都被报告，且关闭步骤确实被执行', async () => {
+    const closeSpy = vi.fn(() => {
+      throw new Error('关闭上下文失败：target closed');
+    });
+
+    let thrown: unknown;
+    try {
+      await runWithCleanup(
+        async () => {},
+        {
+          label: '账号清理',
+          run: () => {
+            throw new Error('账号清理失败：账号 101 残留非零');
+          },
+        },
+        { label: '关闭浏览器上下文', run: closeSpy },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    const message = toErrorMessage(thrown);
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(message).toContain('清理步骤 1（账号清理）失败');
+    expect(message).toContain('账号清理失败：账号 101 残留非零');
+    expect(message).toContain('清理步骤 2（关闭浏览器上下文）失败');
+    expect(message).toContain('关闭上下文失败：target closed');
+  });
+
+  it('首个收尾步骤失败时仍继续尝试后续步骤（无条件 await）', async () => {
+    const order: string[] = [];
+    const secondStep = vi.fn(() => {
+      order.push('second');
+    });
+
+    await expect(
+      runWithCleanup(
+        async () => {},
+        () => {
+          order.push('first');
+          throw new Error('第一步收尾失败');
+        },
+        secondStep,
+      ),
+    ).rejects.toThrow('第一步收尾失败');
+
+    expect(order).toEqual(['first', 'second']);
+    expect(secondStep).toHaveBeenCalledTimes(1);
+  });
+
+  it('主流程与两个收尾步骤同时失败：三类错误都保留，主错误不被后续错误覆盖', async () => {
+    let thrown: unknown;
+    try {
+      await runWithCleanup(
+        async () => {
+          throw new Error('主断言失败：角色字段不符');
+        },
+        () => {
+          throw new Error('账号清理失败：删除被拒');
+        },
+        () => {
+          throw new Error('关闭上下文失败：already closed');
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    const message = toErrorMessage(thrown);
+
+    expect(message).toContain('主流程失败：主断言失败：角色字段不符');
+    expect(message).toContain('此外清理失败');
+    expect(message).toContain('账号清理失败：删除被拒');
+    expect(message).toContain('关闭上下文失败：already closed');
+  });
+
+  it('仅关闭上下文一项失败：抛出原始关闭错误（保留原始诊断）', async () => {
+    await expect(
+      runWithCleanup(
+        async () => {},
+        () => {},
+        () => {
+          throw new Error('关闭上下文失败：仅此一步');
+        },
+      ),
+    ).rejects.toThrow('关闭上下文失败：仅此一步');
   });
 });

@@ -1,6 +1,6 @@
 // src/features/auth-session/ui/login-form.spec.tsx
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GraphQLIngressError } from '@/shared/graphql';
@@ -149,5 +149,48 @@ describe('LoginForm', () => {
       expect(screen.getByText('请输入密码。')).toBeInTheDocument();
     });
     expect(mockedLoginWithPassword).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 键盘提交（Enter 触发的表单 submit）与点击按钮共用同一条 `onFinish` 路径；
+   * jsdom 不实现输入框的隐式提交，这里直接派发表单 submit 事件等价驱动。
+   * 第二次提交要先完成自己的异步校验才会进到 `onFinish`，因此必须在第一次请求仍在途时
+   * 把校验排空，才能观察到 `submittingRef` 守卫——这正是点击路径观察不到的一层：
+   * antd 的 loading 按钮会直接吞掉第二次 click，而键盘提交不会经过按钮。
+   */
+  it('submits from the keyboard and still coalesces an in-flight duplicate', async () => {
+    let resolveLogin: (session: AuthSessionView) => void = () => {};
+    mockedLoginWithPassword.mockImplementation(
+      () =>
+        new Promise<AuthSessionView>((resolve) => {
+          resolveLogin = resolve;
+        }),
+    );
+    render(<LoginForm />);
+
+    fillCredentials('mock_engineer_chen', 'test-only-password');
+
+    const form = screen.getByLabelText('密码').closest('form') as HTMLFormElement;
+    expect(form).not.toBeNull();
+
+    fireEvent.submit(form);
+    await waitFor(() => {
+      expect(mockedLoginWithPassword).toHaveBeenCalledTimes(1);
+    });
+
+    // 在途期间再次回车：让它的校验先跑完，守卫必须仍然只放行一次凭据校验。
+    fireEvent.submit(form);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mockedLoginWithPassword).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveLogin(authenticatedView);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('登录成功，会话已建立。')).toBeInTheDocument();
+    });
   });
 });

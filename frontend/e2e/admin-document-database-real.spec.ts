@@ -20,14 +20,12 @@ import { expect, type Page, test } from '@playwright/test';
 
 import {
   deleteRepairRequestRowsByIds,
-  hasFrontendGraphQLEndpoint,
   isPhysicalCleanupEnabled,
-  isRealBackendAvailable,
   readBackendEnv,
-  readBackendEnvOrNull,
   realGraphqlCall,
   realLoginAccountId,
   REQUEST_NO_PATTERN,
+  resolveRealBackendPrerequisite,
 } from './helpers/real-backend';
 
 const PAGE_PATH = '/admin/document-database';
@@ -240,19 +238,9 @@ async function cleanupRunRequests(
 
 test.describe('real backend admin document database', () => {
   test.beforeEach(async () => {
-    const env = readBackendEnvOrNull();
-    test.skip(
-      env === null,
-      'backend/env/.env.development 缺失（本地文件，不入库），跳过真实后端用例',
-    );
-    test.skip(
-      !hasFrontendGraphQLEndpoint(),
-      '前端真实通道不可达（未配置 VITE_GRAPHQL_ENDPOINT 且 vite dev server 无 /graphql 转发），跳过真实后端用例',
-    );
-    test.skip(
-      !(await isRealBackendAvailable(env as Record<string, string>)),
-      '本地后端不可用或不可登录，跳过真实后端用例',
-    );
+    // 共享预检：普通入口返回跳过原因（保持既有 skip 语义），专用入口严格模式直接失败
+    const skipReason = await resolveRealBackendPrerequisite();
+    test.skip(skipReason !== null, skipReason ?? '');
   });
 
   // 计划表 S4.5 主链路：四标签真实渲染 + 真实统计入卡 + seed 行 + 会话消息详情 +
@@ -548,15 +536,9 @@ test.describe('real backend admin document database', () => {
 // 不依赖前端 dev server，故单列一个 describe，仅以「后端可用 + 可登录」为前置。
 test.describe('real backend admin document database - authorization', () => {
   test.beforeEach(async () => {
-    const env = readBackendEnvOrNull();
-    test.skip(
-      env === null,
-      'backend/env/.env.development 缺失（本地文件，不入库），跳过真实后端用例',
-    );
-    test.skip(
-      !(await isRealBackendAvailable(env as Record<string, string>)),
-      '本地后端不可用或不可登录，跳过真实后端用例',
-    );
+    // 纯后端契约用例不依赖前端 dev server，共享预检只要求 env 与后端可用
+    const skipReason = await resolveRealBackendPrerequisite({ requireFrontendChannel: false });
+    test.skip(skipReason !== null, skipReason ?? '');
   });
 
   test('engineer 越权直调管理员维修申请 Query 返回 FORBIDDEN', async () => {

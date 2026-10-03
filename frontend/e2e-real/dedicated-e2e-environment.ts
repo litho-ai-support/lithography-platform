@@ -29,6 +29,13 @@ export const DEDICATED_BACKEND_ORIGIN = 'http://127.0.0.1:3100';
 /** 物理清理显式授权变量：只能由执行者在启动前设置，不提供默认值 */
 export const DEDICATED_E2E_PHYSICAL_CLEANUP_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
 
+/**
+ * 专用入口的失败关闭严格模式开关：由专用 playwright 配置在加载时显式注入（值为 '1'），
+ * 不由执行者手工设置，避免漏设后静默退回 skip。普通默认入口不注入该变量，
+ * 继续保持「无本地后端时 skip」的既有语义。
+ */
+export const DEDICATED_E2E_STRICT_MODE_ENV = 'E2E_REAL_BACKEND_STRICT';
+
 /** 统一注入子进程的五项数据库连接键（与 backend database.config / SQL helper 同口径） */
 export const DEDICATED_DB_CONNECTION_KEYS = [
   'DB_HOST',
