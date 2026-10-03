@@ -20,6 +20,10 @@
 //   webServer 的 reuseExistingServer:false 兜底；本文件内再加 API/SQL 同库与健康/代理探针）；
 // - 本轮专用账号写入前必须通过 API/SQL 同库探针（assertApiSqlSameDatabase）；
 // - 本轮自建账号一律使用数据库生成主键，清理绑定 accountId + 专用登录名双因子；
+// - 创建响应一返回即**立即登记**精确 ID（早于任何后续查询 / 断言 / 弹窗关闭等待），后续步骤失败
+//   不回滚登记；逐账号独立清理（某账号失败不阻断后续），删除错误与逐账号残留核对错误一并聚合
+//   报告，主流程与清理同时失败时两类错误都保留（见 helper 的 registerCreatedDedicatedAccount /
+//   cleanupRegisteredDedicatedAccounts / runWithCleanup）；
 // - 不修改共享 Mock 账号的密码 / 状态 / 角色；共享管理员只用于合法管理与被拒保护验证；
 // - 浏览器流量必须落在专用前端 / 专用后端来源，出现 127.0.0.1:3000 即判失败。
 
@@ -28,11 +32,13 @@ import { expect, type Page, test } from '@playwright/test';
 import { readStoredAuthSession } from '../e2e/helpers/auth-session-seed';
 import {
   assertApiSqlSameDatabase,
+  cleanupRegisteredDedicatedAccounts,
   DEDICATED_LOGIN_NAME_PATTERN,
-  deleteE2EDedicatedAccountById,
   preflightDedicatedAccountCleanup,
   readAccountCountByLoginName,
-  readDedicatedAccountCleanupResidue,
+  registerCreatedDedicatedAccount,
+  type RegisteredDedicatedAccount,
+  runWithCleanup,
 } from '../e2e/helpers/dedicated-account-cleanup';
 import { assertBrowserRequestsBoundToDedicatedOrigins } from '../e2e/helpers/dedicated-real-link-assertions';
 import {
@@ -173,11 +179,18 @@ async function searchAdminUser(page: Page, keyword: string): Promise<void> {
   await page.getByPlaceholder('搜索登录名 / 登录邮箱 / 昵称').fill(keyword);
 }
 
-/** 通过创建弹窗创建一名普通用户（角色仅 ENGINEER / CUSTOMER） */
+/**
+ * 通过创建弹窗创建一名普通用户（角色仅 ENGINEER / CUSTOMER）。
+ *
+ * 评审 P1：点击创建前先登记响应监听，adminCreateUser 成功响应一返回即解析数据库生成 ID 并
+ * **立即**登记到本轮清理清单（返回登记项）——早于弹窗关闭等待与调用方任何后续查询 / 断言；
+ * 即便本函数后续的 `expect(dialog).toBeHidden()` 或调用方后续步骤失败，精确 ID 也已进入清单。
+ */
 async function createUserViaPage(
   page: Page,
   input: { roleLabel: string; nickname: string; loginName: string; password: string },
-): Promise<void> {
+  registry: RegisteredDedicatedAccount[],
+): Promise<RegisteredDedicatedAccount> {
   await page.getByRole('button', { name: '创建用户' }).click();
 
   const dialog = page.getByRole('dialog');
@@ -195,10 +208,25 @@ async function createUserViaPage(
   await dialog.getByLabel('登录名（登录凭据之一）', { exact: true }).fill(input.loginName);
   await dialog.getByLabel('初始密码', { exact: true }).fill(input.password);
   await dialog.getByLabel('确认初始密码', { exact: true }).fill(input.password);
+  // 点击创建前先登记响应监听：创建响应一返回即捕获精确 ID 并立即登记清理目标
+  const createResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().includes('/graphql') &&
+      response.request().method() === 'POST' &&
+      (response.request().postData() ?? '').includes('adminCreateUser'),
+  );
+
   // 弹窗底部确认按钮的可访问名是「创 建」：AntD 会在两个汉字间自动插空格
   //（与登录按钮 /登\s*录/ 同一现象），故不能用 exact: true 的「创建」。
   await dialog.getByRole('button', { name: /创\s*建/ }).click();
+
+  const createResponse = await createResponsePromise;
+  const createBody = (await createResponse.json().catch(() => null)) as unknown;
+  const registered = registerCreatedDedicatedAccount(registry, createBody, input.loginName);
+
   await expect(dialog).toBeHidden();
+
+  return registered;
 }
 
 /** Node 侧真实登录尝试：不抛错，返回是否拿到 Token 与首个错误大类（供负例断言用） */
@@ -311,16 +339,6 @@ async function readAdminUserByLoginName(
   return match;
 }
 
-function readCreatedAccountId(body: unknown): number {
-  const id = (body as { data?: { adminCreateUser?: { id?: unknown } } }).data?.adminCreateUser?.id;
-
-  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) {
-    throw new Error(`专用账号创建失败：${JSON.stringify(body).slice(0, 300)}`);
-  }
-
-  return id;
-}
-
 /** 经真实管理员 API 修改账号状态（Node helper 每次重新登录，不受短 TTL 影响） */
 async function setUserStatusViaApi(
   env: Record<string, string>,
@@ -336,20 +354,6 @@ async function setUserStatusViaApi(
 
   if ((body as { errors?: unknown[] }).errors !== undefined) {
     throw new Error(`adminSetUserStatus(${status}) 失败：${JSON.stringify(body).slice(0, 300)}`);
-  }
-}
-
-/**
- * 在 finally 内执行恢复动作并捕获失败：恢复失败必须被发现，但不能在 finally 中抛出
- * （那会掩盖主链路的原始断言错误）。失败交给 finally 之后的 `expect(restoreFailure)` 报告。
- */
-async function captureRestoreFailure(restore: () => Promise<void>): Promise<unknown> {
-  try {
-    await restore();
-
-    return null;
-  } catch (error) {
-    return error;
   }
 }
 
@@ -400,83 +404,79 @@ test.describe('auth & admin real backend flow（隔离库 lithography_e2e）', (
     preflightDedicatedAccountCleanup();
     await assertApiSqlSameDatabase(env);
 
-    const created: Array<{ id: number; loginName: string }> = [];
-    let restoreFailure: unknown;
+    // 本轮登记的精确清理目标（创建响应一返回即登记，见 createUserViaPage / 评审 P1）
+    const created: RegisteredDedicatedAccount[] = [];
 
-    try {
-      await loginViaUi(page, 'mock_super_admin', env.MOCK_SEED_PASSWORD, '/admin');
-      await enterAdminUsersFromNav(page);
+    await runWithCleanup(
+      async () => {
+        await loginViaUi(page, 'mock_super_admin', env.MOCK_SEED_PASSWORD, '/admin');
+        await enterAdminUsersFromNav(page);
 
-      for (const roleCase of [
-        { role: 'ENGINEER', roleLabel: '工程师' },
-        { role: 'CUSTOMER', roleLabel: '客户' },
-      ] as const) {
-        const loginName = buildDedicatedLoginName();
-        const nickname = `E2E 创建-${roleCase.role}-${Date.now()}`;
+        for (const roleCase of [
+          { role: 'ENGINEER', roleLabel: '工程师' },
+          { role: 'CUSTOMER', roleLabel: '客户' },
+        ] as const) {
+          const loginName = buildDedicatedLoginName();
+          const nickname = `E2E 创建-${roleCase.role}-${Date.now()}`;
 
-        await createUserViaPage(page, {
-          loginName,
-          nickname,
-          password: CREATE_PASSWORD,
-          roleLabel: roleCase.roleLabel,
-        });
+          // 创建辅助函数在 adminCreateUser 成功响应返回时立即登记精确 ID（早于弹窗关闭等待）
+          const registered = await createUserViaPage(
+            page,
+            {
+              loginName,
+              nickname,
+              password: CREATE_PASSWORD,
+              roleLabel: roleCase.roleLabel,
+            },
+            created,
+          );
 
-        // 后端权威视图：角色 / 状态与页面展示同口径
-        const item = await readAdminUserByLoginName(env, loginName);
+          // 后端权威视图：角色 / 状态与页面展示同口径，且 ID 与创建响应登记一致
+          const item = await readAdminUserByLoginName(env, loginName);
 
-        created.push({ id: item.id, loginName });
-        expect(item.role).toBe(roleCase.role);
-        expect(item.status).toBe('ACTIVE');
+          expect(item.id).toBe(registered.id);
+          expect(item.role).toBe(roleCase.role);
+          expect(item.status).toBe('ACTIVE');
 
-        await searchAdminUser(page, loginName);
+          await searchAdminUser(page, loginName);
 
-        const row = page.getByRole('row').filter({ hasText: loginName });
+          const row = page.getByRole('row').filter({ hasText: loginName });
 
-        await expect(row).toBeVisible();
-        await expect(row.getByText(roleCase.roleLabel)).toBeVisible();
-        await expect(row.getByText('启用')).toBeVisible();
+          await expect(row).toBeVisible();
+          await expect(row.getByText(roleCase.roleLabel)).toBeVisible();
+          await expect(row.getByText('启用')).toBeVisible();
 
-        // 刷新后列表数据保持一致：重新加载用户管理页并重新搜索，仍看到同一角色与状态
-        await page.reload();
-        await expect(page.getByRole('heading', { name: '用户管理' })).toBeVisible();
-        await searchAdminUser(page, loginName);
+          // 刷新后列表数据保持一致：重新加载用户管理页并重新搜索，仍看到同一角色与状态
+          await page.reload();
+          await expect(page.getByRole('heading', { name: '用户管理' })).toBeVisible();
+          await searchAdminUser(page, loginName);
 
-        const reloadedRow = page.getByRole('row').filter({ hasText: loginName });
+          const reloadedRow = page.getByRole('row').filter({ hasText: loginName });
 
-        await expect(reloadedRow).toBeVisible();
-        await expect(reloadedRow.getByText(roleCase.roleLabel)).toBeVisible();
-        await expect(reloadedRow.getByText('启用')).toBeVisible();
+          await expect(reloadedRow).toBeVisible();
+          await expect(reloadedRow.getByText(roleCase.roleLabel)).toBeVisible();
+          await expect(reloadedRow.getByText('启用')).toBeVisible();
 
-        // 单值角色三字段：identity_hint 单值、status / user_state 均为 ACTIVE、access_group 单角色
-        expect(
-          mysqlQuery(
-            `SELECT identity_hint, status FROM base_user_account WHERE id = ${item.id}`,
-          ).split('\t'),
-        ).toEqual([roleCase.role, 'ACTIVE']);
+          // 单值角色三字段：identity_hint 单值、status / user_state 均为 ACTIVE、access_group 单角色
+          expect(
+            mysqlQuery(
+              `SELECT identity_hint, status FROM base_user_account WHERE id = ${registered.id}`,
+            ).split('\t'),
+          ).toEqual([roleCase.role, 'ACTIVE']);
 
-        const infoColumns = mysqlQuery(
-          `SELECT user_state, access_group FROM base_user_info WHERE account_id = ${item.id}`,
-        ).split('\t');
+          const infoColumns = mysqlQuery(
+            `SELECT user_state, access_group FROM base_user_info WHERE account_id = ${registered.id}`,
+          ).split('\t');
 
-        expect(infoColumns[0]).toBe('ACTIVE');
-        expect(JSON.parse(infoColumns[1])).toEqual([roleCase.role]);
-      }
-
-      assertBrowserRequestsBoundToDedicatedOrigins(browserRequestUrls);
-    } finally {
-      restoreFailure = await captureRestoreFailure(async () => {
-        for (const entry of created) {
-          deleteE2EDedicatedAccountById(entry.id, entry.loginName);
-          expect(readDedicatedAccountCleanupResidue(entry.id)).toEqual({
-            account: 0,
-            relatedBusiness: 0,
-            userInfo: 0,
-          });
+          expect(infoColumns[0]).toBe('ACTIVE');
+          expect(JSON.parse(infoColumns[1])).toEqual([roleCase.role]);
         }
-      });
-    }
 
-    expect(restoreFailure).toBeNull();
+        assertBrowserRequestsBoundToDedicatedOrigins(browserRequestUrls);
+      },
+      // 逐账号独立清理（某账号失败不阻断后续），删除错误与逐账号残留核对错误一并聚合报告
+      () => cleanupRegisteredDedicatedAccounts(created),
+    );
 
     // 无关哨兵数据保持不变：共享 Mock 账号在专用账号清理后仍各 1 行
     expect(readAccountCountByLoginName('mock_super_admin')).toBe(1);
@@ -500,104 +500,98 @@ test.describe('auth & admin real backend flow（隔离库 lithography_e2e）', (
     await assertApiSqlSameDatabase(env);
 
     const loginName = buildDedicatedLoginName();
-    let accountId: number | null = null;
-    let restoreFailure: unknown;
+    // 本轮登记的精确清理目标（创建响应一返回即登记，见下）
+    const created: RegisteredDedicatedAccount[] = [];
 
-    try {
-      const created = await realGraphqlCall(
-        env,
-        ADMIN_CREATE_USER_MUTATION,
-        {
-          input: {
-            initialPassword: CREATE_PASSWORD,
-            loginName,
-            nickname: 'E2E 停用联调账号',
-            role: 'ENGINEER',
+    await runWithCleanup(
+      async () => {
+        const createdResponse = await realGraphqlCall(
+          env,
+          ADMIN_CREATE_USER_MUTATION,
+          {
+            input: {
+              initialPassword: CREATE_PASSWORD,
+              loginName,
+              nickname: 'E2E 停用联调账号',
+              role: 'ENGINEER',
+            },
           },
-        },
-        'mock_super_admin',
-      );
+          'mock_super_admin',
+        );
 
-      accountId = readCreatedAccountId(created.body);
-      const targetAccountId = accountId;
+        // 创建响应成功即立即登记精确 ID，早于任何后续登录 / 停用 / 断言
+        const accountId = registerCreatedDedicatedAccount(
+          created,
+          createdResponse.body,
+          loginName,
+        ).id;
 
-      // 初始密码真实 UI 登录并读取会话 Token（旧 Token 的来源）
-      await loginViaUi(page, loginName, CREATE_PASSWORD, '/engineer');
+        // 初始密码真实 UI 登录并读取会话 Token（旧 Token 的来源）
+        await loginViaUi(page, loginName, CREATE_PASSWORD, '/engineer');
 
-      const oldToken = await readStoredAccessToken(page);
+        const oldToken = await readStoredAccessToken(page);
 
-      if (oldToken === null) {
-        throw new Error('登录成功后未在唯一会话真源中找到 Access Token');
-      }
+        if (oldToken === null) {
+          throw new Error('登录成功后未在唯一会话真源中找到 Access Token');
+        }
 
-      // 管理员停用该账号
-      await setUserStatusViaApi(env, targetAccountId, 'INACTIVE');
+        // 管理员停用该账号
+        await setUserStatusViaApi(env, accountId, 'INACTIVE');
 
-      // 1) 旧 Token 的下一次真实受保护请求被拒（无伪造 Token、无 route 拦截）
-      const staleCall = await graphqlWithToken(oldToken, MY_ACCOUNT_SETTINGS_QUERY, {});
+        // 1) 旧 Token 的下一次真实受保护请求被拒（无伪造 Token、无 route 拦截）
+        const staleCall = await graphqlWithToken(oldToken, MY_ACCOUNT_SETTINGS_QUERY, {});
 
-      expect(readFirstGraphqlErrorCode(staleCall.body)).toBe('UNAUTHENTICATED');
+        expect(readFirstGraphqlErrorCode(staleCall.body)).toBe('UNAUTHENTICATED');
 
-      // 2) 停用后账号不能重新登录
-      const blockedLogin = await attemptRealLogin(loginName, CREATE_PASSWORD);
+        // 2) 停用后账号不能重新登录
+        const blockedLogin = await attemptRealLogin(loginName, CREATE_PASSWORD);
 
-      expect(blockedLogin.accessToken).toBeNull();
-      // 停用账户登录：后端 AUTH_ERROR.ACCOUNT_INACTIVE 经异常过滤器映射为 FORBIDDEN
-      //（graphql-exception.filter.ts），不是 UNAUTHENTICATED
-      expect(blockedLogin.errorCode).toBe('FORBIDDEN');
+        expect(blockedLogin.accessToken).toBeNull();
+        // 停用账户登录：后端 AUTH_ERROR.ACCOUNT_INACTIVE 经异常过滤器映射为 FORBIDDEN
+        //（graphql-exception.filter.ts），不是 UNAUTHENTICATED
+        expect(blockedLogin.errorCode).toBe('FORBIDDEN');
 
-      // 3) 停用后前端不再持有可用会话：真实受保护页不可达，会话真源被清理。
-      // 应用在旧 Token 的受保护请求被拒（UNAUTHENTICATED）时收敛一次失效周期：
-      // 清理会话真源并跳登录页。清理可能由停用后 /engineer 页的受保护请求先触发
-      // （走失败处理器，URL 带 reason=session-expired），也可能由本步重载受保护页时
-      // 的路由守卫触发（URL 为 /login?returnTo=...）；两者都是合法收敛路径，故此处
-      // 只断言「落到登录页 + 会话真源为空」，reason=session-expired 的精确形态由
-      // 「真实 Token 自然过期」用例专门断言。
-      await page.goto('/account/settings');
-      await page.waitForURL(/\/login(\?|$)/, { timeout: 15_000 });
-      await expect(page.getByLabel('账号或邮箱')).toBeVisible();
-      expect(await readStoredAuthSession(page)).toBeNull();
+        // 3) 停用后前端不再持有可用会话：真实受保护页不可达，会话真源被清理。
+        // 应用在旧 Token 的受保护请求被拒（UNAUTHENTICATED）时收敛一次失效周期：
+        // 清理会话真源并跳登录页。清理可能由停用后 /engineer 页的受保护请求先触发
+        // （走失败处理器，URL 带 reason=session-expired），也可能由本步重载受保护页时
+        // 的路由守卫触发（URL 为 /login?returnTo=...）；两者都是合法收敛路径，故此处
+        // 只断言「落到登录页 + 会话真源为空」，reason=session-expired 的精确形态由
+        // 「真实 Token 自然过期」用例专门断言。
+        await page.goto('/account/settings');
+        await page.waitForURL(/\/login(\?|$)/, { timeout: 15_000 });
+        await expect(page.getByLabel('账号或邮箱')).toBeVisible();
+        expect(await readStoredAuthSession(page)).toBeNull();
 
-      // 管理员重新启用
-      await setUserStatusViaApi(env, targetAccountId, 'ACTIVE');
+        // 管理员重新启用
+        await setUserStatusViaApi(env, accountId, 'ACTIVE');
 
-      // 4) 重新启用后新登录可访问真实受保护 Query
-      await loginViaUi(page, loginName, CREATE_PASSWORD, '/engineer');
+        // 4) 重新启用后新登录可访问真实受保护 Query
+        await loginViaUi(page, loginName, CREATE_PASSWORD, '/engineer');
 
-      const freshToken = await readStoredAccessToken(page);
+        const freshToken = await readStoredAccessToken(page);
 
-      if (freshToken === null) {
-        throw new Error('重新启用后登录成功但未在唯一会话真源中找到 Access Token');
-      }
+        if (freshToken === null) {
+          throw new Error('重新启用后登录成功但未在唯一会话真源中找到 Access Token');
+        }
 
-      const freshCall = await graphqlWithToken(freshToken, MY_ACCOUNT_SETTINGS_QUERY, {});
+        const freshCall = await graphqlWithToken(freshToken, MY_ACCOUNT_SETTINGS_QUERY, {});
 
-      expect(readFirstGraphqlErrorCode(freshCall.body)).toBeNull();
+        expect(readFirstGraphqlErrorCode(freshCall.body)).toBeNull();
 
-      const freshSettings = readMyAccountSettings(freshCall.body);
+        const freshSettings = readMyAccountSettings(freshCall.body);
 
-      expect(freshSettings.loginName).toBe(loginName);
-      expect(freshSettings.status).toBe('ACTIVE');
+        expect(freshSettings.loginName).toBe(loginName);
+        expect(freshSettings.status).toBe('ACTIVE');
 
-      assertBrowserRequestsBoundToDedicatedOrigins(browserRequestUrls);
-    } finally {
-      const cleanupAccountId = accountId;
+        assertBrowserRequestsBoundToDedicatedOrigins(browserRequestUrls);
+      },
+      // 收尾拆为两个独立步骤（最小修复计划）：账号清理失败也不阻断关闭；关闭失败不覆盖清理错误；
+      // 主断言同时失败时三类错误全部保留并通过步骤标签区分（见 runWithCleanup 聚合语义）
+      { label: '账号清理', run: () => cleanupRegisteredDedicatedAccounts(created) },
+      { label: '关闭浏览器上下文', run: () => context.close() },
+    );
 
-      if (cleanupAccountId !== null) {
-        restoreFailure = await captureRestoreFailure(async () => {
-          deleteE2EDedicatedAccountById(cleanupAccountId, loginName);
-          expect(readDedicatedAccountCleanupResidue(cleanupAccountId)).toEqual({
-            account: 0,
-            relatedBusiness: 0,
-            userInfo: 0,
-          });
-        });
-      }
-
-      await context.close();
-    }
-
-    expect(restoreFailure).toBeNull();
     expect(readAccountCountByLoginName('mock_super_admin')).toBe(1);
   });
 

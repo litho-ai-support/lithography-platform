@@ -1,6 +1,6 @@
 // playwright.real-backend-dedicated.config.ts
 // 四个真实后端 E2E spec（admin-document-database-real / reference-document-real /
-// repair-request-manage-real / repair-request-create）的专用隔离联调入口。
+// repair-request-manage-real / repair-request-create-real）的专用隔离联调入口。
 //
 // 为什么需要专用入口：默认配置（playwright.config.ts）的浏览器与 SQL helper 指向本地开发后端
 // （127.0.0.1:3000）与共享开发库 lithography_drill，而这四条 spec 会真实创建 / 软删行并上传文件；
@@ -94,7 +94,7 @@ export default defineConfig({
     '**/admin-document-database-real.spec.ts',
     '**/reference-document-real.spec.ts',
     '**/repair-request-manage-real.spec.ts',
-    '**/repair-request-create.spec.ts',
+    '**/repair-request-create-real.spec.ts',
   ],
   timeout: 120_000,
   use: {

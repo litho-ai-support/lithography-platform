@@ -315,27 +315,383 @@ export function isPhysicalCleanupEnabled(env: Record<string, string>): boolean {
 }
 
 /**
- * 按本次运行记录的精确 ID 物理清理参考资料行（负责人 0909 修复要求）。
- *
- * - ID 列表为空时 no-op，不启动 mysql 进程；
- * - 每个 ID 必须是安全正整数（白名单校验先于任何 SQL 组装）；
- * - SQL 仅包含传入的精确 ID（IN 列表），绝不按标题前缀批量匹配；
- * - 安全门不通过时抛错，mysql 进程绝不启动（含 finally 兜底路径）。
+ * 从创建响应体解析本轮创建的精确资料 ID（GraphQL data.createReferenceDocument.id /
+ * REST data.id）；非正整数即抛错。调用方在点击创建前注册响应监听、创建响应一返回即调用本函数
+ * 记录清理边界，早于成功页 / 详情页任何断言——即使后续断言失败，清理仍能按该 ID 执行；
+ * 拿不到 ID 时用例失败并提示本轮创建可能已落库、需人工核对残留（不按标题猜测归属）。
  */
-export function deleteE2EReferenceDocumentRowsByIds(ids: readonly number[]): void {
-  if (ids.length === 0) {
-    return;
+export function requirePositiveReferenceDocumentId(id: unknown, source: string): number {
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(
+      `${source}未返回精确资料 ID，无法建立清理边界，拒绝继续；本轮创建可能已落库，需人工核对残留：${JSON.stringify(id)}`,
+    );
   }
 
-  for (const id of ids) {
+  return id;
+}
+
+/**
+ * 软删计划：软删目标只取本轮创建响应记录的精确 ID（归属由创建响应确立），
+ * 标题反查结果仅用于报告「未记录却命中本轮关键字」的遗漏行，绝不并入软删目标——
+ * 同标题异主行必须保持原样，不因反查而被删除。
+ */
+export function planReferenceDocumentSoftDelete(
+  recordedIds: readonly number[],
+  discoveredIds: readonly number[],
+): { readonly softDeleteIds: readonly number[]; readonly unexpectedIds: readonly number[] } {
+  const recorded = new Set(recordedIds);
+
+  return {
+    softDeleteIds: [...recorded],
+    unexpectedIds: discoveredIds.filter((id) => !recorded.has(id)),
+  };
+}
+
+/**
+ * 存储引用登记状态（评审 P3）：明确区分「尚未取得」（pending，未知）与「确认无引用」（none）。
+ * 未知绝不降级为 none——否则清理会把引用未知的资料当作纯文本跳过文件核验，掩盖归属不明。
+ * resolved 表示引用已取得且通过服务端格式白名单校验。
+ */
+export type StorageReferenceRegistration =
+  | { readonly status: 'pending' }
+  | { readonly status: 'none' }
+  | { readonly status: 'resolved'; readonly reference: string };
+
+/**
+ * 本轮登记的参考资料记录：id 与创建时立即记录的事实（标题 / 创建人 / 文件元数据 / 存储引用状态）。
+ * 物理清理与上传文件清理的预期事实均取自本记录，绝不从目标行反读（否则核验退化为自证）。
+ */
+export interface RegisteredReferenceDocument {
+  readonly id: number;
+  /** 标题可写：主链路创建后会改标题，清理核验的是库中当前标题 */
+  title: string;
+  readonly createdByAccountId: number;
+  readonly originalFilename: string | null;
+  readonly mimeType: string | null;
+  storageReference: StorageReferenceRegistration;
+}
+
+/**
+ * 上传创建登记（评审 P3）：取得精确 ID 后**立即登记**（引用先置 pending），再解析引用并补回该记录。
+ *
+ * 关键顺序：登记先于解析——存储引用查询抛错或返回白名单外引用时，记录仍保留该精确 ID（状态停留
+ * pending），清理据此失败关闭并报告该 ID，绝不按标题前缀 / 反查结果扩大删除范围。
+ * 解析失败不回滚登记本身，故本函数不抛错。
+ *
+ * @returns 登记后的记录（与 registry 中同一对象，引用状态可能仍为 pending）
+ */
+export function registerUploadedReferenceDocument(
+  registry: RegisteredReferenceDocument[],
+  facts: Omit<RegisteredReferenceDocument, 'storageReference'>,
+  resolve: () => string | null,
+): RegisteredReferenceDocument {
+  const record: RegisteredReferenceDocument = { ...facts, storageReference: { status: 'pending' } };
+
+  registry.push(record);
+
+  try {
+    const value = resolve();
+
+    record.storageReference =
+      value === null
+        ? { status: 'none' }
+        : STORAGE_REFERENCE_PATTERN.test(value)
+          ? { status: 'resolved', reference: value }
+          : { status: 'pending' };
+  } catch {
+    // 引用未知：保持 pending，精确 ID 已登记，由清理侧失败关闭并报告
+  }
+
+  return record;
+}
+
+/**
+ * 取登记中已确认的存储引用：pending（未知）即抛错并带上精确 ID，拒绝继续清理；
+ * none → null（纯文本资料）；resolved → 引用。禁止把 pending 当作 none 跳过文件核验。
+ */
+export function requireResolvedStorageReference(
+  registration: StorageReferenceRegistration,
+  id: number,
+): string | null {
+  if (registration.status === 'pending') {
+    throw new Error(
+      `自建资料 ${id} 的存储引用尚未取得（未知），无法证明归属，拒绝清理并保留现场；该精确 ID 已登记，需人工核对残留`,
+    );
+  }
+
+  return registration.status === 'none' ? null : registration.reference;
+}
+
+// ---- 参考资料物理清理：统一安全入口（精确 ID + 本轮预期事实事务核验） ----
+
+/**
+ * 参考资料物理清理目标：id 必须来自本轮创建响应的精确 ID；
+ * expected 必须是本轮测试自身掌握 / 创建时立即记录的事实（标题 / 创建人账号 / 存储引用），
+ * 不接受「按标题反查所得的行」充当删除目标，也不接受从目标行反读回来的值充当预期，
+ * 否则核验退化为自证：同标题异主 / 归属不符的行永远不会被发现。
+ */
+export interface ReferenceDocumentCleanupTarget {
+  readonly id: number;
+  readonly expected: {
+    readonly title: string;
+    readonly createdByAccountId: number;
+    /** 纯文本资料为 null；仅文件资料为服务端生成的存储引用 */
+    readonly storageReference: string | null;
+  };
+}
+
+// 标题进 SQL 前必须命中白名单（列宽 varchar(255)）：排除单引号（字符串字面量终止符）与
+// 反斜杠（MySQL 默认转义符）两个可越界字符；其余内容（含中文、空格、全角括号）照常放行。
+const CLEANUP_DOCUMENT_TITLE_PATTERN = /^[^'\\]{1,255}$/;
+
+// 事务内守卫表与约束名（会话级临时表，断开即消失，不触碰持久结构）。
+const CLEANUP_GUARD_TABLE_REFERENCE_DOCUMENT = 'e2e_reference_document_cleanup_guard';
+
+/**
+ * 严格库名门（在 assertPhysicalCleanupAllowed 的「测试库命名」之上再收紧一道）：
+ * 参考资料物理清理只允许发生在专用隔离库 lithography_e2e，默认连共享开发库
+ * （lithography_drill）时失败关闭、不执行删除，也不降级到别的库上删除。
+ */
+function assertDedicatedReferenceDocumentCleanupDatabase(env: Record<string, string>): void {
+  if (env.DB_NAME !== DEDICATED_E2E_DB_NAME) {
+    throw new Error(
+      `参考资料物理清理被拒绝：DB_NAME=${JSON.stringify(env.DB_NAME)} 不是专用隔离库 ${JSON.stringify(DEDICATED_E2E_DB_NAME)}，失败关闭，不执行删除`,
+    );
+  }
+}
+
+function assertReferenceDocumentCleanupTargets(
+  targets: readonly ReferenceDocumentCleanupTarget[],
+): void {
+  const seenIds = new Set<number>();
+
+  for (const { id, expected } of targets) {
     if (!Number.isSafeInteger(id) || id <= 0) {
       throw new Error(`物理清理目标 ID 未通过正整数校验，拒绝执行：${JSON.stringify(id)}`);
     }
+
+    if (seenIds.has(id)) {
+      throw new Error(`物理清理目标 ID 重复，拒绝执行：${id}`);
+    }
+
+    seenIds.add(id);
+
+    if (!CLEANUP_DOCUMENT_TITLE_PATTERN.test(expected.title)) {
+      throw new Error(
+        `物理清理预期标题未通过白名单校验，拒绝访问数据库：${JSON.stringify(expected.title)}`,
+      );
+    }
+
+    if (!Number.isSafeInteger(expected.createdByAccountId) || expected.createdByAccountId <= 0) {
+      throw new Error(
+        `物理清理预期创建人账号未通过正整数校验，拒绝执行：${JSON.stringify(expected.createdByAccountId)}`,
+      );
+    }
+
+    if (
+      expected.storageReference !== null &&
+      !STORAGE_REFERENCE_PATTERN.test(expected.storageReference)
+    ) {
+      throw new Error(
+        `物理清理预期存储引用未通过白名单校验，拒绝访问数据库：${JSON.stringify(expected.storageReference)}`,
+      );
+    }
+  }
+}
+
+/**
+ * 组装「同一连接、同一事务」的核验 + 删除脚本（与维修申请清理同范式）：
+ * - 逐 ID 绑定本轮预期事实（标题 / 创建人账号 / 存储引用），任一项不符即计入 field_mismatch_rows；
+ * - 外部引用（external_ref_rows）：核对架构上不存在引用 reference_document 的外键
+ *   （当前 baseline 为 0）。出现任何外部引用即视为本 helper 未覆盖的子表，失败关闭中止，
+ *   绝不带子记录删除，也绝不静默级联；
+ * - 删除仅按本轮精确 ID，提交前核验残留为 0，任一违例即中止回滚（零删除）。
+ */
+function buildReferenceDocumentCleanupSql(
+  targets: readonly ReferenceDocumentCleanupTarget[],
+): string {
+  const idList = targets.map(({ id }) => id).join(',');
+  const idPredicate = `id IN (${idList})`;
+  const expectedFacts = targets
+    .map(({ id, expected }) => {
+      const facts = [
+        `id = ${id}`,
+        `title = '${expected.title}'`,
+        `created_by_account_id = ${expected.createdByAccountId}`,
+        expected.storageReference === null
+          ? 'storage_reference IS NULL'
+          : `storage_reference = '${expected.storageReference}'`,
+      ];
+
+      return `(${facts.join(' AND ')})`;
+    })
+    .join(' OR ');
+  const existingRows = `(SELECT COUNT(*) FROM reference_document WHERE ${idPredicate})`;
+  const fieldMismatchRows = `(SELECT COUNT(*) FROM reference_document WHERE ${idPredicate} AND NOT (${expectedFacts}))`;
+  const externalRefRows = `(SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME = 'reference_document')`;
+  const guardViolations = [
+    `(DATABASE() <> '${DEDICATED_E2E_DB_NAME}')`,
+    `(${targets.length} - ${existingRows})`,
+    fieldMismatchRows,
+    externalRefRows,
+  ].join(' + ');
+
+  return [
+    'START TRANSACTION',
+    `CREATE TEMPORARY TABLE ${CLEANUP_GUARD_TABLE_REFERENCE_DOCUMENT} (violations INT NOT NULL, CONSTRAINT e2e_reference_document_cleanup_must_be_zero CHECK (violations = 0))`,
+    `SELECT id, title, created_by_account_id, storage_reference FROM reference_document WHERE ${idPredicate} ORDER BY id FOR UPDATE`,
+    `SELECT CONCAT('database=', DATABASE(), ' expected_rows=${targets.length}', ' existing_rows=', ${existingRows}, ' field_mismatch_rows=', ${fieldMismatchRows}, ' external_ref_rows=', ${externalRefRows})`,
+    `INSERT INTO ${CLEANUP_GUARD_TABLE_REFERENCE_DOCUMENT} (violations) SELECT ${guardViolations}`,
+    `DELETE FROM reference_document WHERE ${idPredicate}`,
+    `SELECT CONCAT('residue_rows=', ${existingRows})`,
+    `INSERT INTO ${CLEANUP_GUARD_TABLE_REFERENCE_DOCUMENT} (violations) SELECT ${existingRows}`,
+    'COMMIT',
+  ].join(';\n');
+}
+
+/**
+ * 独立复查 CLI 回读的核验诊断（防御「CHECK 约束被静默忽略」与「拿不到诊断却当作成功」）：
+ * 库名 / 期望行数 / 实际行数 / 字段不符 / 外部引用 / 残留任一不达标即抛错。
+ */
+function assertReferenceDocumentCleanupDiagnostics(output: string, expectedRows: number): void {
+  const diagnostics: Record<string, string> = {};
+
+  for (const match of output.matchAll(/([a-z_]+)=(\S+)/g)) {
+    diagnostics[match[1]] = match[2];
   }
 
-  assertPhysicalCleanupAllowed(readBackendEnv());
+  const expectedDiagnostics: Array<[string, string]> = [
+    ['database', DEDICATED_E2E_DB_NAME],
+    ['expected_rows', String(expectedRows)],
+    ['existing_rows', String(expectedRows)],
+    ['field_mismatch_rows', '0'],
+    ['external_ref_rows', '0'],
+    ['residue_rows', '0'],
+  ];
+  const mismatched = expectedDiagnostics.filter(([key, value]) => diagnostics[key] !== value);
 
-  mysqlQuery(`DELETE FROM reference_document WHERE id IN (${ids.join(',')})`);
+  if (mismatched.length > 0) {
+    throw new Error(
+      `参考资料物理清理核验失败：${mismatched
+        .map(
+          ([key, value]) => `${key} 期望 ${value} 实际 ${JSON.stringify(diagnostics[key] ?? null)}`,
+        )
+        .join('；')}`,
+    );
+  }
+}
+
+/**
+ * 按本次运行记录的精确 ID 物理清理参考资料行（统一安全入口）。
+ *
+ * 安全性质：
+ * - 入口内独立执行「显式授权门 + 测试库命名门 + 严格 lithography_e2e 库名门」，任一门不通过即抛错
+ *   且 mysql 进程绝不启动；不再有「仅凭 ID 列表直接 DELETE」的路径，也不按标题前缀/行数匹配；
+ * - 目标 ID 与预期事实（标题 / 创建人账号 / 存储引用）先过 Node 侧白名单，先于任何 SQL 组装；
+ * - 同一连接、同一事务内完成：库名核验 → FOR UPDATE 锁定目标行 → 逐项核对预期字段与外部引用
+ *   → 全部门通过才按精确 ID 删除 → 提交前核验残留为 0 → COMMIT；任一不符即中止回滚（零删除）
+ *   并让用例转红；
+ * - ID 列表为空时 no-op，不启动 mysql 进程。
+ */
+export function deleteE2EReferenceDocumentRowsByIds(
+  targets: readonly ReferenceDocumentCleanupTarget[],
+): void {
+  if (targets.length === 0) {
+    return;
+  }
+
+  assertReferenceDocumentCleanupTargets(targets);
+
+  const env = readBackendEnv();
+
+  assertPhysicalCleanupAllowed(env);
+  assertDedicatedReferenceDocumentCleanupDatabase(env);
+
+  const output = runCleanupTransactionSql(
+    env,
+    buildReferenceDocumentCleanupSql(targets),
+    '参考资料物理清理事务中止',
+  );
+
+  assertReferenceDocumentCleanupDiagnostics(output, targets.length);
+}
+
+/**
+ * 组装「软删前归属预检」只读脚本（单次只读查询）：逐 ID 核对目标行是否存在，
+ * 标题 / 创建人 / 存储引用是否与本轮记录一致。只 SELECT，绝不 UPDATE / DELETE。
+ * 行是否已软删不参与判定（软删行仍在表中且字段不变），核验的是「这一行确实是本轮自建」。
+ */
+function buildReferenceDocumentOwnershipVerificationSql(
+  targets: readonly ReferenceDocumentCleanupTarget[],
+): string {
+  const idPredicate = `id IN (${targets.map(({ id }) => id).join(',')})`;
+  const expectedFacts = targets
+    .map(
+      ({ id, expected }) =>
+        [
+          `(id = ${id}`,
+          `title = '${expected.title}'`,
+          `created_by_account_id = ${expected.createdByAccountId}`,
+          expected.storageReference === null
+            ? 'storage_reference IS NULL'
+            : `storage_reference = '${expected.storageReference}'`,
+        ].join(' AND ') + ')',
+    )
+    .join(' OR ');
+
+  return `SELECT CONCAT('database=', DATABASE(), ' expected_rows=${targets.length}', ' existing_rows=', (SELECT COUNT(*) FROM reference_document WHERE ${idPredicate}), ' field_mismatch_rows=', (SELECT COUNT(*) FROM reference_document WHERE ${idPredicate} AND NOT (${expectedFacts})))`;
+}
+
+/**
+ * 独立复查归属预检诊断：期望行数 / 实际行数 / 字段不符任一不达标即抛错。
+ * 抛出即代表「已在软删 / 物理删除之前停止，未改动任何行，保留现场」。
+ * 不核验 database：本预检为只读查询，普通链路（共享开发库）同样需要先证明归属再软删。
+ */
+function assertReferenceDocumentOwnershipDiagnostics(output: string, expectedRows: number): void {
+  const diagnostics: Record<string, string> = {};
+
+  for (const match of output.matchAll(/([a-z_]+)=(\S+)/g)) {
+    diagnostics[match[1]] = match[2];
+  }
+
+  const expectedDiagnostics: Array<[string, string]> = [
+    ['expected_rows', String(expectedRows)],
+    ['existing_rows', String(expectedRows)],
+    ['field_mismatch_rows', '0'],
+  ];
+  const mismatched = expectedDiagnostics.filter(([key, value]) => diagnostics[key] !== value);
+
+  if (mismatched.length > 0) {
+    throw new Error(
+      `参考资料归属预检失败（在软删 / 物理删除之前停止，保留现场）：${mismatched
+        .map(
+          ([key, value]) => `${key} 期望 ${value} 实际 ${JSON.stringify(diagnostics[key] ?? null)}`,
+        )
+        .join('；')}`,
+    );
+  }
+}
+
+/**
+ * 软删前的只读归属预检（评审 P2）：按本轮记录的精确 ID 核对目标行存在且标题 / 创建人 / 存储引用
+ * 与本轮记录一致。任一目标缺失或字段不符即抛错——在修改任何行（含软删除）之前停止清理流程，
+ * 保留现场；不按标题前缀或反查结果扩大范围。
+ *
+ * 只读：本函数只执行一次 SELECT，绝不 DELETE / UPDATE；不要求物理清理授权（普通链路的软删前
+ * 同样必须先证明归属），故不设专用库门。
+ */
+export function assertE2EReferenceDocumentOwnershipBeforeCleanup(
+  targets: readonly ReferenceDocumentCleanupTarget[],
+): void {
+  if (targets.length === 0) {
+    return;
+  }
+
+  assertReferenceDocumentCleanupTargets(targets);
+
+  const output = mysqlQuery(buildReferenceDocumentOwnershipVerificationSql(targets));
+
+  assertReferenceDocumentOwnershipDiagnostics(output, targets.length);
 }
 
 // ---- 维修申请物理清理：统一安全入口（负责人最小修复计划 P1/P2） ----
@@ -652,11 +1008,12 @@ function buildRepairRequestCleanupSql(targets: readonly RepairRequestCleanupTarg
 }
 
 /**
- * 执行清理脚本（单次 mysql 进程 = 同一连接）。失败时抛出携带诊断的错误：
+ * 执行受保护清理脚本（单次 mysql 进程 = 同一连接）。失败时抛出携带诊断的错误：
  * 密码只经 MYSQL_PWD 注入，既不在进程参数也不在诊断文本中；
  * 原始错误整条作 cause 会把完整 SQL 与 CLI 输出复制进异常链，故以副本作 cause。
+ * 维修申请与参考资料清理共用同一执行器，仅事务对象名不同（label）。
  */
-function runRepairRequestCleanupSql(env: Record<string, string>, sql: string): string {
+function runCleanupTransactionSql(env: Record<string, string>, sql: string, label: string): string {
   try {
     return execFileSync(
       'mysql',
@@ -687,7 +1044,7 @@ function runRepairRequestCleanupSql(env: Record<string, string>, sql: string): s
       .filter((line) => line.includes('='))
       .join(' | ');
     const message =
-      `维修申请物理清理事务中止（已回滚，未执行删除）：${stderrLine === '' ? '未知错误' : stderrLine}` +
+      `${label}（已回滚，未执行删除）：${stderrLine === '' ? '未知错误' : stderrLine}` +
       (diagnostics === '' ? '' : `；核验诊断：${diagnostics}`);
 
     throw new Error(message, {
@@ -695,6 +1052,10 @@ function runRepairRequestCleanupSql(env: Record<string, string>, sql: string): s
       cause: new Error(message),
     });
   }
+}
+
+function runRepairRequestCleanupSql(env: Record<string, string>, sql: string): string {
+  return runCleanupTransactionSql(env, sql, '维修申请物理清理事务中止');
 }
 
 /**
@@ -974,13 +1335,22 @@ export function findReferenceDocumentStorageReferenceById(id: number): string | 
 /**
  * 按精确存储引用删除单个物理文件（PR5 归属核验后调用：先核验行归属并取引用，再删文件）。
  * 引用必须命中服务端生成格式白名单，且解析后必须落在存储目录内，否则拒绝删除。
+ * 返回解析后的精确文件路径，供调用方在删除后复核零残留。
+ *
+ * 同等保护（评审 P1）：本函数是真正执行 `rmSync` 的底层原语，存在独立调用路径（PR5 清理编排），
+ * 故删除前必须由本函数自行通过「显式授权门 + 严格专用隔离库门」，不因调用方已检查而放宽；
+ * 逐字段归属核验与实际 `DATABASE()` 一致性由受保护入口（deleteE2EReferenceDocumentStorageFiles）
+ * 在同一次核验 SQL 内复查。任何一门不通过即抛错，绝不执行删除。
  */
-export function deleteE2EReferenceDocumentStorageFileByReference(reference: string): void {
+export function deleteE2EReferenceDocumentStorageFileByReference(reference: string): string {
   if (!STORAGE_REFERENCE_PATTERN.test(reference)) {
     throw new Error(`存储文件引用未通过白名单校验，拒绝删除：${JSON.stringify(reference)}`);
   }
 
   const env = readBackendEnv();
+
+  assertPhysicalCleanupAllowed(env);
+  assertDedicatedReferenceDocumentCleanupDatabase(env);
   const storageDir = path.resolve(
     fileURLToPath(new URL('../../../backend', import.meta.url)),
     env.REFERENCE_DOCUMENT_STORAGE_DIR || 'var/reference-documents',
@@ -995,32 +1365,183 @@ export function deleteE2EReferenceDocumentStorageFileByReference(reference: stri
   if (existsSync(filePath)) {
     rmSync(filePath, { force: true });
   }
+
+  return filePath;
 }
 
 /**
- * 按本次运行上传产生的精确 ID 清理存储物理文件（0909 计划要求：按精确引用路径，不扫描批量删）。
- * 引用必须命中服务端生成格式白名单，且解析后必须落在存储目录内，否则拒绝删除。
+ * 存储物理文件清理目标：id 与「创建时立即记录」的事实一并保存。
+ * 删除目标一律取本轮记录的精确引用，绝不重新读取当前行引用——否则核验退化为自证，
+ * 行被改写 / 引用被指向他人文件时无从发现；expected 另含文件元数据，删除前逐项核对。
  */
-export function deleteE2EReferenceDocumentStorageFilesByIds(ids: readonly number[]): void {
-  if (ids.length === 0) {
+export interface ReferenceDocumentStorageFileCleanupTarget {
+  readonly id: number;
+  readonly expected: {
+    readonly title: string;
+    readonly createdByAccountId: number;
+    readonly storageReference: string;
+    readonly originalFilename: string;
+    readonly mimeType: string;
+  };
+}
+
+function assertStorageFileCleanupTargets(
+  targets: readonly ReferenceDocumentStorageFileCleanupTarget[],
+): void {
+  const seenIds = new Set<number>();
+
+  for (const { id, expected } of targets) {
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error(`存储文件清理目标 ID 未通过正整数校验，拒绝执行：${JSON.stringify(id)}`);
+    }
+
+    if (seenIds.has(id)) {
+      throw new Error(`存储文件清理目标 ID 重复，拒绝执行：${id}`);
+    }
+
+    seenIds.add(id);
+
+    if (!STORAGE_REFERENCE_PATTERN.test(expected.storageReference)) {
+      throw new Error(
+        `存储文件清理预期引用未通过白名单校验，拒绝访问数据库：${JSON.stringify(expected.storageReference)}`,
+      );
+    }
+
+    if (!Number.isSafeInteger(expected.createdByAccountId) || expected.createdByAccountId <= 0) {
+      throw new Error(
+        `存储文件清理预期创建人账号未通过正整数校验，拒绝执行：${JSON.stringify(expected.createdByAccountId)}`,
+      );
+    }
+
+    const textFacts: Array<readonly [string, string]> = [
+      ['标题', expected.title],
+      ['原始文件名', expected.originalFilename],
+      ['文件类型', expected.mimeType],
+    ];
+
+    for (const [label, value] of textFacts) {
+      if (!CLEANUP_DOCUMENT_TITLE_PATTERN.test(value)) {
+        throw new Error(
+          `存储文件清理预期${label}未通过白名单校验，拒绝访问数据库：${JSON.stringify(value)}`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * 组装「删除前核验」只读脚本（单次 mysql 进程）：逐 ID 核对目标行是否存在，标题 / 创建人 /
+ * 存储引用 / 原始文件名 / 文件类型是否与本轮记录一致，并核对该引用未被其他行占用。
+ * 任一不符即计数非零，Node 侧断言失败并保留文件（先核验，再删文件）。
+ */
+function buildStorageFileCleanupVerificationSql(
+  targets: readonly ReferenceDocumentStorageFileCleanupTarget[],
+): string {
+  const idPredicate = `id IN (${targets.map(({ id }) => id).join(',')})`;
+  const expectedFacts = targets
+    .map(({ id, expected }) =>
+      [
+        `(id = ${id}`,
+        `title = '${expected.title}'`,
+        `created_by_account_id = ${expected.createdByAccountId}`,
+        `storage_reference = '${expected.storageReference}'`,
+        `original_filename = '${expected.originalFilename}'`,
+        `mime_type = '${expected.mimeType}')`,
+      ].join(' AND '),
+    )
+    .join(' OR ');
+  const existingRows = `(SELECT COUNT(*) FROM reference_document WHERE ${idPredicate})`;
+  const fieldMismatchRows = `(SELECT COUNT(*) FROM reference_document WHERE ${idPredicate} AND NOT (${expectedFacts}))`;
+  const sharedReferenceRows = targets
+    .map(
+      ({ id, expected }) =>
+        `(SELECT COUNT(*) FROM reference_document WHERE storage_reference = '${expected.storageReference}' AND id <> ${id})`,
+    )
+    .join(' + ');
+
+  return `SELECT CONCAT('database=', DATABASE(), ' expected_files=${targets.length}', ' existing_rows=', ${existingRows}, ' field_mismatch_rows=', ${fieldMismatchRows}, ' shared_reference_rows=', ${sharedReferenceRows})`;
+}
+
+/**
+ * 独立复查删除前核验诊断：期望文件数 / 实际行数 / 字段不符 / 引用被他人占用任一不达标即抛错。
+ * 抛出即代表「保留文件、未执行删除」。
+ */
+function assertStorageFileCleanupDiagnostics(output: string, expectedFiles: number): void {
+  const diagnostics: Record<string, string> = {};
+
+  for (const match of output.matchAll(/([a-z_]+)=(\S+)/g)) {
+    diagnostics[match[1]] = match[2];
+  }
+
+  const expectedDiagnostics: Array<[string, string]> = [
+    // 实际连接库名（同一 SQL 核验连接回读的 DATABASE()）：只检查进程 env 的 DB_NAME 不够，
+    // 必须核对真正连上的库就是专用隔离库（评审 P1）。
+    ['database', DEDICATED_E2E_DB_NAME],
+    ['expected_files', String(expectedFiles)],
+    ['existing_rows', String(expectedFiles)],
+    ['field_mismatch_rows', '0'],
+    ['shared_reference_rows', '0'],
+  ];
+  const mismatched = expectedDiagnostics.filter(([key, value]) => diagnostics[key] !== value);
+
+  if (mismatched.length > 0) {
+    throw new Error(
+      `存储文件删除前核验失败（保留文件，不执行删除）：${mismatched
+        .map(
+          ([key, value]) => `${key} 期望 ${value} 实际 ${JSON.stringify(diagnostics[key] ?? null)}`,
+        )
+        .join('；')}`,
+    );
+  }
+}
+
+/**
+ * 按本轮记录并核验过的精确引用清理存储物理文件（先核验，再删除）。
+ *
+ * 安全性质：
+ * - 入口内独立执行「显式授权门（E2E_ALLOW_PHYSICAL_CLEANUP=1）+ 严格专用隔离库门（DB_NAME）」
+ *   与「同一核验 SQL 回读的实际 DATABASE()」复查，任一不通过即抛错，绝不进入文件删除；
+ * - 删除目标一律取本轮创建时记录的引用，绝不重新读取当前行引用作为删除目标；
+ * - 删除前经单次只读 SQL 逐 ID 核对行字段（标题 / 创建人 / 存储引用 / 原始文件名 / 文件类型）
+ *   与该引用未被其他行占用，任一不符即抛错并保留文件（不删他人文件）；
+ * - 引用必须命中服务端生成格式白名单且解析后落在存储目录内，删除后复核零残留；
+ * - 目标为空时 no-op，不访问数据库。
+ * 必须先于按 ID 物理删行调用：删除前核验需要目标行仍存在。
+ */
+export function deleteE2EReferenceDocumentStorageFiles(
+  targets: readonly ReferenceDocumentStorageFileCleanupTarget[],
+): void {
+  if (targets.length === 0) {
     return;
   }
 
-  for (const id of ids) {
-    if (!Number.isSafeInteger(id) || id <= 0) {
-      throw new Error(`存储文件清理目标 ID 未通过正整数校验：${JSON.stringify(id)}`);
+  assertStorageFileCleanupTargets(targets);
+
+  const env = readBackendEnv();
+
+  // 入口自证（评审 P1）：本入口自行执行「显式授权门 + 严格专用隔离库门（配置侧 DB_NAME）」，
+  // 任一不通过即抛错，既不会组装核验 SQL，也不会调用任何文件删除函数。
+  assertPhysicalCleanupAllowed(env);
+  assertDedicatedReferenceDocumentCleanupDatabase(env);
+
+  const diagnosticsOutput = mysqlQuery(buildStorageFileCleanupVerificationSql(targets));
+
+  // 同一核验 SQL 回读实际 DATABASE() 并逐项复查（含逐字段归属与引用唯一性）：
+  // 只有授权、配置库名、实际库名与全部字段核验都通过，才进入下面的文件删除。
+  assertStorageFileCleanupDiagnostics(diagnosticsOutput, targets.length);
+
+  const residue: string[] = [];
+
+  for (const { expected } of targets) {
+    const filePath = deleteE2EReferenceDocumentStorageFileByReference(expected.storageReference);
+
+    if (existsSync(filePath)) {
+      residue.push(expected.storageReference);
     }
   }
 
-  for (const id of ids) {
-    const reference = findReferenceDocumentStorageReferenceById(id);
-
-    // 无引用（纯文本资料）或引用不符合服务端生成格式：跳过（既有行为不变）
-    if (reference === null || !STORAGE_REFERENCE_PATTERN.test(reference)) {
-      continue;
-    }
-
-    deleteE2EReferenceDocumentStorageFileByReference(reference);
+  if (residue.length > 0) {
+    throw new Error(`存储物理文件清理后仍存在残留，拒绝声称清理完成：${residue.join(',')}`);
   }
 }
 

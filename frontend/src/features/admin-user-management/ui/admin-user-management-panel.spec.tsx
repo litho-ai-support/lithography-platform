@@ -10,7 +10,10 @@
  * 唯一能区分第几代会话的是单调代次。
  *
  * 走真实的 `useAdminUserList` / `useAdminUserCommands`（含 in-flight 锁与成功 reload），
- * 只替换最外层的 GraphQL adapter；时序全部由可控 deferred 推进，不使用 sleep，不扩大 timeout。
+ * 只替换最外层的 GraphQL adapter；时序全部由可控 deferred 推进，不使用 sleep。
+ * 仅对最重的「切走再切回 A」用例给足单测预算：它要在 jsdom 里挂载三个 antd Modal
+ *（A → B → A），单测全量并发时本身就会逼近默认 5s 上限，属于渲染成本而非等待缺陷，
+ * 因此该用例显式声明预算，不整体放宽 testTimeout。
  *
  * 关于驱动方式：面板把 `submitting` 接到了 `commands.isPending(key)`，而 antd 6.4.3 的
  * `Modal.handleCancel` 在 `confirmLoading` 为真时直接 `return`（取消按钮、X、遮罩、Esc 共用它），
@@ -544,7 +547,7 @@ describe('管理员用户管理面板的弹窗会话代次守卫', () => {
     // 失败不触发 reload，也不重放请求
     expect(fetchUsersMock).toHaveBeenCalledTimes(1);
     expect(updateProfileMock).toHaveBeenCalledTimes(1);
-  });
+  }, 15_000);
 
   it('创建用户：正常成功关闭弹窗、给出成功反馈并刷新列表', async () => {
     createMock.mockResolvedValue({ ok: true });

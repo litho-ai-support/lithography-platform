@@ -14,8 +14,8 @@ export default defineConfig({
   // - helpers/ 是共享工具（含 vitest 单测，如 real-backend 白名单 helper），不是 Playwright 用例；
   // - 下列真实/写库 spec 一律由专用隔离入口收集（playwright.real-backend-dedicated.config.ts，
   //   固定 lithography_e2e + 专用 3100/4174），普通入口不启动真实后端也不继承清理授权。
-  //   repair-request-create.spec.ts 为混合文件（含真实写库用例），整文件划归专用入口，
-  //   避免按标题过滤时漏收或误收真实写入用例；
+  //   repair-request-create.spec.ts 已拆为 mock-only（本入口收集）与
+  //   repair-request-create-real.spec.ts（专用入口收集）两个文件，真实写入用例不再混在默认入口；
   // - engineer-repair-request-real.spec.ts 有独立专用入口，同样不在普通入口收集。
   testIgnore: [
     '**/helpers/**',
@@ -23,7 +23,7 @@ export default defineConfig({
     '**/admin-document-database-real.spec.ts',
     '**/reference-document-real.spec.ts',
     '**/repair-request-manage-real.spec.ts',
-    '**/repair-request-create.spec.ts',
+    '**/repair-request-create-real.spec.ts',
   ],
   timeout: 20_000,
   use: {
