@@ -1563,6 +1563,173 @@ export function deleteE2EReferenceDocumentStorageFiles(
   }
 }
 
+// ---- 真实 E2E 夹具写入：统一安全入口 + 先核验后恢复（仅测试夹具使用） ----
+
+/** 夹具可写列白名单：只允许这几列，杜绝把任意列名拼进 SQL */
+export type ReferenceDocumentFixtureColumn =
+  | 'storage_reference'
+  | 'storage_backend'
+  | 'content_text'
+  | 'original_filename'
+  | 'mime_type';
+
+const FIXTURE_COLUMNS: readonly ReferenceDocumentFixtureColumn[] = [
+  'storage_reference',
+  'storage_backend',
+  'content_text',
+  'original_filename',
+  'mime_type',
+];
+
+// 夹具值进 SQL 前的字面量白名单：排除单引号（终止符）与反斜杠（默认转义符），并限长。
+const FIXTURE_SQL_LITERAL_PATTERN = /^[^'\\]{0,4096}$/;
+const FIXTURE_RESTORE_GUARD_TABLE = 'e2e_reference_document_fixture_restore_guard';
+const FIXTURE_RESTORE_GUARD_CONSTRAINT = 'e2e_reference_document_fixture_restore_must_be_zero';
+
+function fixtureSqlLiteral(value: string | null): string {
+  if (value === null) {
+    return 'NULL';
+  }
+
+  if (!FIXTURE_SQL_LITERAL_PATTERN.test(value)) {
+    throw new Error(`真实 E2E 夹具值未通过白名单校验，拒绝拼接：${JSON.stringify(value)}`);
+  }
+
+  return `'${value}'`;
+}
+
+/**
+ * 真实 E2E 夹具写入的统一安全入口（仅测试夹具使用）：复用既有「显式物理清理授权门 +
+ * 测试库命名门 + 严格 lithography_e2e 库名门」，并额外核对执行连接实际连上的 DATABASE()
+ * 必须为 lithography_e2e。mysql 每次调用都是独立进程，故先独立回读实际库名再执行写入；
+ * 任一门不通过即抛错，且绝不启动写入 SQL 的 mysql 进程。
+ *
+ * 只应传入代码内静态字面量的夹具 SQL（插入 / 故意改 NULL / 恢复），不得拼接外部输入。
+ */
+export function runGuardedFixtureWrite(env: Record<string, string>, sql: string): string {
+  assertPhysicalCleanupAllowed(env);
+  assertDedicatedReferenceDocumentCleanupDatabase(env);
+
+  const actualDatabase = mysqlQuery('SELECT DATABASE()');
+
+  if (actualDatabase !== DEDICATED_E2E_DB_NAME) {
+    throw new Error(
+      `真实 E2E 夹具写入被拒绝：执行连接实际 DATABASE()=${JSON.stringify(actualDatabase)} 不是专用隔离库 ${JSON.stringify(DEDICATED_E2E_DB_NAME)}，失败关闭，不执行写入`,
+    );
+  }
+
+  return mysqlQuery(sql);
+}
+
+/** 夹具单列的本轮制造状态与原登记值 */
+export interface ReferenceDocumentFixtureColumnMutation {
+  readonly column: ReferenceDocumentFixtureColumn;
+  /** 本轮制造的状态（当前值仍应等于它，否则说明已被意外改动） */
+  readonly manufacturedValue: string | null;
+  /** 登记原值（恢复目标） */
+  readonly originalValue: string | null;
+}
+
+/** 夹具「先核验后恢复」目标：标题 / 创建人 + 逐列制造状态必须在同一事务内命中才恢复 */
+export interface ReferenceDocumentFixtureRestoreTarget {
+  readonly id: number;
+  readonly title: string;
+  readonly createdByAccountId: number;
+  readonly mutations: readonly ReferenceDocumentFixtureColumnMutation[];
+}
+
+/** 独立复查夹具恢复诊断：库名 / 命中行 / 制造状态不符 / 已恢复行任一不达标即抛错（保留行与文件） */
+function assertFixtureRestoreDiagnostics(output: string): void {
+  const diagnostics: Record<string, string> = {};
+
+  for (const match of output.matchAll(/([a-z_]+)=(\S+)/g)) {
+    diagnostics[match[1]] = match[2];
+  }
+
+  const expectedDiagnostics: Array<[string, string]> = [
+    ['database', DEDICATED_E2E_DB_NAME],
+    ['existing_rows', '1'],
+    ['mismatch_rows', '0'],
+    ['restored_rows', '1'],
+  ];
+  const mismatched = expectedDiagnostics.filter(([key, value]) => diagnostics[key] !== value);
+
+  if (mismatched.length > 0) {
+    throw new Error(
+      `夹具恢复核验失败（保留行与文件）：${mismatched
+        .map(
+          ([key, value]) => `${key} 期望 ${value} 实际 ${JSON.stringify(diagnostics[key] ?? null)}`,
+        )
+        .join('；')}`,
+    );
+  }
+}
+
+/**
+ * 夹具「先核验后恢复」：把本轮故意改成 NULL 的列恢复为登记原值，仅当标题 / 创建人 / 各列当前值
+ * 仍等于本轮制造的状态时才执行。核验与恢复在同一事务（同一 mysql 进程）：守卫表 CHECK 约束
+ * 在任一列已被意外改动（或行被删）时中止事务并回滚（零写入），抛出后调用方必须保留行与文件。
+ */
+export function restoreMutatedReferenceDocumentFixtureRow(
+  env: Record<string, string>,
+  target: ReferenceDocumentFixtureRestoreTarget,
+): void {
+  if (!Number.isSafeInteger(target.id) || target.id <= 0 || target.mutations.length === 0) {
+    throw new Error(
+      `夹具恢复目标非法（需正整 ID 与至少一列制造状态），拒绝执行：${JSON.stringify(target.id)}`,
+    );
+  }
+
+  if (!CLEANUP_DOCUMENT_TITLE_PATTERN.test(target.title)) {
+    throw new Error(
+      `夹具恢复预期标题未通过白名单校验，拒绝访问数据库：${JSON.stringify(target.title)}`,
+    );
+  }
+
+  if (!Number.isSafeInteger(target.createdByAccountId) || target.createdByAccountId <= 0) {
+    throw new Error(
+      `夹具恢复预期创建人账号未通过正整数校验，拒绝执行：${JSON.stringify(target.createdByAccountId)}`,
+    );
+  }
+
+  for (const { column } of target.mutations) {
+    if (!FIXTURE_COLUMNS.includes(column)) {
+      throw new Error(`夹具恢复列名未通过白名单校验，拒绝拼接：${JSON.stringify(column)}`);
+    }
+  }
+
+  const identity = `id = ${target.id} AND title = '${target.title}' AND created_by_account_id = ${target.createdByAccountId}`;
+  const manufacturedPredicate = target.mutations
+    .map(({ column, manufacturedValue }) => `${column} <=> ${fixtureSqlLiteral(manufacturedValue)}`)
+    .join(' AND ');
+  const restoreAssignments = target.mutations
+    .map(({ column, originalValue }) => `${column} = ${fixtureSqlLiteral(originalValue)}`)
+    .join(', ');
+  const existingRows = `(SELECT COUNT(*) FROM reference_document WHERE ${identity})`;
+  const mismatchRows = `(SELECT COUNT(*) FROM reference_document WHERE ${identity} AND NOT (${manufacturedPredicate}))`;
+  // 违例一律非负：身份须恰好命中 1 行（缺失或重复都 > 0），逐列制造状态不符也会 > 0，
+  // 从而在 UPDATE 之前中止事务（列被意外改动或行缺失时零写入、保留现场）
+  const guardViolations = [
+    `(DATABASE() <> '${DEDICATED_E2E_DB_NAME}')`,
+    `(1 - ${existingRows})`,
+    mismatchRows,
+  ].join(' + ');
+
+  const sql = [
+    'START TRANSACTION',
+    `CREATE TEMPORARY TABLE ${FIXTURE_RESTORE_GUARD_TABLE} (violations INT NOT NULL, CONSTRAINT ${FIXTURE_RESTORE_GUARD_CONSTRAINT} CHECK (violations = 0))`,
+    `SELECT CONCAT('database=', DATABASE(), ' existing_rows=', ${existingRows}, ' mismatch_rows=', ${mismatchRows})`,
+    `INSERT INTO ${FIXTURE_RESTORE_GUARD_TABLE} (violations) SELECT ${guardViolations}`,
+    `UPDATE reference_document SET ${restoreAssignments} WHERE ${identity}`,
+    `SELECT CONCAT('restored_rows=', ROW_COUNT())`,
+    'COMMIT',
+  ].join(';\n');
+
+  const output = runGuardedFixtureWrite(env, sql);
+
+  assertFixtureRestoreDiagnostics(output);
+}
+
 // 可用性探针：健康检查 + 用真实 Mock 账号登录（同时验证后端已种子且登录链路可用）。
 // CORS 不在 Node 侧预检（fetch 不允许设置 Origin 等受限头），留给浏览器用例自身暴露。
 export async function isRealBackendAvailable(env: Record<string, string>): Promise<boolean> {

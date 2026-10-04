@@ -20,6 +20,8 @@ import {
   planReferenceDocumentSoftDelete,
   readBackendEnv,
   type ReferenceDocumentCleanupTarget,
+  type ReferenceDocumentFixtureColumn,
+  type ReferenceDocumentFixtureRestoreTarget,
   type ReferenceDocumentStorageFileCleanupTarget,
   type RegisteredReferenceDocument,
   registerUploadedReferenceDocument,
@@ -27,6 +29,8 @@ import {
   type RepairRequestCleanupTarget,
   requirePositiveReferenceDocumentId,
   requireResolvedStorageReference,
+  restoreMutatedReferenceDocumentFixtureRow,
+  runGuardedFixtureWrite,
 } from './real-backend';
 
 const { execFileSyncMock, existsSyncMock, readFileSyncMock, rmSyncMock } = vi.hoisted(() => ({
@@ -1795,5 +1799,235 @@ describe('real-backend 数据库连接键运行时覆盖（R3：不改 .env 切�
     process.env.OTHER_KEY = 'runtime-should-be-ignored';
 
     expect(readBackendEnv().OTHER_KEY).toBe('file-value');
+  });
+});
+
+describe('real-backend 真实 E2E 夹具写入与「先核验后恢复」安全入口', () => {
+  const OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
+  const originalOptIn = process.env[OPT_IN_ENV];
+  const CREATED_BY_ACCOUNT_ID = 9001;
+  const TITLE = 'E2E 参考资料SQL回归·run1·ref-null';
+
+  function dedicatedDbEnv(): string {
+    return 'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=lithography_e2e\n';
+  }
+
+  /** ref-null 案夹具：引用与后端被故意改成 NULL、并补了正文以满足表 CHECK */
+  function restoreTarget(
+    overrides: Partial<ReferenceDocumentFixtureRestoreTarget> = {},
+  ): ReferenceDocumentFixtureRestoreTarget {
+    return {
+      id: 980001,
+      title: TITLE,
+      createdByAccountId: CREATED_BY_ACCOUNT_ID,
+      mutations: [
+        {
+          column: 'storage_reference',
+          manufacturedValue: null,
+          originalValue: `${'a'.repeat(32)}.md`,
+        },
+        { column: 'storage_backend', manufacturedValue: null, originalValue: 'local' },
+        { column: 'content_text', manufacturedValue: 'mutated', originalValue: null },
+      ],
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset().mockReturnValue('');
+    readFileSyncMock.mockReset().mockReturnValue(dedicatedDbEnv());
+    delete process.env[OPT_IN_ENV];
+    // 其他 describe 可能残留 DB_NAME 运行时覆盖，这里显式清掉，保证夹具入口读到文件库名
+    delete process.env.DB_NAME;
+  });
+
+  afterAll(() => {
+    if (originalOptIn === undefined) {
+      delete process.env[OPT_IN_ENV];
+    } else {
+      process.env[OPT_IN_ENV] = originalOptIn;
+    }
+  });
+
+  // ---- runGuardedFixtureWrite：授权门 + 严格库名门 + 实际 DATABASE() 复查 ----
+
+  it('缺显式授权：夹具写入在任何 mysql 进程之前被拒绝', () => {
+    expect(() =>
+      runGuardedFixtureWrite(
+        readBackendEnv(),
+        'UPDATE reference_document SET content_text = NULL WHERE id = 980001',
+      ),
+    ).toThrow('缺少 E2E_ALLOW_PHYSICAL_CLEANUP=1');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('配置库名非专用隔离库（app_e2e）：夹具写入被严格库名门拒绝，不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+    readFileSyncMock.mockReturnValue(
+      'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=app_e2e\n',
+    );
+
+    expect(() => runGuardedFixtureWrite(readBackendEnv(), 'SELECT 1')).toThrow('不是专用隔离库');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('执行连接实际 DATABASE() 非专用隔离库：只查配置库名不够，拒绝执行写入', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue('lithography_drill');
+
+    const writeSql = 'UPDATE reference_document SET content_text = NULL WHERE id = 980001';
+
+    expect(() => runGuardedFixtureWrite(readBackendEnv(), writeSql)).toThrow(
+      /实际 DATABASE\(\)="lithography_drill"/,
+    );
+    // 只发起 DATABASE() 探测，未执行写入 SQL
+    expect(executedSqls()).toEqual(['SELECT DATABASE()']);
+  });
+
+  it('实际 DATABASE() 命中专用隔离库：先探测库名，再执行写入（同一入口）', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValueOnce('lithography_e2e').mockReturnValueOnce('1');
+
+    const writeSql = 'UPDATE reference_document SET content_text = NULL WHERE id = 980001';
+
+    expect(runGuardedFixtureWrite(readBackendEnv(), writeSql)).toBe('1');
+    expect(executedSqls()).toEqual(['SELECT DATABASE()', writeSql]);
+  });
+
+  // ---- restoreMutatedReferenceDocumentFixtureRow：组装前校验 ----
+
+  it.each([0, -1, 1.5, Number.NaN])(
+    '夹具恢复目标 ID 非正整数（%p）直接拒绝且不启动 mysql 进程',
+    (invalidId) => {
+      process.env[OPT_IN_ENV] = '1';
+
+      expect(() =>
+        restoreMutatedReferenceDocumentFixtureRow(
+          readBackendEnv(),
+          restoreTarget({ id: invalidId }),
+        ),
+      ).toThrow('夹具恢复目标非法');
+      expect(execFileSyncMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('夹具恢复未登记任何制造状态列时拒绝执行且不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() =>
+      restoreMutatedReferenceDocumentFixtureRow(readBackendEnv(), restoreTarget({ mutations: [] })),
+    ).toThrow('夹具恢复目标非法');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('夹具恢复列名不在白名单时拒绝拼接且不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+    const target = restoreTarget({
+      mutations: [
+        {
+          column: 'title' as unknown as ReferenceDocumentFixtureColumn,
+          manufacturedValue: 'x',
+          originalValue: 'y',
+        },
+      ],
+    });
+
+    expect(() => restoreMutatedReferenceDocumentFixtureRow(readBackendEnv(), target)).toThrow(
+      '列名未通过白名单校验',
+    );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('夹具恢复预期标题未通过白名单时拒绝访问数据库且不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() =>
+      restoreMutatedReferenceDocumentFixtureRow(
+        readBackendEnv(),
+        restoreTarget({ title: "E2E 参考资料SQL回归·run1·bad'quote" }),
+      ),
+    ).toThrow('标题未通过白名单校验');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('夹具恢复预期创建人账号非正整数时拒绝执行且不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() =>
+      restoreMutatedReferenceDocumentFixtureRow(
+        readBackendEnv(),
+        restoreTarget({ createdByAccountId: 0 }),
+      ),
+    ).toThrow('创建人账号未通过正整数校验');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  // ---- restoreMutatedReferenceDocumentFixtureRow：事务内「逐列制造状态核验先于 UPDATE」----
+
+  it('恢复脚本单次 mysql 调用内先按逐列制造状态核验（NULL 安全），命中后才 UPDATE 恢复并提交', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock
+      .mockReturnValueOnce('lithography_e2e')
+      .mockReturnValueOnce(
+        'database=lithography_e2e existing_rows=1 mismatch_rows=0\nrestored_rows=1',
+      );
+
+    restoreMutatedReferenceDocumentFixtureRow(readBackendEnv(), restoreTarget());
+
+    const sqls = executedSqls();
+
+    expect(sqls).toHaveLength(2);
+
+    const restoreSql = sqls[1] ?? '';
+
+    // 同一事务：核验、恢复、提交都在一个 mysql 进程的连接里
+    expect(restoreSql).toContain('START TRANSACTION');
+    expect(restoreSql.trimEnd().endsWith('COMMIT')).toBe(true);
+
+    // 逐列「当前值仍是本轮制造状态」用 NULL 安全比较（制造值可为 NULL）
+    expect(restoreSql).toContain('storage_reference <=> NULL');
+    expect(restoreSql).toContain('storage_backend <=> NULL');
+    expect(restoreSql).toContain("content_text <=> 'mutated'");
+
+    // 逐列恢复为登记原值
+    expect(restoreSql).toContain(`storage_reference = '${'a'.repeat(32)}.md'`);
+    expect(restoreSql).toContain("storage_backend = 'local'");
+    expect(restoreSql).toContain('content_text = NULL');
+
+    // 身份绑定：精确 ID + 标题 + 创建人，绝不按标题前缀认领
+    expect(restoreSql).toContain('id = 980001');
+    expect(restoreSql).toContain(`title = '${TITLE}'`);
+    expect(restoreSql).toContain(`created_by_account_id = ${CREATED_BY_ACCOUNT_ID}`);
+
+    // 守卫核验（含逐列制造状态统计）必须先于 UPDATE：否则会把已被意外改动的列一并恢复
+    const guardIndex = restoreSql.indexOf(
+      'INSERT INTO e2e_reference_document_fixture_restore_guard',
+    );
+    const updateIndex = restoreSql.indexOf('UPDATE reference_document SET');
+
+    expect(guardIndex).toBeGreaterThanOrEqual(0);
+    expect(updateIndex).toBeGreaterThan(guardIndex);
+    expect(restoreSql).toContain('CHECK (violations = 0)');
+    // 身份须恰好命中 1 行：违例用 (1 - 命中数)，而非「列数 - 命中数」（后者会让健康行恒判违例）
+    expect(restoreSql).toContain('(1 - (SELECT COUNT(*) FROM reference_document WHERE id = 980001');
+  });
+
+  it.each([
+    [
+      '制造状态已被意外改动',
+      'database=lithography_e2e existing_rows=1 mismatch_rows=1\nrestored_rows=0',
+    ],
+    ['目标行缺失', 'database=lithography_e2e existing_rows=0 mismatch_rows=0\nrestored_rows=0'],
+    [
+      '实际库名非专用隔离库',
+      'database=lithography_drill existing_rows=1 mismatch_rows=0\nrestored_rows=1',
+    ],
+  ])('恢复诊断不达标（%s）时抛错并保留行与文件', (_label, diagnosticOutput) => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValueOnce('lithography_e2e').mockReturnValueOnce(diagnosticOutput);
+
+    expect(() =>
+      restoreMutatedReferenceDocumentFixtureRow(readBackendEnv(), restoreTarget()),
+    ).toThrow('夹具恢复核验失败（保留行与文件）');
   });
 });
