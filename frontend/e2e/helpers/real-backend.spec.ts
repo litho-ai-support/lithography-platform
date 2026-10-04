@@ -8,17 +8,29 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  assertE2EReferenceDocumentOwnershipBeforeCleanup,
   assertPhysicalCleanupAllowed,
   cleanupE2ERepairRequest,
   deleteE2EReferenceDocumentRowsByIds,
-  deleteE2EReferenceDocumentStorageFilesByIds,
+  deleteE2EReferenceDocumentStorageFiles,
   deleteRepairRequestRowsByIds,
   findRepairRequestByRequestNo,
   hasFrontendGraphQLEndpoint,
   mysqlQuery,
+  planReferenceDocumentSoftDelete,
   readBackendEnv,
+  type ReferenceDocumentCleanupTarget,
+  type ReferenceDocumentFixtureColumn,
+  type ReferenceDocumentFixtureRestoreTarget,
+  type ReferenceDocumentStorageFileCleanupTarget,
+  type RegisteredReferenceDocument,
+  registerUploadedReferenceDocument,
   type RepairRequestCleanupResponseTarget,
   type RepairRequestCleanupTarget,
+  requirePositiveReferenceDocumentId,
+  requireResolvedStorageReference,
+  restoreMutatedReferenceDocumentFixtureRow,
+  runGuardedFixtureWrite,
 } from './real-backend';
 
 const { execFileSyncMock, existsSyncMock, readFileSyncMock, rmSyncMock } = vi.hoisted(() => ({
@@ -91,12 +103,60 @@ describe('real-backend 受保护 requestNo helper', () => {
   });
 });
 
-describe('real-backend 参考资料物理清理安全门（负责人 0909 阻塞项 1）', () => {
+describe('real-backend 参考资料物理清理安全门（收紧为精确 ID + 预期事实事务核验）', () => {
   const OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
   const originalOptIn = process.env[OPT_IN_ENV];
+  const TEST_DB_ENV =
+    'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=lithography_e2e\n';
+  const CREATED_BY_ACCOUNT_ID = 9001;
+  const TITLE = 'E2E 参考资料验收行·run1（光闸维护·已改）';
+  const STORAGE_REFERENCE = `${'a'.repeat(32)}.md`;
+
+  // 本轮预期事实由测试自身掌握；不得用「从目标行反读回来的值」充当预期（否则核验自证）
+  const VALID_TARGET: ReferenceDocumentCleanupTarget = {
+    id: 970100,
+    expected: {
+      title: TITLE,
+      createdByAccountId: CREATED_BY_ACCOUNT_ID,
+      storageReference: null,
+    },
+  };
+  const FILE_TARGET: ReferenceDocumentCleanupTarget = {
+    id: 970101,
+    expected: {
+      title: TITLE,
+      createdByAccountId: CREATED_BY_ACCOUNT_ID,
+      storageReference: STORAGE_REFERENCE,
+    },
+  };
+
+  function targetWith(
+    id: number,
+    expected: Partial<ReferenceDocumentCleanupTarget['expected']> = {},
+  ): ReferenceDocumentCleanupTarget {
+    return { id, expected: { ...VALID_TARGET.expected, ...expected } };
+  }
+
+  /** CLI 回读的核验诊断行（helper 逐项复查后才允许声称清理成功） */
+  function cleanupDiagnostics(overrides: Record<string, string> = {}, expectedRows = 1): string {
+    const fields: Record<string, string> = {
+      database: 'lithography_e2e',
+      expected_rows: String(expectedRows),
+      existing_rows: String(expectedRows),
+      field_mismatch_rows: '0',
+      external_ref_rows: '0',
+      residue_rows: '0',
+      ...overrides,
+    };
+
+    return Object.entries(fields)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(' ');
+  }
 
   beforeEach(() => {
     execFileSyncMock.mockReset().mockReturnValue('');
+    readFileSyncMock.mockReset().mockReturnValue(TEST_DB_ENV);
     delete process.env[OPT_IN_ENV];
   });
 
@@ -108,21 +168,57 @@ describe('real-backend 参考资料物理清理安全门（负责人 0909 阻塞
     }
   });
 
-  it('空 ID 列表是 no-op，不启动 mysql 进程', () => {
+  it('空目标列表是 no-op，不启动 mysql 进程', () => {
     expect(() => deleteE2EReferenceDocumentRowsByIds([])).not.toThrow();
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
   it.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
-    '非安全正整数 ID（%p）直接抛错且绝不启动 mysql 进程',
+    '非法 ID（%p）直接抛错且绝不启动 mysql 进程',
     (invalidId) => {
-      expect(() => deleteE2EReferenceDocumentRowsByIds([invalidId])).toThrow('未通过正整数校验');
+      process.env[OPT_IN_ENV] = '1';
+
+      expect(() => deleteE2EReferenceDocumentRowsByIds([targetWith(invalidId)])).toThrow(
+        '未通过正整数校验',
+      );
       expect(execFileSyncMock).not.toHaveBeenCalled();
     },
   );
 
+  it('同一批出现重复 ID 时整批拒绝，不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() => deleteE2EReferenceDocumentRowsByIds([VALID_TARGET, VALID_TARGET])).toThrow(
+      '物理清理目标 ID 重复',
+    );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      '标题注入引号',
+      { title: "标题'; DROP TABLE reference_document;--" },
+      '预期标题未通过白名单校验',
+    ],
+    ['标题含反斜杠（MySQL 转义符）', { title: '标题\\1' }, '预期标题未通过白名单校验'],
+    ['标题超长', { title: 'x'.repeat(256) }, '预期标题未通过白名单校验'],
+    ['创建人账号非正整数', { createdByAccountId: 0 }, '预期创建人账号未通过正整数校验'],
+    [
+      '存储引用非法形态',
+      { storageReference: 'not-a-generated-reference' },
+      '预期存储引用未通过白名单校验',
+    ],
+  ])('目标事实非法（%s）在任何 SQL 组装/数据库进程之前被拒绝', (_label, broken, message) => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() => deleteE2EReferenceDocumentRowsByIds([targetWith(970100, broken)])).toThrow(
+      message,
+    );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
   it('共享开发库（无 opt-in）物理清理被拒绝且 mysql 进程未被调用', () => {
-    expect(() => deleteE2EReferenceDocumentRowsByIds([970100])).toThrow(
+    expect(() => deleteE2EReferenceDocumentRowsByIds([VALID_TARGET])).toThrow(
       '缺少 E2E_ALLOW_PHYSICAL_CLEANUP=1',
     );
     expect(execFileSyncMock).not.toHaveBeenCalled();
@@ -130,8 +226,25 @@ describe('real-backend 参考资料物理清理安全门（负责人 0909 阻塞
 
   it('opt-in 但库名非测试库命名（app）物理清理被拒绝且 mysql 进程未被调用', () => {
     process.env[OPT_IN_ENV] = '1';
+    readFileSyncMock.mockReturnValue(
+      'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=app\n',
+    );
 
-    expect(() => deleteE2EReferenceDocumentRowsByIds([970100])).toThrow('不属于测试库命名');
+    expect(() => deleteE2EReferenceDocumentRowsByIds([VALID_TARGET])).toThrow('不属于测试库命名');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['共享开发库 lithography_drill', 'lithography_drill', '不属于测试库命名'],
+    ['非测试库 app', 'app', '不属于测试库命名'],
+    ['其他测试库 lithography_platform_e2e', 'lithography_platform_e2e', '不是专用隔离库'],
+  ])('opt-in 但 DB_NAME=%s 时失败关闭且 mysql 进程未被调用', (_label, dbName, message) => {
+    process.env[OPT_IN_ENV] = '1';
+    readFileSyncMock.mockReturnValue(
+      `DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=${dbName}\n`,
+    );
+
+    expect(() => deleteE2EReferenceDocumentRowsByIds([VALID_TARGET])).toThrow(message);
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
@@ -148,32 +261,120 @@ describe('real-backend 参考资料物理清理安全门（负责人 0909 阻塞
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
-  it('opt-in + 测试库命名：SQL 仅包含传入的精确 ID，绝不按标题前缀批量匹配', () => {
+  it('通过核验时：单次 mysql 调用（同一连接同一事务）只删本轮精确 ID，提交前核验残留为零', () => {
     process.env[OPT_IN_ENV] = '1';
-    readFileSyncMock.mockReturnValue(
-      'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=app_e2e\n',
-    );
+    execFileSyncMock.mockReturnValue(cleanupDiagnostics());
 
-    deleteE2EReferenceDocumentRowsByIds([970100, 970101]);
+    expect(() => deleteE2EReferenceDocumentRowsByIds([VALID_TARGET])).not.toThrow();
 
     expect(execFileSyncMock).toHaveBeenCalledTimes(1);
-    expect(executedSql()).toBe('DELETE FROM reference_document WHERE id IN (970100,970101)');
+
+    const sql = executedSqls()[0] as string;
+
+    expect(sql).toContain('START TRANSACTION');
+    expect(sql.match(/\bCOMMIT\b/g)).toHaveLength(1);
+    // 连接内自查实际 DATABASE()，并 FOR UPDATE 锁定目标行后才核对
+    expect(sql).toContain("(DATABASE() <> 'lithography_e2e')");
+    expect(sql).toContain('FOR UPDATE');
+    // 守卫表以 CHECK 约束强制「核验不达标即中止批处理」
+    expect(sql.toLowerCase()).toContain('check (violations = 0)');
+    // 预期事实（标题 / 归属 / 存储引用）逐项绑定进核验门
+    expect(sql).toContain(`title = '${TITLE}'`);
+    expect(sql).toContain(`created_by_account_id = ${CREATED_BY_ACCOUNT_ID}`);
+    expect(sql).toContain('storage_reference IS NULL');
+
+    // DELETE 语句只按本轮精确 ID：不按标题/前缀/行数匹配
+    expect(
+      sql.split(';\n').filter((statement) => statement.includes('DELETE FROM reference_document')),
+    ).toEqual(['DELETE FROM reference_document WHERE id IN (970100)']);
+    expect(sql).not.toContain('LIKE');
+    expect(sql).not.toContain('970101');
+
+    // 顺序：核验门（库名/行数/字段/外部引用）→ DELETE → 残留门 → COMMIT
+    const verificationIndex = sql.indexOf('INSERT INTO e2e_reference_document_cleanup_guard');
+    const deleteIndex = sql.indexOf('DELETE FROM reference_document');
+    const residueIndex = sql.indexOf("SELECT CONCAT('residue_rows='");
+    const residueGuardIndex = sql.lastIndexOf('INSERT INTO e2e_reference_document_cleanup_guard');
+    const commitIndex = sql.indexOf('COMMIT');
+
+    expect(verificationIndex).toBeGreaterThan(-1);
+    expect(deleteIndex).toBeGreaterThan(verificationIndex);
+    expect(residueIndex).toBeGreaterThan(deleteIndex);
+    expect(residueGuardIndex).toBeGreaterThan(residueIndex);
+    expect(commitIndex).toBeGreaterThan(residueGuardIndex);
   });
 
-  it('并行运行模拟：清理运行 A 的精确 ID 时，运行 B 同前缀资料的 ID 不出现在 SQL 中', () => {
+  it('多目标全部通过核验时同一次调用内删除，且只包含本轮精确 ID', () => {
     process.env[OPT_IN_ENV] = '1';
-    readFileSyncMock.mockReturnValue(
-      'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=app_e2e\n',
+    execFileSyncMock.mockReturnValue(cleanupDiagnostics({}, 2));
+
+    expect(() => deleteE2EReferenceDocumentRowsByIds([VALID_TARGET, FILE_TARGET])).not.toThrow();
+
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+
+    const sql = executedSqls()[0] as string;
+
+    expect(sql).toContain('DELETE FROM reference_document WHERE id IN (970100,970101)');
+    // 可空字段用 NULL 安全比较（<=>）：非空预期引用绝不能退化为 `=`，否则实际被改成 NULL 时漏计
+    expect(sql).toContain(`storage_reference <=> '${STORAGE_REFERENCE}'`);
+    expect(sql).not.toContain(`storage_reference = '${STORAGE_REFERENCE}'`);
+    expect(sql).not.toContain('970102');
+  });
+
+  // 反例 1（同标题异主）：helper 从不按标题认领删除目标；核验门把 title 与 created_by_account_id
+  // 绑定在**同一条** AND 事实里，同标题异主的行必然让 field_mismatch_rows 命中，事务在 DELETE 前中止。
+  it('同标题异主被捕获：标题与创建人账号绑定在同一条 AND 事实中，字段不符即零删除', () => {
+    process.env[OPT_IN_ENV] = '1';
+    // CLI 报告：目标行存在，但字段（归属/标题）与预期不符 → 违例非零
+    execFileSyncMock.mockReturnValue(cleanupDiagnostics({ field_mismatch_rows: '1' }));
+
+    expect(() => deleteE2EReferenceDocumentRowsByIds([VALID_TARGET])).toThrow(
+      'field_mismatch_rows 期望 0 实际 "1"',
     );
 
-    // 运行 A 的目标列表只含 A 自建行 970100；运行 B 的 970200 同前缀但不传人
-    deleteE2EReferenceDocumentRowsByIds([970100]);
+    const sql = executedSqls()[0] as string;
+    const expectedFacts = sql.split('AND NOT (')[1] ?? '';
 
-    const sql = executedSql() ?? '';
+    expect(expectedFacts).toContain(`title = '${TITLE}'`);
+    expect(expectedFacts).toContain(`created_by_account_id = ${CREATED_BY_ACCOUNT_ID}`);
+    // 同一条事实内 AND 绑定：不能拆成两个独立 OR 分支（否则同标题异主会被误判通过）
+    expect(expectedFacts).toMatch(/title = '[^']*' AND created_by_account_id = \d+/);
+  });
 
-    expect(sql).toBe('DELETE FROM reference_document WHERE id IN (970100)');
-    expect(sql).not.toContain('970200');
-    expect(sql).not.toContain('LIKE');
+  // 反例 2（归属不符）：归属事实不符同样让核验失败，绝不因「标题相同」而放行。
+  it('归属不符被捕获：核验诊断 field_mismatch_rows 非零时抛错，拒绝声称清理完成', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue(cleanupDiagnostics({ field_mismatch_rows: '1' }));
+
+    expect(() => deleteE2EReferenceDocumentRowsByIds([FILE_TARGET])).toThrow(
+      '参考资料物理清理核验失败',
+    );
+  });
+
+  // 反例 3（外部引用）：出现引用 reference_document 的外键即失败关闭，绝不带子记录删除。
+  it('外部引用非零时失败关闭：external_ref_rows 非零即抛错', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue(cleanupDiagnostics({ external_ref_rows: '1' }));
+
+    expect(() => deleteE2EReferenceDocumentRowsByIds([VALID_TARGET])).toThrow(
+      'external_ref_rows 期望 0 实际 "1"',
+    );
+  });
+
+  // 反例 4（删除失败）：CLI 中止（CHECK 违例 / SQL 错误）时抛出携带诊断的错误，且不回读为成功。
+  it('删除失败（CLI 中止）时抛出携带诊断的错误，拒绝声称清理完成', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockImplementation(() => {
+      throw Object.assign(new Error('mysql exited with code 1'), {
+        stdout: 'database=lithography_e2e expected_rows=1 existing_rows=1\n',
+        stderr: 'ERROR 3819 (HY000) at line 5: Check constraint violated',
+      });
+    });
+
+    expect(() => deleteE2EReferenceDocumentRowsByIds([VALID_TARGET])).toThrow(
+      '参考资料物理清理事务中止',
+    );
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1000,7 +1201,7 @@ describe('real-backend 统一清理入口 cleanupE2ERepairRequest（创建 / 管
 
 describe('真实 E2E 清理路径统一收口（不再有仅凭编号的直接删除入口）', () => {
   const CLEANUP_CALL_SITES = [
-    'repair-request-create.spec.ts',
+    'repair-request-create-real.spec.ts',
     'repair-request-manage-real.spec.ts',
     'engineer-repair-request-real.spec.ts',
   ] as const;
@@ -1045,6 +1246,21 @@ describe('真实 E2E 清理路径统一收口（不再有仅凭编号的直接�
     // 不再有「反查编号充当预期值」的写法（核验退化为自证的旧路径）
     expect(source).not.toContain('verifiedRequestNos');
     expect(source).toMatch(/faultDescription: row\.faultDescription/);
+  });
+
+  // 评审 P2：归属预检必须在软删 Mutation 之前调用（不能先软删、再等物理删除时报错），
+  // 且物理删除复用同一份已预检目标，不再另行构造。
+  it('参考资料真实用例在软删除之前先做只读归属预检，物理清理复用同一份目标', async () => {
+    const source = await readSource('../reference-document-real.spec.ts');
+    const precheckIndex = source.indexOf(
+      'assertE2EReferenceDocumentOwnershipBeforeCleanup(targets)',
+    );
+    const softDeleteIndex = source.indexOf('realGraphqlCall(env, SOFT_DELETE_MUTATION');
+
+    expect(precheckIndex).toBeGreaterThan(-1);
+    expect(softDeleteIndex).toBeGreaterThan(-1);
+    expect(precheckIndex).toBeLessThan(softDeleteIndex);
+    expect(source).toContain('deleteE2EReferenceDocumentRowsByIds(targets)');
   });
 });
 
@@ -1109,42 +1325,151 @@ describe('real-backend 前端真实通道探测（负责人 0909 必须修复 3�
   });
 });
 
-describe('real-backend 存储物理文件清理（0909 第二轮：按精确引用路径，不扫描批量删）', () => {
+describe('real-backend 存储物理文件清理（入口自证失败关闭 + 先核验目标行与引用唯一性，再删记录引用）', () => {
   const VALID_REFERENCE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90.pdf';
+  const OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
+  const originalOptIn = process.env[OPT_IN_ENV];
+
+  /** 专用隔离库配置文件：入口授权门通过后，配置库名门必须命中该库 */
+  function dedicatedDbEnv(): string {
+    return 'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=lithography_e2e\n';
+  }
+
+  function storageFileTarget(
+    overrides: Partial<ReferenceDocumentStorageFileCleanupTarget['expected']> = {},
+    id = 970100,
+  ): ReferenceDocumentStorageFileCleanupTarget {
+    return {
+      id,
+      expected: {
+        title: 'E2E 参考资料验收行·run1（文件上传）',
+        createdByAccountId: 42,
+        storageReference: VALID_REFERENCE,
+        originalFilename: 'optics-check-run1.md',
+        mimeType: 'text/markdown',
+        ...overrides,
+      },
+    };
+  }
+
+  function verificationDiagnostics(overrides: Record<string, string> = {}): string {
+    return Object.entries({
+      database: 'lithography_e2e',
+      expected_files: '1',
+      existing_rows: '1',
+      field_mismatch_rows: '0',
+      shared_reference_rows: '0',
+      ...overrides,
+    })
+      .map(([key, value]) => `${key}=${value}`)
+      .join(' ');
+  }
 
   beforeEach(() => {
     execFileSyncMock.mockReset().mockReturnValue('');
     existsSyncMock.mockReset().mockReturnValue(false);
     rmSyncMock.mockReset();
-    readFileSyncMock
-      .mockReset()
-      .mockReturnValue(
-        'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=app\n',
-      );
+    readFileSyncMock.mockReset().mockReturnValue(dedicatedDbEnv());
+    delete process.env[OPT_IN_ENV];
   });
 
-  it('空 ID 列表是 no-op，不启动 mysql 进程', () => {
-    expect(() => deleteE2EReferenceDocumentStorageFilesByIds([])).not.toThrow();
+  afterAll(() => {
+    if (originalOptIn === undefined) {
+      delete process.env[OPT_IN_ENV];
+    } else {
+      process.env[OPT_IN_ENV] = originalOptIn;
+    }
+  });
+
+  it('空目标列表是 no-op，不启动 mysql 进程', () => {
+    expect(() => deleteE2EReferenceDocumentStorageFiles([])).not.toThrow();
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
   it.each([0, -1, 1.5, Number.NaN])('非安全正整数 ID（%p）直接抛错且不访问数据库', (invalidId) => {
-    expect(() => deleteE2EReferenceDocumentStorageFilesByIds([invalidId])).toThrow(
-      '未通过正整数校验',
-    );
+    expect(() =>
+      deleteE2EReferenceDocumentStorageFiles([storageFileTarget({}, invalidId)]),
+    ).toThrow('未通过正整数校验');
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
-  it('合法引用：仅删除存储目录内解析后的精确路径，并带格式白名单校验', () => {
-    execFileSyncMock.mockReturnValue(VALID_REFERENCE);
-    existsSyncMock.mockReturnValue(true);
+  it.each([
+    ['路径穿越', '../../../etc/passwd'],
+    ['非白名单格式', 'short-name.pdf'],
+    ['目录拼接引用', `${VALID_REFERENCE}/../../evil.pdf`],
+  ])('白名单外引用（%s）在访问数据库前拒绝删除', (_label, reference) => {
+    expect(() =>
+      deleteE2EReferenceDocumentStorageFiles([storageFileTarget({ storageReference: reference })]),
+    ).toThrow('预期引用未通过白名单校验');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(rmSyncMock).not.toHaveBeenCalled();
+  });
 
-    deleteE2EReferenceDocumentStorageFilesByIds([970100]);
-
-    // 先按精确 ID 查引用（SELECT），再删除解析后的唯一文件
-    expect(executedSql()).toBe(
-      "SELECT IFNULL(storage_reference, '') FROM reference_document WHERE id = 970100",
+  // 评审 P1：入口自证失败关闭——授权门 / 配置库名门 / 实际 DATABASE() 门任一不通过，
+  // 都不得启动 mysql 进程、更不得删除文件。
+  it('缺显式授权（未设 E2E_ALLOW_PHYSICAL_CLEANUP=1）：入口自行拒绝，不启动 mysql、不删文件', () => {
+    expect(() => deleteE2EReferenceDocumentStorageFiles([storageFileTarget()])).toThrow(
+      '缺少 E2E_ALLOW_PHYSICAL_CLEANUP=1',
     );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('配置库名非专用隔离库（app）：入口自行拒绝，不启动 mysql、不删文件', () => {
+    process.env[OPT_IN_ENV] = '1';
+    readFileSyncMock.mockReturnValue(
+      'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=app\n',
+    );
+
+    expect(() => deleteE2EReferenceDocumentStorageFiles([storageFileTarget()])).toThrow(
+      '物理清理被拒绝',
+    );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('配置库名是测试库但非专用隔离库（app_e2e）：严格库名门拒绝，不启动 mysql、不删文件', () => {
+    process.env[OPT_IN_ENV] = '1';
+    readFileSyncMock.mockReturnValue(
+      'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=app_e2e\n',
+    );
+
+    expect(() => deleteE2EReferenceDocumentStorageFiles([storageFileTarget()])).toThrow(
+      '不是专用隔离库',
+    );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('实际 DATABASE() 与专用隔离库不符：只查进程 env 的 DB_NAME 不够，核验失败并保留文件', () => {
+    process.env[OPT_IN_ENV] = '1';
+    // 配置指向专用库，但同一核验连接回读的实际库不是专用库
+    execFileSyncMock.mockReturnValue(verificationDiagnostics({ database: 'lithography_drill' }));
+
+    expect(() => deleteE2EReferenceDocumentStorageFiles([storageFileTarget()])).toThrow(
+      '存储文件删除前核验失败',
+    );
+    expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('核验通过：按记录引用删除存储目录内解析后的精确路径（不反查当前行引用）', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue(verificationDiagnostics());
+    // 删除前存在、删除后复核不存在：删除后零残留复核通过
+    existsSyncMock.mockReturnValueOnce(true).mockReturnValue(false);
+
+    expect(() => deleteE2EReferenceDocumentStorageFiles([storageFileTarget()])).not.toThrow();
+
+    // 删除前只读核验：核对行字段（含文件元数据）与引用唯一性；三个可空字段一律 NULL 安全比较
+    expect(executedSql()).toContain(`storage_reference <=> '${VALID_REFERENCE}'`);
+    expect(executedSql()).toContain(`original_filename <=> 'optics-check-run1.md'`);
+    expect(executedSql()).toContain(`mime_type <=> 'text/markdown'`);
+    expect(executedSql()).not.toContain(`original_filename = '`);
+    expect(executedSql()).not.toContain(`mime_type = '`);
+    expect(executedSql()).toContain('shared_reference_rows');
+    // 核验先于删除：核验是单条只读 SELECT，绝不携带 DELETE / UPDATE；文件删除在其之后
+    expect(executedSql()).toMatch(/^SELECT /);
+    expect(executedSql()).not.toMatch(/\b(DELETE|UPDATE)\b/i);
     expect(rmSyncMock).toHaveBeenCalledTimes(1);
 
     const removedPath = rmSyncMock.mock.calls[0]?.[0] as string;
@@ -1155,24 +1480,242 @@ describe('real-backend 存储物理文件清理（0909 第二轮：按精确引�
     expect(removedPath).not.toContain('..');
   });
 
-  it.each([
-    ['路径穿越', '../../../etc/passwd'],
-    ['非白名单格式', 'short-name.pdf'],
-    ['目录拼接引用', `${VALID_REFERENCE}/../../evil.pdf`],
-  ])('白名单外引用（%s）拒绝删除物理文件', (_label, reference) => {
-    execFileSyncMock.mockReturnValue(reference);
+  it('删除后文件仍存在（残留）：抛错拒绝声称清理完成', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue(verificationDiagnostics());
+    // 删除前存在、删除后复核仍存在：残留必须暴露为失败，不得以警告吞掉
+    existsSyncMock.mockReturnValue(true);
 
-    deleteE2EReferenceDocumentStorageFilesByIds([970100]);
+    expect(() => deleteE2EReferenceDocumentStorageFiles([storageFileTarget()])).toThrow(
+      '存储物理文件清理后仍存在残留',
+    );
+    expect(rmSyncMock).toHaveBeenCalledTimes(1);
+  });
 
+  it('存储引用被改写（行字段与记录不符）：保留文件、不执行删除，用例失败', () => {
+    process.env[OPT_IN_ENV] = '1';
+    // 行被改写：核验计数 field_mismatch_rows=1，记录引用已不再指向该行当前值
+    execFileSyncMock.mockReturnValue(verificationDiagnostics({ field_mismatch_rows: '1' }));
+
+    expect(() => deleteE2EReferenceDocumentStorageFiles([storageFileTarget()])).toThrow(
+      '存储文件删除前核验失败',
+    );
+    // 核验失败即保留文件：绝不删除他人文件（也不删被改写引用指向的文件）
     expect(rmSyncMock).not.toHaveBeenCalled();
   });
 
-  it('无存储引用的行（纯文本资料）安全跳过', () => {
-    execFileSyncMock.mockReturnValue('');
+  it('记录引用被其他行占用（shared_reference_rows>0）：保留文件、不执行删除', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue(verificationDiagnostics({ shared_reference_rows: '1' }));
 
-    deleteE2EReferenceDocumentStorageFilesByIds([970005]);
-
+    expect(() => deleteE2EReferenceDocumentStorageFiles([storageFileTarget()])).toThrow(
+      '存储文件删除前核验失败',
+    );
     expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('目标行缺失（existing_rows 不符）：保留文件、不执行删除', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue(
+      verificationDiagnostics({ existing_rows: '0', field_mismatch_rows: '0' }),
+    );
+
+    expect(() => deleteE2EReferenceDocumentStorageFiles([storageFileTarget()])).toThrow(
+      '存储文件删除前核验失败',
+    );
+    expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('real-backend 参考资料软删前归属预检（只读，失败即停止清理流程）', () => {
+  const TITLE = 'E2E 参考资料验收行·run1（光闸维护·已改）';
+
+  function cleanupTarget(
+    overrides: Partial<ReferenceDocumentCleanupTarget['expected']> = {},
+    id = 970100,
+  ): ReferenceDocumentCleanupTarget {
+    return {
+      id,
+      expected: { title: TITLE, createdByAccountId: 42, storageReference: null, ...overrides },
+    };
+  }
+
+  function ownershipDiagnostics(overrides: Record<string, string> = {}): string {
+    return Object.entries({
+      database: 'lithography_e2e',
+      expected_rows: '1',
+      existing_rows: '1',
+      field_mismatch_rows: '0',
+      ...overrides,
+    })
+      .map(([key, value]) => `${key}=${value}`)
+      .join(' ');
+  }
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset().mockReturnValue('');
+    existsSyncMock.mockReset();
+    rmSyncMock.mockReset();
+    readFileSyncMock
+      .mockReset()
+      .mockReturnValue(
+        'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=lithography_e2e\n',
+      );
+  });
+
+  it('空目标列表是 no-op，不启动 mysql 进程', () => {
+    expect(() => assertE2EReferenceDocumentOwnershipBeforeCleanup([])).not.toThrow();
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('预检通过：只执行一次只读 SELECT，绝不 UPDATE / DELETE，也不删文件', () => {
+    execFileSyncMock.mockReturnValue(ownershipDiagnostics());
+
+    expect(() => assertE2EReferenceDocumentOwnershipBeforeCleanup([cleanupTarget()])).not.toThrow();
+
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    expect(executedSql()).toMatch(/^SELECT /);
+    expect(executedSql()).not.toMatch(/\b(DELETE|UPDATE)\b/i);
+    expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('目标行被改写（字段不符）：抛错停止清理，且未执行任何 DELETE / 文件删除', () => {
+    execFileSyncMock.mockReturnValue(ownershipDiagnostics({ field_mismatch_rows: '1' }));
+
+    expect(() => assertE2EReferenceDocumentOwnershipBeforeCleanup([cleanupTarget()])).toThrow(
+      '参考资料归属预检失败',
+    );
+    expect(executedSql()).not.toMatch(/\b(DELETE|UPDATE)\b/i);
+    expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('目标行缺失（existing_rows 不符）：抛错停止清理，且未执行任何 DELETE / 文件删除', () => {
+    execFileSyncMock.mockReturnValue(ownershipDiagnostics({ existing_rows: '0' }));
+
+    expect(() => assertE2EReferenceDocumentOwnershipBeforeCleanup([cleanupTarget()])).toThrow(
+      '参考资料归属预检失败',
+    );
+    expect(executedSql()).not.toMatch(/\b(DELETE|UPDATE)\b/i);
+    expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('可空存储引用用 NULL 安全比较：非空预期生成 <=>，实际被改成 NULL 时会计入不符', () => {
+    execFileSyncMock.mockReturnValue(ownershipDiagnostics());
+    const reference = `${'a'.repeat(32)}.md`;
+
+    expect(() =>
+      assertE2EReferenceDocumentOwnershipBeforeCleanup([
+        cleanupTarget({ storageReference: reference }),
+      ]),
+    ).not.toThrow();
+
+    expect(executedSql()).toContain(`storage_reference <=> '${reference}'`);
+    expect(executedSql()).not.toContain(`storage_reference = '${reference}'`);
+    // 预检仍是只读 SELECT：绝不携带 DELETE / UPDATE
+    expect(executedSql()).toMatch(/^SELECT /);
+    expect(executedSql()).not.toMatch(/\b(DELETE|UPDATE)\b/i);
+  });
+});
+
+describe('real-backend 上传存储引用登记（登记先于解析，未知引用不降级为无引用）', () => {
+  const VALID_REFERENCE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90.md';
+
+  function facts(id = 970100): Omit<RegisteredReferenceDocument, 'storageReference'> {
+    return {
+      id,
+      title: 'E2E 参考资料验收行·run1（文件上传）',
+      createdByAccountId: 42,
+      originalFilename: 'optics-check-run1.md',
+      mimeType: 'text/markdown',
+    };
+  }
+
+  it('查询抛错：精确 ID 已登记且引用状态为 pending（未知），绝不误记为无引用', () => {
+    const registry: RegisteredReferenceDocument[] = [];
+
+    const record = registerUploadedReferenceDocument(registry, facts(), () => {
+      throw new Error('存储引用查询失败');
+    });
+
+    expect(registry).toHaveLength(1);
+    expect(registry[0]).toBe(record);
+    expect(record.id).toBe(970100);
+    expect(record.storageReference).toEqual({ status: 'pending' });
+  });
+
+  it('返回非法引用：同样保持 pending（未知），登记不回退', () => {
+    const registry: RegisteredReferenceDocument[] = [];
+
+    const record = registerUploadedReferenceDocument(registry, facts(), () => 'short-name.md');
+
+    expect(registry).toHaveLength(1);
+    expect(record.storageReference).toEqual({ status: 'pending' });
+  });
+
+  it('返回 null：登记为 none（确认无引用），区别于 pending', () => {
+    const registry: RegisteredReferenceDocument[] = [];
+
+    const record = registerUploadedReferenceDocument(registry, facts(), () => null);
+
+    expect(record.storageReference).toEqual({ status: 'none' });
+  });
+
+  it('返回合法引用：登记为 resolved 并保留引用值', () => {
+    const registry: RegisteredReferenceDocument[] = [];
+
+    const record = registerUploadedReferenceDocument(registry, facts(), () => VALID_REFERENCE);
+
+    expect(record.storageReference).toEqual({ status: 'resolved', reference: VALID_REFERENCE });
+  });
+
+  it('pending 引用被清理侧拒绝并报告精确 ID（不当作无引用跳过）', () => {
+    expect(() => requireResolvedStorageReference({ status: 'pending' }, 970100)).toThrow('970100');
+    expect(() => requireResolvedStorageReference({ status: 'pending' }, 970100)).toThrow(
+      '无法证明归属',
+    );
+  });
+
+  it('none → null（确实无引用），resolved → 引用值', () => {
+    expect(requireResolvedStorageReference({ status: 'none' }, 970100)).toBeNull();
+    expect(
+      requireResolvedStorageReference({ status: 'resolved', reference: VALID_REFERENCE }, 970100),
+    ).toBe(VALID_REFERENCE);
+  });
+});
+
+describe('real-backend 参考资料软删计划（反查仅报告遗漏，不并入删除目标）', () => {
+  it('同标题异主的反查 ID 不进入软删目标，只作为遗漏行报告', () => {
+    const { softDeleteIds, unexpectedIds } = planReferenceDocumentSoftDelete(
+      [970100],
+      [970100, 970999],
+    );
+
+    // 软删只处理本轮记录的精确 ID；反查所得他人行保持原样
+    expect(softDeleteIds).toEqual([970100]);
+    expect(unexpectedIds).toEqual([970999]);
+  });
+
+  it('反查为空时只软删本轮记录 ID，无遗漏行', () => {
+    const { softDeleteIds, unexpectedIds } = planReferenceDocumentSoftDelete([970100, 970101], []);
+
+    expect(softDeleteIds).toEqual([970100, 970101]);
+    expect(unexpectedIds).toEqual([]);
+  });
+});
+
+describe('real-backend 创建响应 ID 解析（缺失即失败并提示残留）', () => {
+  it.each([undefined, null, 0, -1, 1.5, Number.NaN, '970100'])(
+    '缺失 / 非法 ID（%p）抛错并提示可能残留，不按标题猜测归属',
+    (invalidId) => {
+      expect(() => requirePositiveReferenceDocumentId(invalidId, '创建响应')).toThrow(
+        '未返回精确资料 ID',
+      );
+      expect(() => requirePositiveReferenceDocumentId(invalidId, '创建响应')).toThrow('核对残留');
+    },
+  );
+
+  it('正整数 ID 原样返回（创建已落库但后续断言 / 跳转失败仍以此建立清理边界）', () => {
+    expect(requirePositiveReferenceDocumentId(970100, '创建响应')).toBe(970100);
   });
 });
 
@@ -1256,5 +1799,244 @@ describe('real-backend 数据库连接键运行时覆盖（R3：不改 .env 切�
     process.env.OTHER_KEY = 'runtime-should-be-ignored';
 
     expect(readBackendEnv().OTHER_KEY).toBe('file-value');
+  });
+});
+
+describe('real-backend 真实 E2E 夹具写入与「先核验后恢复」安全入口', () => {
+  const OPT_IN_ENV = 'E2E_ALLOW_PHYSICAL_CLEANUP';
+  const originalOptIn = process.env[OPT_IN_ENV];
+  const CREATED_BY_ACCOUNT_ID = 9001;
+  const TITLE = 'E2E 参考资料SQL回归·run1·ref-null';
+
+  function dedicatedDbEnv(): string {
+    return 'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=lithography_e2e\n';
+  }
+
+  /** ref-null 案夹具：引用与后端被故意改成 NULL、并补了正文以满足表 CHECK */
+  function restoreTarget(
+    overrides: Partial<ReferenceDocumentFixtureRestoreTarget> = {},
+  ): ReferenceDocumentFixtureRestoreTarget {
+    return {
+      id: 980001,
+      title: TITLE,
+      createdByAccountId: CREATED_BY_ACCOUNT_ID,
+      mutations: [
+        {
+          column: 'storage_reference',
+          manufacturedValue: null,
+          originalValue: `${'a'.repeat(32)}.md`,
+        },
+        { column: 'storage_backend', manufacturedValue: null, originalValue: 'local' },
+        { column: 'content_text', manufacturedValue: 'mutated', originalValue: null },
+      ],
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset().mockReturnValue('');
+    readFileSyncMock.mockReset().mockReturnValue(dedicatedDbEnv());
+    delete process.env[OPT_IN_ENV];
+    // 其他 describe 可能残留 DB_NAME 运行时覆盖，这里显式清掉，保证夹具入口读到文件库名
+    delete process.env.DB_NAME;
+  });
+
+  afterAll(() => {
+    if (originalOptIn === undefined) {
+      delete process.env[OPT_IN_ENV];
+    } else {
+      process.env[OPT_IN_ENV] = originalOptIn;
+    }
+  });
+
+  // ---- runGuardedFixtureWrite：授权门 + 严格库名门 + 实际 DATABASE() 复查 ----
+
+  it('缺显式授权：夹具写入在任何 mysql 进程之前被拒绝', () => {
+    expect(() =>
+      runGuardedFixtureWrite(
+        readBackendEnv(),
+        'UPDATE reference_document SET content_text = NULL WHERE id = 980001',
+      ),
+    ).toThrow('缺少 E2E_ALLOW_PHYSICAL_CLEANUP=1');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('配置库名非专用隔离库（app_e2e）：夹具写入被严格库名门拒绝，不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+    readFileSyncMock.mockReturnValue(
+      'DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_USER=root\nDB_PASS=secret\nDB_NAME=app_e2e\n',
+    );
+
+    expect(() => runGuardedFixtureWrite(readBackendEnv(), 'SELECT 1')).toThrow('不是专用隔离库');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('执行连接实际 DATABASE() 非专用隔离库：只查配置库名不够，拒绝执行写入', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValue('lithography_drill');
+
+    const writeSql = 'UPDATE reference_document SET content_text = NULL WHERE id = 980001';
+
+    expect(() => runGuardedFixtureWrite(readBackendEnv(), writeSql)).toThrow(
+      /实际 DATABASE\(\)="lithography_drill"/,
+    );
+    // 只发起 DATABASE() 探测，未执行写入 SQL
+    expect(executedSqls()).toEqual(['SELECT DATABASE()']);
+  });
+
+  it('实际 DATABASE() 命中专用隔离库：先探测库名，再执行写入（同一入口）', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValueOnce('lithography_e2e').mockReturnValueOnce('1');
+
+    const writeSql = 'UPDATE reference_document SET content_text = NULL WHERE id = 980001';
+
+    expect(runGuardedFixtureWrite(readBackendEnv(), writeSql)).toBe('1');
+    expect(executedSqls()).toEqual(['SELECT DATABASE()', writeSql]);
+  });
+
+  // ---- restoreMutatedReferenceDocumentFixtureRow：组装前校验 ----
+
+  it.each([0, -1, 1.5, Number.NaN])(
+    '夹具恢复目标 ID 非正整数（%p）直接拒绝且不启动 mysql 进程',
+    (invalidId) => {
+      process.env[OPT_IN_ENV] = '1';
+
+      expect(() =>
+        restoreMutatedReferenceDocumentFixtureRow(
+          readBackendEnv(),
+          restoreTarget({ id: invalidId }),
+        ),
+      ).toThrow('夹具恢复目标非法');
+      expect(execFileSyncMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('夹具恢复未登记任何制造状态列时拒绝执行且不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() =>
+      restoreMutatedReferenceDocumentFixtureRow(readBackendEnv(), restoreTarget({ mutations: [] })),
+    ).toThrow('夹具恢复目标非法');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('夹具恢复列名不在白名单时拒绝拼接且不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+    const target = restoreTarget({
+      mutations: [
+        {
+          column: 'title' as unknown as ReferenceDocumentFixtureColumn,
+          manufacturedValue: 'x',
+          originalValue: 'y',
+        },
+      ],
+    });
+
+    expect(() => restoreMutatedReferenceDocumentFixtureRow(readBackendEnv(), target)).toThrow(
+      '列名未通过白名单校验',
+    );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('夹具恢复预期标题未通过白名单时拒绝访问数据库且不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() =>
+      restoreMutatedReferenceDocumentFixtureRow(
+        readBackendEnv(),
+        restoreTarget({ title: "E2E 参考资料SQL回归·run1·bad'quote" }),
+      ),
+    ).toThrow('标题未通过白名单校验');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('夹具恢复预期创建人账号非正整数时拒绝执行且不启动 mysql 进程', () => {
+    process.env[OPT_IN_ENV] = '1';
+
+    expect(() =>
+      restoreMutatedReferenceDocumentFixtureRow(
+        readBackendEnv(),
+        restoreTarget({ createdByAccountId: 0 }),
+      ),
+    ).toThrow('创建人账号未通过正整数校验');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  // ---- restoreMutatedReferenceDocumentFixtureRow：事务内「锁行 → 写前核验 → 更新 → 影响行数守卫」----
+
+  it('恢复脚本先锁行、写前核验、更新后核对影响行数，全部在同一 mysql 事务内', () => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock
+      .mockReturnValueOnce('lithography_e2e')
+      .mockReturnValueOnce('database=lithography_e2e existing_rows=1 restored_rows=1');
+
+    restoreMutatedReferenceDocumentFixtureRow(readBackendEnv(), restoreTarget());
+
+    const sqls = executedSqls();
+
+    expect(sqls).toHaveLength(2);
+
+    const restoreSql = sqls[1] ?? '';
+
+    // 同一事务：锁行、写前核验、恢复、提交都在一个 mysql 进程的连接里
+    expect(restoreSql).toContain('START TRANSACTION');
+    expect(restoreSql.trimEnd().endsWith('COMMIT')).toBe(true);
+
+    // 按精确 ID 锁定现有行
+    expect(restoreSql).toContain(
+      'SELECT id FROM reference_document WHERE id = 980001 LIMIT 1 FOR UPDATE',
+    );
+
+    // 逐列恢复为登记原值
+    expect(restoreSql).toContain(`storage_reference = '${'a'.repeat(32)}.md'`);
+    expect(restoreSql).toContain("storage_backend = 'local'");
+    expect(restoreSql).toContain('content_text = NULL');
+
+    // 身份绑定：精确 ID + 标题 + 创建人，绝不按标题前缀认领
+    expect(restoreSql).toContain('id = 980001');
+    expect(restoreSql).toContain(`title = '${TITLE}'`);
+    expect(restoreSql).toContain(`created_by_account_id = ${CREATED_BY_ACCOUNT_ID}`);
+
+    // UPDATE 的 WHERE 同时含身份与逐列「当前值仍是本轮制造状态」（NULL 安全）条件
+    expect(restoreSql).toContain(
+      `UPDATE reference_document SET storage_reference = '${'a'.repeat(32)}.md', storage_backend = 'local', content_text = NULL WHERE id = 980001 AND title = '${TITLE}' AND created_by_account_id = ${CREATED_BY_ACCOUNT_ID} AND (storage_reference <=> NULL AND storage_backend <=> NULL AND content_text <=> 'mutated')`,
+    );
+
+    const lockIndex = restoreSql.indexOf('FOR UPDATE');
+    const firstGuardIndex = restoreSql.indexOf(
+      'INSERT INTO e2e_reference_document_fixture_restore_guard',
+    );
+    const updateIndex = restoreSql.indexOf('UPDATE reference_document SET');
+    const captureIndex = restoreSql.indexOf('SET @restored_rows = ROW_COUNT()');
+    const secondGuardIndex = restoreSql.lastIndexOf(
+      'INSERT INTO e2e_reference_document_fixture_restore_guard',
+    );
+
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    // 写前核验守卫先于 UPDATE（锁行亦先于 UPDATE）：不符时绝不执行 UPDATE
+    expect(firstGuardIndex).toBeGreaterThan(lockIndex);
+    expect(firstGuardIndex).toBeLessThan(updateIndex);
+    // 更新后立即捕获影响行数，并在 COMMIT 前经第二道守卫
+    expect(captureIndex).toBeGreaterThan(updateIndex);
+    expect(secondGuardIndex).toBeGreaterThan(captureIndex);
+    expect(restoreSql).toContain('CHECK (violations = 0)');
+    // 写前守卫含库名 + 身份/逐列制造值核验
+    expect(restoreSql).toContain("(DATABASE() <> 'lithography_e2e')");
+    expect(restoreSql).toContain('(1 - (SELECT COUNT(*) FROM reference_document WHERE id = 980001');
+    // 更新后守卫要求影响行数恰好 1
+    expect(restoreSql).toContain('(1 - @restored_rows)');
+  });
+
+  it.each([
+    ['制造状态已被意外改动', 'database=lithography_e2e existing_rows=1 restored_rows=0'],
+    ['目标行缺失', 'database=lithography_e2e existing_rows=0 restored_rows=0'],
+    ['实际库名非专用隔离库', 'database=lithography_drill existing_rows=1 restored_rows=1'],
+  ])('恢复诊断不达标（%s）时抛错并保留行与文件', (_label, diagnosticOutput) => {
+    process.env[OPT_IN_ENV] = '1';
+    execFileSyncMock.mockReturnValueOnce('lithography_e2e').mockReturnValueOnce(diagnosticOutput);
+
+    expect(() =>
+      restoreMutatedReferenceDocumentFixtureRow(readBackendEnv(), restoreTarget()),
+    ).toThrow('夹具恢复核验失败（保留行与文件）');
   });
 });

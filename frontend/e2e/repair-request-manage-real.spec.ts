@@ -19,14 +19,12 @@ import { expect, test } from '@playwright/test';
 import {
   cleanupE2ERepairRequest,
   findRepairRequestByRequestNo,
-  hasFrontendGraphQLEndpoint,
-  isRealBackendAvailable,
   mysqlQuery,
   readBackendEnv,
-  readBackendEnvOrNull,
   realGraphqlCall,
   realLoginAccountId,
   REQUEST_NO_PATTERN,
+  resolveRealBackendPrerequisite,
 } from './helpers/real-backend';
 
 const LIST_PATH = '/customer/repair-requests';
@@ -64,19 +62,9 @@ const customerTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
 
 test.describe('real backend manage flow', () => {
   test.beforeEach(async () => {
-    const env = readBackendEnvOrNull();
-    test.skip(
-      env === null,
-      'backend/env/.env.development 缺失（本地文件，不入库），跳过真实后端用例',
-    );
-    test.skip(
-      !hasFrontendGraphQLEndpoint(),
-      'frontend/env/.env.development.local 未配置 VITE_GRAPHQL_ENDPOINT，真实通道不可达，跳过真实后端用例',
-    );
-    test.skip(
-      !(await isRealBackendAvailable(env as Record<string, string>)),
-      '本地后端不可用或不可登录，跳过真实后端用例',
-    );
+    // 共享预检：普通入口返回跳过原因（保持既有 skip 语义），专用入口严格模式直接失败
+    const skipReason = await resolveRealBackendPrerequisite();
+    test.skip(skipReason !== null, skipReason ?? '');
   });
 
   // T-07 主链路：登录 → 创建 → 成功页跳列表 → 列表可见 → 详情 → 删除未接单成功 →

@@ -10,7 +10,10 @@
  * 唯一能区分第几代会话的是单调代次。
  *
  * 走真实的 `useAdminUserList` / `useAdminUserCommands`（含 in-flight 锁与成功 reload），
- * 只替换最外层的 GraphQL adapter；时序全部由可控 deferred 推进，不使用 sleep，不扩大 timeout。
+ * 只替换最外层的 GraphQL adapter；时序全部由可控 deferred 推进，不使用 sleep。
+ * 仅对最重的「切走再切回 A」用例给足单测预算：它要在 jsdom 里挂载三个 antd Modal
+ *（A → B → A），单测全量并发时本身就会逼近默认 5s 上限，属于渲染成本而非等待缺陷，
+ * 因此该用例显式声明预算，不整体放宽 testTimeout。
  *
  * 关于驱动方式：面板把 `submitting` 接到了 `commands.isPending(key)`，而 antd 6.4.3 的
  * `Modal.handleCancel` 在 `confirmLoading` 为真时直接 `return`（取消按钮、X、遮罩、Esc 共用它），
@@ -40,7 +43,9 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { message } from 'antd';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { GraphQLIngressError } from '@/shared/graphql';
 
 import type {
   AdminUserCommandResult,
@@ -542,7 +547,7 @@ describe('管理员用户管理面板的弹窗会话代次守卫', () => {
     // 失败不触发 reload，也不重放请求
     expect(fetchUsersMock).toHaveBeenCalledTimes(1);
     expect(updateProfileMock).toHaveBeenCalledTimes(1);
-  });
+  }, 15_000);
 
   it('创建用户：正常成功关闭弹窗、给出成功反馈并刷新列表', async () => {
     createMock.mockResolvedValue({ ok: true });
@@ -612,5 +617,390 @@ describe('管理员用户管理面板的弹窗会话代次守卫', () => {
     expect(message.success).not.toHaveBeenCalledWith('「新建用户甲」已创建。');
     await waitFor(() => expect(isDialogOpen(CREATE_DIALOG_TITLE)).toBe(false));
     await waitFor(() => expect(fetchUsersMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+});
+
+/**
+ * PR6 S2 把工具栏换成公共 `FilterBar`、把空/失败/加载态换成公共状态组件之后，
+ * 面板这一层的查询语义与只读表现必须有钉住它的用例：筛选或翻页要下发后端并回到第 1 页，
+ * 空/失败态要真的走公共容器且重试能再次发请求，SUPER_ADMIN 行不得出现任何可写入口。
+ * 这里只驱动 UI，断言落在 adapter 收到的查询对象与 DOM 上，不改动业务/权限实现，
+ * 也不重复同文件已覆盖的弹窗会话代次守卫。
+ */
+describe('管理员用户管理面板的列表查询与只读表现', () => {
+  beforeEach(() => {
+    vi.spyOn(message, 'success')
+      .mockImplementation(() => undefined as never)
+      .mockClear();
+    fetchUsersMock.mockReset();
+    fetchUsersMock.mockResolvedValue(makePage());
+  });
+
+  /** 工具条上的 Select 没有可访问名，用占位文案定位它的容器，再取容器内的 combobox。 */
+  async function selectToolbarOption(placeholder: string, optionLabel: string) {
+    const select = screen.getByText(placeholder).closest('.ant-select') as HTMLElement;
+    fireEvent.mouseDown(within(select).getByRole('combobox'));
+
+    const dropdown = await waitFor(() => {
+      const opened = document.querySelector(
+        '.ant-select-dropdown:not(.ant-select-dropdown-hidden)',
+      );
+
+      if (opened === null) {
+        throw new Error(`「${placeholder}」下拉未展开`);
+      }
+
+      return opened as HTMLElement;
+    });
+    fireEvent.click(within(dropdown).getByText(optionLabel));
+  }
+
+  it('主搜索在防抖到期后把去空白的关键字下发后端并把页码回到第 1 页', async () => {
+    await renderPanel();
+
+    fireEvent.change(screen.getByPlaceholderText('搜索登录名 / 登录邮箱 / 昵称'), {
+      target: { value: '  user_a  ' },
+    });
+
+    await waitFor(() => {
+      expect(fetchUsersMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ keyword: 'user_a', page: 1 }),
+      );
+    });
+  });
+
+  it('连续输入只在防抖到期后发一次搜索请求，不逐字符请求后端', async () => {
+    await renderPanel();
+    const input = screen.getByPlaceholderText('搜索登录名 / 登录邮箱 / 昵称');
+    const baseline = fetchUsersMock.mock.calls.length;
+
+    fireEvent.change(input, { target: { value: 'u' } });
+    fireEvent.change(input, { target: { value: 'us' } });
+    fireEvent.change(input, { target: { value: 'user' } });
+
+    await waitFor(() => {
+      expect(fetchUsersMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ keyword: 'user', page: 1 }),
+      );
+    });
+    expect(fetchUsersMock.mock.calls.length - baseline).toBe(1);
+  });
+
+  /**
+   * 精确筛选条件收在展开区：先点「筛选」开关再操作。
+   * 开关沿用工程师维修申请列表的公共 ToolbarButton，展开态以 aria-expanded 表达。
+   */
+  function openFilterPanel() {
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    expect(screen.getByRole('button', { name: '筛选' })).toHaveAttribute('aria-expanded', 'true');
+  }
+
+  it('角色筛选把单值角色下发后端并把页码回到第 1 页', async () => {
+    await renderPanel();
+    openFilterPanel();
+
+    await selectToolbarOption('角色筛选', '工程师');
+
+    await waitFor(() => {
+      expect(fetchUsersMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 1, role: 'ENGINEER' }),
+      );
+    });
+  });
+
+  it('状态筛选把单值状态下发后端并把页码回到第 1 页', async () => {
+    await renderPanel();
+    openFilterPanel();
+
+    await selectToolbarOption('状态筛选', '停用');
+
+    await waitFor(() => {
+      expect(fetchUsersMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 1, status: 'INACTIVE' }),
+      );
+    });
+  });
+
+  it('翻页把新页码下发后端，不重置当前筛选域', async () => {
+    fetchUsersMock.mockResolvedValue({ items: [ROW_A, ROW_B], page: 1, pageSize: 10, total: 25 });
+    await renderPanel();
+
+    fireEvent.click(screen.getByTitle('2'));
+
+    await waitFor(() => {
+      expect(fetchUsersMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ keyword: null, page: 2, role: null, status: null }),
+      );
+    });
+  });
+
+  it('列表就绪但无数据时渲染公共空态，且不渲染表格', async () => {
+    fetchUsersMock.mockResolvedValue({ items: [], page: 1, pageSize: 10, total: 0 });
+    render(<AdminUserManagementPanel />);
+
+    await waitFor(() => {
+      expect(document.querySelector('.empty-state')).not.toBeNull();
+    });
+    expect(screen.getByText('暂无用户数据。')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it('列表加载失败时渲染公共失败态，重试入口重新发起查询并恢复列表', async () => {
+    fetchUsersMock.mockRejectedValueOnce(
+      new GraphQLIngressError({ message: 'load failed', type: 'network' }),
+    );
+    render(<AdminUserManagementPanel />);
+
+    await waitFor(() => {
+      expect(document.querySelector('.error-state')).not.toBeNull();
+    });
+    expect(screen.getByText('网络连接异常，请稍后重试。')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
+
+    await screen.findByText(ROW_A.nickname);
+    expect(document.querySelector('.error-state')).toBeNull();
+  });
+
+  it('SUPER_ADMIN 行保持只读：三个写入口全部禁用且不提供角色编辑入口', async () => {
+    const superAdminRow: AdminUserRow = {
+      ...ROW_A,
+      accountId: 910003,
+      loginName: 'user_root',
+      nickname: '超管',
+      role: 'SUPER_ADMIN',
+    };
+    fetchUsersMock.mockResolvedValue({
+      items: [superAdminRow],
+      page: 1,
+      pageSize: 10,
+      total: 1,
+    });
+    render(<AdminUserManagementPanel />);
+
+    const row = (await screen.findByText('超管')).closest('tr') as HTMLElement;
+
+    // 只读行的三个写入口被 Tooltip 包裹：按可访问名做角色查询会退化成对整棵子树的
+    // 可见性/样式计算，在这里慢到秒级。改为一次取出行内按钮再按可见文案定位，
+    // 断言仍然落在 disabled 属性与入口存在性上，不依赖 class 名。
+    const rowButtons = within(row).getAllByRole('button');
+
+    function rowButton(label: string) {
+      const button = rowButtons.find(
+        (candidate) => (candidate.textContent ?? '').replace(/\s+/g, '') === label,
+      );
+
+      if (button === undefined) {
+        throw new Error(`行内未找到「${label}」按钮`);
+      }
+
+      return button;
+    }
+
+    expect(rowButton('编辑资料')).toBeDisabled();
+    expect(rowButton('启停')).toBeDisabled();
+    expect(rowButton('重置密码')).toBeDisabled();
+    expect(rowButtons.some((candidate) => (candidate.textContent ?? '').includes('角色'))).toBe(
+      false,
+    );
+  });
+});
+
+/**
+ * 「联系方式」区块：完整值提示 + 整块复制。
+ *
+ * 复制只读取列表**已经返回**的行内字段并写系统剪贴板：不发起任何请求、不打开任何弹窗，
+ * 也不复制账号 ID / 公司 / 角色 / 状态。jsdom 不提供 navigator.clipboard，按下述桩显式安装。
+ */
+describe('管理员用户管理面板的联系方式区块（完整值提示与整块复制）', () => {
+  const clipboardWrites: string[] = [];
+  // 参数被实现使用（记录写入内容），断言直接落在写入文本上
+  const writeTextMock = vi.fn(async (text: string) => {
+    clipboardWrites.push(text);
+  });
+
+  /** null = 模拟剪贴板 API 缺失（非安全上下文 / 旧浏览器 / 未授权环境） */
+  function installClipboard(writeText: ((text: string) => Promise<void>) | null) {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: writeText === null ? undefined : { writeText },
+    });
+  }
+
+  const TRUNCATED_LOGIN_EMAIL = 'login-address-way-too-long-for-the-column@example.com';
+  const TRUNCATED_CONTACT_EMAIL = 'contact-address-way-too-long-for-the-column@example.com';
+  const COPY_LOGIN_EMAIL = 'copy-me@example.com';
+  const COPY_LOGIN_NAME = 'copy_me';
+
+  const TRUNCATED_ROW: AdminUserRow = {
+    ...ROW_A,
+    accountId: 910004,
+    contactEmail: TRUNCATED_CONTACT_EMAIL,
+    loginEmail: TRUNCATED_LOGIN_EMAIL,
+    nickname: '长文本用户',
+    phone: null,
+  };
+
+  const COPY_ROW: AdminUserRow = {
+    ...ROW_A,
+    accountId: 910005,
+    contactEmail: '   ',
+    loginEmail: COPY_LOGIN_EMAIL,
+    loginName: COPY_LOGIN_NAME,
+    nickname: '复制目标',
+    phone: null,
+  };
+
+  function renderSingleRow(row: AdminUserRow) {
+    fetchUsersMock.mockResolvedValue({ items: [row], page: 1, pageSize: 10, total: 1 });
+
+    return render(<AdminUserManagementPanel />);
+  }
+
+  /** Tooltip 浮层渲染在 body 层 portal 里，按浮层文本断言（触发元素自身也是完整文本） */
+  function tooltipTexts(): string[] {
+    return Array.from(document.querySelectorAll('.ant-tooltip')).map(
+      (node) => node.textContent ?? '',
+    );
+  }
+
+  beforeEach(() => {
+    vi.spyOn(message, 'success')
+      .mockImplementation(() => undefined as never)
+      .mockClear();
+    vi.spyOn(message, 'error')
+      .mockImplementation(() => undefined as never)
+      .mockClear();
+    fetchUsersMock.mockReset();
+    fetchUsersMock.mockResolvedValue(makePage());
+    clipboardWrites.length = 0;
+    writeTextMock.mockClear();
+    writeTextMock.mockImplementation(async (text: string) => {
+      clipboardWrites.push(text);
+    });
+    installClipboard(writeTextMock);
+  });
+
+  afterEach(() => {
+    installClipboard(null);
+  });
+
+  it('被省略的联系方式悬停或键盘聚焦时用现有 Tooltip 展示完整值', async () => {
+    renderSingleRow(TRUNCATED_ROW);
+    await screen.findByText(TRUNCATED_ROW.nickname);
+
+    fireEvent.mouseEnter(screen.getByText(TRUNCATED_LOGIN_EMAIL));
+
+    await waitFor(() => expect(tooltipTexts()).toContain(TRUNCATED_LOGIN_EMAIL));
+
+    // 默认 trigger 只有 hover，键盘聚焦要能看到完整值必须显式包含 focus
+    fireEvent.focus(screen.getByText(TRUNCATED_CONTACT_EMAIL));
+
+    await waitFor(() => expect(tooltipTexts()).toContain(TRUNCATED_CONTACT_EMAIL));
+  });
+
+  it('空值只渲染占位符：不挂 Tooltip，悬停也不产生空提示', async () => {
+    renderSingleRow(TRUNCATED_ROW);
+    await screen.findByText(TRUNCATED_ROW.nickname);
+
+    const placeholderLine = screen.getByText('电话：—');
+
+    expect(placeholderLine.querySelector('.admin-user-contact-value')).toBeNull();
+    fireEvent.mouseEnter(placeholderLine);
+
+    expect(tooltipTexts().some((text) => text === '—')).toBe(false);
+  });
+
+  it('点击联系方式区块复制本行非空基本信息：字段顺序固定、空字段整行省略、不含权限范围外数据', async () => {
+    renderSingleRow(COPY_ROW);
+    await screen.findByText(COPY_ROW.nickname);
+
+    const block = screen.getByRole('button', { name: `复制「${COPY_ROW.nickname}」的用户信息` });
+    const baselineFetches = fetchUsersMock.mock.calls.length;
+
+    fireEvent.click(block);
+
+    await waitFor(() => expect(clipboardWrites).toHaveLength(1));
+    expect(clipboardWrites[0]).toBe(
+      [
+        `用户名：${COPY_ROW.nickname}`,
+        `登录名：${COPY_LOGIN_NAME}`,
+        `登录邮箱：${COPY_LOGIN_EMAIL}`,
+      ].join('\n'),
+    );
+    // 空字段（联系邮箱为纯空白、电话为 null）整行省略
+    expect(clipboardWrites[0]).not.toContain('联系邮箱');
+    expect(clipboardWrites[0]).not.toContain('电话');
+    // 账号 ID / 所属公司 / 角色 / 状态不属于复制范围
+    expect(clipboardWrites[0]).not.toContain('910005');
+    expect(clipboardWrites[0]).not.toContain('甲公司');
+    expect(clipboardWrites[0]).not.toContain('工程师');
+
+    await waitFor(() => expect(message.success).toHaveBeenCalledWith('用户信息已复制。'));
+    expect(message.error).not.toHaveBeenCalled();
+
+    // 复制不发起任何请求，也不打开任何弹窗（不触发整行操作）
+    expect(fetchUsersMock.mock.calls.length).toBe(baselineFetches);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('点击区块内的文字（事件冒泡到区块）同样只复制一次', async () => {
+    renderSingleRow(COPY_ROW);
+    await screen.findByText(COPY_ROW.nickname);
+
+    fireEvent.click(screen.getByText(COPY_LOGIN_EMAIL));
+
+    await waitFor(() => expect(clipboardWrites).toHaveLength(1));
+    expect(clipboardWrites[0]).toContain(`用户名：${COPY_ROW.nickname}`);
+  });
+
+  it('剪贴板不可用或写入失败都明确提示失败，不静默显示成功', async () => {
+    renderSingleRow(COPY_ROW);
+    await screen.findByText(COPY_ROW.nickname);
+
+    const block = screen.getByRole('button', { name: `复制「${COPY_ROW.nickname}」的用户信息` });
+
+    // 1) 剪贴板 API 缺失
+    installClipboard(null);
+    fireEvent.click(block);
+
+    await waitFor(() =>
+      expect(message.error).toHaveBeenCalledWith('用户信息复制失败，请手动选择文本复制。'),
+    );
+    expect(message.success).not.toHaveBeenCalled();
+    expect(clipboardWrites).toHaveLength(0);
+
+    // 2) 写入被拒绝
+    vi.mocked(message.error).mockClear();
+    writeTextMock.mockRejectedValue(new Error('clipboard denied'));
+    installClipboard(writeTextMock);
+    fireEvent.click(block);
+
+    await waitFor(() => expect(vi.mocked(message.error)).toHaveBeenCalledTimes(1));
+    expect(message.success).not.toHaveBeenCalled();
+  });
+
+  it('区块可键盘聚焦，Enter / Space 复制，其他按键不复制', async () => {
+    renderSingleRow(COPY_ROW);
+    await screen.findByText(COPY_ROW.nickname);
+
+    const block = screen.getByRole('button', { name: `复制「${COPY_ROW.nickname}」的用户信息` });
+    const baselineFetches = fetchUsersMock.mock.calls.length;
+
+    block.focus();
+    expect(block).toHaveFocus();
+
+    fireEvent.keyDown(block, { key: 'a' });
+    expect(clipboardWrites).toHaveLength(0);
+
+    fireEvent.keyDown(block, { key: 'Enter' });
+    await waitFor(() => expect(clipboardWrites).toHaveLength(1));
+
+    fireEvent.keyDown(block, { key: ' ' });
+    await waitFor(() => expect(clipboardWrites).toHaveLength(2));
+
+    expect(fetchUsersMock.mock.calls.length).toBe(baselineFetches);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 });

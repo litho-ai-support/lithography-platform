@@ -204,11 +204,36 @@ describe('AppLayout（S3 壳层）', () => {
 
   it('匿名会话仅展示不受角色限制的入口，不渲染用户卡', () => {
     useAuthSessionMock.mockReturnValue({ session: null, status: 'anonymous' });
-    renderLayout('/login');
+    // 登录页已改为无侧栏独立壳层（PR6），匿名会话的通用侧栏在这里以业务路由取样
+    renderLayout('/admin');
 
     expect(screen.getByRole('link', { name: '首页' })).toBeInTheDocument();
     expect(screen.queryByText(/退出登录/)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '用户管理' })).not.toBeInTheDocument();
+  });
+
+  it('登录路由渲染独立壳层：只保留整页登录区与左上角品牌，不渲染工作台侧栏与用户卡（PR6）', () => {
+    useAuthSessionMock.mockReturnValue(sessionFor('SUPER_ADMIN'));
+    renderLayout('/login');
+
+    expect(document.querySelector('.app-shell.login-shell')).not.toBeNull();
+    expect(document.querySelector('.login-brand')).not.toBeNull();
+    expect(screen.getByText('光刻维护平台')).toBeInTheDocument();
+    // 品牌结构：LF 标记 + 细竖分隔线 + 项目名；不显示英文副标题（PR6 本轮）
+    expect(document.querySelector('.login-brand .brand-mark')?.textContent).toBe('LF');
+    expect(document.querySelector('.login-brand-divider')).not.toBeNull();
+    expect(screen.queryByText('Service Platform')).not.toBeInTheDocument();
+    // 登录页不得出现与登录无关的已登录侧栏菜单与用户卡
+    expect(document.querySelector('.app-sidebar')).toBeNull();
+    expect(screen.queryByRole('link', { name: '首页' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '用户管理' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/退出登录/)).not.toBeInTheDocument();
+
+    // 变体按精确路由开启：其他页面不得继承无侧栏壳层（防前缀匹配误伤）
+    cleanup();
+    renderLayout('/admin/users');
+    expect(document.querySelector('.app-shell.login-shell')).toBeNull();
+    expect(document.querySelector('.app-sidebar')).not.toBeNull();
   });
 
   it('每个菜单项都有可见图标（折叠态辨识兜底，R2 P2-01）', () => {

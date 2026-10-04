@@ -219,12 +219,17 @@ export function deleteE2EDedicatedAccountById(accountId: number, dedicatedLoginN
   );
 }
 
+/** 专用账号清理残留读数：主记录 / userInfo 孤儿 / 已知关联业务表 */
+export interface DedicatedAccountCleanupResidue {
+  readonly account: number;
+  readonly relatedBusiness: number;
+  readonly userInfo: number;
+}
+
 /** 精确统计主记录、userInfo 孤儿和已知关联业务表残留；这是只读核对。 */
-export function readDedicatedAccountCleanupResidue(accountId: number): {
-  account: number;
-  relatedBusiness: number;
-  userInfo: number;
-} {
+export function readDedicatedAccountCleanupResidue(
+  accountId: number,
+): DedicatedAccountCleanupResidue {
   if (!Number.isSafeInteger(accountId) || accountId <= 0) {
     throw new Error(`残留核对账号 ID 未通过正整数校验：${JSON.stringify(accountId)}`);
   }
@@ -269,4 +274,183 @@ export function readAccountCountByLoginName(loginName: string): number {
   }
 
   return value;
+}
+
+// ---- 账号创建登记与逐账号清理编排（最小修复计划 P1/P2） ----
+
+/** 本轮登记的专用账号（精确 ID + 专用登录名双因子）：逐账号清理的唯一删除边界 */
+export interface RegisteredDedicatedAccount {
+  readonly id: number;
+  readonly loginName: string;
+}
+
+export function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 从 adminCreateUser 成功响应体解析数据库生成 ID（正整数校验后返回）。
+ * 响应缺失 / 非正整数 ID 一律抛错——调用方据此判定「创建未成功、无可登记目标」。
+ */
+export function readCreatedDedicatedAccountId(responseBody: unknown): number {
+  const id = (responseBody as { data?: { adminCreateUser?: { id?: unknown } } }).data
+    ?.adminCreateUser?.id;
+
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`专用账号创建失败：${JSON.stringify(responseBody).slice(0, 300)}`);
+  }
+
+  return id;
+}
+
+/**
+ * 创建响应登记（最小修复计划 P1）：校验专用登录名白名单与创建响应中的精确 ID 后，
+ * **立即**登记到本轮清理清单并返回登记项。
+ *
+ * 调用方必须在任何后续列表查询 / 字段断言 / 弹窗关闭等待之前调用本函数——登记不依赖任何
+ * 后续步骤，故后续失败不会回滚登记：精确 ID 始终可被清理看见（不按标题 / 反查猜测归属）。
+ */
+export function registerCreatedDedicatedAccount(
+  registry: RegisteredDedicatedAccount[],
+  responseBody: unknown,
+  loginName: string,
+): RegisteredDedicatedAccount {
+  if (!DEDICATED_LOGIN_NAME_PATTERN.test(loginName)) {
+    throw new Error(`专用账号登记登录名未通过白名单校验，拒绝登记：${JSON.stringify(loginName)}`);
+  }
+
+  const entry: RegisteredDedicatedAccount = {
+    id: readCreatedDedicatedAccountId(responseBody),
+    loginName,
+  };
+
+  registry.push(entry);
+
+  return entry;
+}
+
+/**
+ * 逐账号独立清理并聚合报告（最小修复计划 P2）：
+ * - 每个账号的「精确删除」与「精确 ID 残留核对」各自 try/catch——某个账号失败不阻断后续账号；
+ * - 删除错误与残留核对错误分别记录，残留非零单列为失败；
+ * - 汇总后一次性抛错（含全部失败信息），供调用方与主流程错误一并报告；全部成功（零残留）时不抛错。
+ *
+ * deleteAccount / readResidue 可注入以便单测；默认复用真实受保护实现。
+ */
+export function cleanupRegisteredDedicatedAccounts(
+  accounts: readonly RegisteredDedicatedAccount[],
+  deleteAccount: (id: number, loginName: string) => void = deleteE2EDedicatedAccountById,
+  readResidue: (id: number) => DedicatedAccountCleanupResidue = readDedicatedAccountCleanupResidue,
+): void {
+  const failures: string[] = [];
+
+  for (const { id, loginName } of accounts) {
+    try {
+      deleteAccount(id, loginName);
+    } catch (error) {
+      failures.push(`账号 ${id}（${loginName}）物理删除失败：${toErrorMessage(error)}`);
+    }
+
+    try {
+      const residue = readResidue(id);
+
+      if (residue.account !== 0 || residue.userInfo !== 0 || residue.relatedBusiness !== 0) {
+        failures.push(`账号 ${id}（${loginName}）清理后仍有残留：${JSON.stringify(residue)}`);
+      }
+    } catch (error) {
+      failures.push(`账号 ${id}（${loginName}）残留核对失败：${toErrorMessage(error)}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`专用账号清理失败——${failures.join('；')}`);
+  }
+}
+
+/**
+ * 收尾清理步骤：裸函数按出现序号命名；带标签对象用于在多重失败诊断中区分各步骤
+ * （例如「账号清理」与「关闭浏览器上下文」）。
+ */
+export type CleanupStep =
+  | (() => Promise<void> | void)
+  | { readonly label: string; readonly run: () => Promise<void> | void };
+
+/** 规范化清理步骤为「标签 + 执行体」；裸函数标签为 null（按序号呈现，避免冗余括号） */
+function normalizeCleanupStep(step: CleanupStep): {
+  readonly label: string | null;
+  readonly run: () => Promise<void> | void;
+} {
+  return typeof step === 'function'
+    ? { label: null, run: step }
+    : { label: step.label, run: step.run };
+}
+
+/**
+ * 主流程 + 收尾步骤的执行包装（最小修复计划 P2）：主流程错误先保留，收尾步骤逐个独立执行。
+ * - 每个收尾步骤各自 try/catch 且**无条件 await**：任一步失败都不阻断后续（账号清理失败时
+ *   `context.close()` 仍被尝试）；每步错误独立收集，互不覆盖；
+ * - 仅一项失败时抛出原始错误（保留原始诊断信息）；多项失败时聚合，错误文本按步骤标签区分；
+ * - 不使用 `finally` 之后的断言报告清理失败——主流程抛错时该断言会被跳过，清理错误将被吞掉。
+ */
+export async function runWithCleanup(
+  body: () => Promise<void>,
+  ...cleanups: CleanupStep[]
+): Promise<void> {
+  let primaryError: unknown = null;
+
+  try {
+    await body();
+  } catch (error) {
+    primaryError = error;
+  }
+
+  const cleanupErrors: Array<{
+    readonly error: unknown;
+    readonly label: string | null;
+    readonly order: number;
+  }> = [];
+
+  for (const [index, step] of cleanups.entries()) {
+    const { label, run } = normalizeCleanupStep(step);
+
+    try {
+      // 无条件 await：前一步即使同步抛错，也不跳过后续步骤（关闭上下文必须被尝试）
+      await run();
+    } catch (error) {
+      cleanupErrors.push({ error, label, order: index + 1 });
+    }
+  }
+
+  const hasPrimary = primaryError !== null;
+
+  if (!hasPrimary && cleanupErrors.length === 0) {
+    return;
+  }
+
+  // 仅一项失败：抛原始错误，保留原始诊断信息
+  if (!hasPrimary && cleanupErrors.length === 1) {
+    throw cleanupErrors[0].error;
+  }
+  if (hasPrimary && cleanupErrors.length === 0) {
+    throw primaryError;
+  }
+
+  // 多项失败：聚合，主错误在前，收尾各步骤按标签区分，彼此不覆盖
+  const segments: string[] = [];
+
+  if (hasPrimary) {
+    segments.push(`主流程失败：${toErrorMessage(primaryError)}`);
+  }
+
+  const detail = cleanupErrors
+    .map(({ error, label, order }) =>
+      label === null
+        ? `清理步骤 ${order} 失败：${toErrorMessage(error)}`
+        : `清理步骤 ${order}（${label}）失败：${toErrorMessage(error)}`,
+    )
+    .join('；');
+
+  segments.push(`${hasPrimary ? '此外清理失败' : '清理失败'}——${detail}`);
+
+  throw new Error(segments.join('；'));
 }

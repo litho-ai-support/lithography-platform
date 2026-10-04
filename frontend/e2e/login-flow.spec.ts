@@ -128,3 +128,80 @@ test('entry route dispatches by login state', async ({ page }) => {
   await page.goto('/');
   await expect(page).toHaveURL(/\/customer$/);
 });
+
+test('entry route dispatches a SUPER_ADMIN session to the admin home', async ({ page }) => {
+  // 入口路由按登录态分派：超管首页固定 /admin。
+  // 角色决策本身由 auth-session-policy.spec.ts 钉住，这里只验证路由装配真正接上了它。
+  await seedAuthSession(page, 'SUPER_ADMIN');
+
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/admin$/);
+});
+
+test('a cross-role returnTo is rejected after login and falls back to the role home', async ({
+  page,
+}) => {
+  // 匿名访问只读角色页：/admin 只允许超管，登录页必须带上安全 returnTo。
+  await page.goto('/admin');
+  await expect(page).toHaveURL(/\/login\?returnTo=%2Fadmin$/);
+
+  await page.route('**/graphql', async (route) => {
+    const payload = route.request().postDataJSON() as { query?: string };
+
+    if (!payload.query?.includes('mutation LoginWithPassword')) {
+      await route.fulfill({
+        body: JSON.stringify({
+          data: { engineerRepairRequests: { items: [], total: 0, page: 1, pageSize: 10 } },
+        }),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    await route.fulfill({
+      body: JSON.stringify({
+        data: {
+          login: {
+            accessToken: 'test-only-access-token',
+            accountId: 900101,
+            role: 'ENGINEER',
+            userInfo: { accessGroup: ['ENGINEER'], nickname: '陈工' },
+          },
+        },
+      }),
+      contentType: 'application/json',
+      status: 200,
+    });
+  });
+
+  // 以工程师身份登录：returnTo 指向无权限的 /admin，必须回落角色首页而不是进入它。
+  await page.getByLabel('账号或邮箱').fill('mock_engineer_chen');
+  await page.getByLabel('密码').fill('test-only-password');
+  await page.getByRole('button', { name: /登\s*录/ }).click();
+
+  await expect(page).toHaveURL(/\/engineer$/);
+  await expect(page).not.toHaveURL(/\/admin/);
+});
+
+test('transport failure keeps the login name, clears the password and creates no session', async ({
+  page,
+}) => {
+  // 网络层失败与凭据拒绝走不同文案，且同样不得建立会话。
+  await page.route('**/graphql', async (route) => {
+    await route.abort('failed');
+  });
+
+  await page.goto('/login');
+  await page.getByLabel('账号或邮箱').fill('mock_engineer_chen');
+  await page.getByLabel('密码').fill('test-only-password');
+  await page.getByRole('button', { name: /登\s*录/ }).click();
+
+  await expect(page.getByText('网络连接异常，请稍后重试。')).toBeVisible();
+  await expect(page.getByLabel('账号或邮箱')).toHaveValue('mock_engineer_chen');
+  await expect(page.getByLabel('密码')).toHaveValue('');
+  await expect(page).toHaveURL(/\/login$/);
+
+  const storedSession = await readStoredAuthSession(page);
+  expect(storedSession).toBeNull();
+});

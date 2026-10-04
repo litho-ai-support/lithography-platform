@@ -868,7 +868,7 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     expect(restored).toEqual(baseline);
   });
 
-  test('共享外观回归：登录/用户管理/客户申请保持默认外观，独立参考资料页走自己的整页变体', async ({
+  test('共享外观回归：登录/管理员首页/用户管理/客户申请保持默认外观，参考资料页走整页变体', async ({
     page,
   }, testInfo) => {
     test.setTimeout(120_000);
@@ -898,6 +898,9 @@ test.describe('mocked admin document database - knowledge base visual baseline (
             workspace === null ? null : getComputedStyle(workspace).backgroundColor,
           workspaceBackgroundImage:
             workspace === null ? null : getComputedStyle(workspace).backgroundImage,
+          bodyFontFamily: getComputedStyle(document.body).fontFamily,
+          documentClientWidth: document.documentElement.clientWidth,
+          documentScrollWidth: document.documentElement.scrollWidth,
         };
       });
 
@@ -913,6 +916,13 @@ test.describe('mocked admin document database - knowledge base visual baseline (
           'linear-gradient',
         );
       }
+      // 字体真源：src/app/theme/index.ts 的 FONT_STACK_SANS（index.css 的 --font-sans 为镜像）。
+      // 断言计算后的字体族，而不是类名或 CSS 变量名，字体链路断了这里会红。
+      expect(shell.bodyFontFamily, `${label} 应使用公共字体栈`).toContain('Inter Variable');
+      expect(shell.bodyFontFamily, `${label} 中文回退应含 PingFang SC`).toContain('PingFang SC');
+      expect(shell.documentScrollWidth, `${label} 不应出现整页横向溢出`).toBeLessThanOrEqual(
+        shell.documentClientWidth,
+      );
       evidence[label] = shell;
     };
 
@@ -934,6 +944,74 @@ test.describe('mocked admin document database - knowledge base visual baseline (
       evidence[label] = shell;
     };
 
+    /**
+     * PR6 两页的真实样式探针：读取卡片计算后的圆角/描边/投影/内边距、body 字体族
+     * 与整页横向溢出（不读类名，也不依赖未提交的 gkj.html）。
+     */
+    const readCardLook = (selector: string) =>
+      page.evaluate((cardSelector) => {
+        const card = document.querySelector<HTMLElement>(cardSelector);
+
+        if (card === null) {
+          return null;
+        }
+
+        const cardStyle = getComputedStyle(card);
+        const main = document.querySelector<HTMLElement>('.app-main');
+
+        return {
+          backgroundColor: cardStyle.backgroundColor,
+          bodyFontFamily: getComputedStyle(document.body).fontFamily,
+          borderRadius: cardStyle.borderRadius,
+          borderTopWidth: cardStyle.borderTopWidth,
+          boxShadow: cardStyle.boxShadow,
+          documentClientWidth: document.documentElement.clientWidth,
+          documentScrollWidth: document.documentElement.scrollWidth,
+          mainClientWidth: main === null ? null : main.clientWidth,
+          mainScrollWidth: main === null ? null : main.scrollWidth,
+          padding: cardStyle.padding,
+        };
+      }, selector);
+
+    const expectSharedCardLook = async (
+      label: string,
+      selector: string,
+      expected: {
+        backgroundColor: string;
+        borderRadius: string;
+        boxShadow: string;
+        padding: string;
+      },
+    ): Promise<void> => {
+      const look = await readCardLook(selector);
+      expect(look, `${label} 应存在 ${selector}`).not.toBeNull();
+
+      if (look === null) {
+        return;
+      }
+
+      // 卡片语言真源：index.css 的 .data-card/.table-container（--panel-* token）与
+      // .filter-bar（独立的 --filter-bar-* token，浅底描边无投影，不是 panel 卡）。
+      expect(look.boxShadow, `${label} 投影`).toBe(expected.boxShadow);
+      expect(look.borderRadius, `${label} 圆角`).toBe(expected.borderRadius);
+      expect(look.borderTopWidth, `${label} 描边`).toBe('1px');
+      expect(look.padding, `${label} 内边距`).toBe(expected.padding);
+      expect(look.backgroundColor, `${label} 底色`).toBe(expected.backgroundColor);
+      expect(look.bodyFontFamily, `${label} 字体栈`).toContain('Inter Variable');
+      expect(look.documentScrollWidth, `${label} 不应整页横向溢出`).toBeLessThanOrEqual(
+        look.documentClientWidth,
+      );
+      evidence[label] = look;
+    };
+
+    /** 收窄视口后复核整页不出现横向溢出（表格自身滚动，不应撑破页面）。 */
+    const expectNoPageOverflow = async (label: string): Promise<void> => {
+      const shell = await readShell();
+      expect(shell.documentScrollWidth, `${label} 不应整页横向溢出`).toBeLessThanOrEqual(
+        shell.documentClientWidth,
+      );
+    };
+
     const shoot = async (fileName: string): Promise<void> => {
       const pngPath = path.join(evidenceDir, fileName);
       const capture = await captureStableViewport(page, { fileName, filePath: pngPath });
@@ -941,22 +1019,268 @@ test.describe('mocked admin document database - knowledge base visual baseline (
       evidence[fileName] = { capture, png: readPngDimensions(pngPath) };
     };
 
+    /** 读取头像计算后的圆角：PR6 明确要求方形/圆角矩形，禁止圆形（50%/9999px）。 */
+    const readAvatarRadius = (selector: string) =>
+      page.evaluate((avatarSelector) => {
+        const avatar = document.querySelector<HTMLElement>(avatarSelector);
+        return avatar === null ? null : getComputedStyle(avatar).borderRadius;
+      }, selector);
+
     await page.setViewportSize({ height: 900, width: 1440 });
 
-    // 1) 登录页（未登录）
+    // 1) 登录页（未登录）：独立壳层，整页登录区 + 左上角品牌，不渲染工作台侧栏与用户卡
     await page.goto('/login');
     await expect(page.getByRole('button', { name: /登\s*录/ })).toBeVisible();
     await expectDefaultShell('login');
+    expect(await page.locator('.app-sidebar').count()).toBe(0);
+    await expect(page.locator('.login-shell .login-brand')).toBeVisible();
+    // 整页灰蓝底：登录壳层消费公共工作区背景变量（不新增第二套主题色）
+    const loginShellBackground = await page.evaluate(() => {
+      const shell = document.querySelector<HTMLElement>('.login-shell');
+      return shell === null ? null : getComputedStyle(shell).backgroundImage;
+    });
+    expect(loginShellBackground).toContain('linear-gradient');
+    evidence['login-shell-background'] = loginShellBackground;
+    // 品牌结构：LF 标记 + 细竖分隔线 + 项目名，不出现英文副标题（PR6 本轮）
+    await expect(page.locator('.login-brand .brand-mark')).toHaveText('LF');
+    await expect(page.locator('.login-brand-divider')).toBeVisible();
+    await expect(page.getByText('Service Platform')).toHaveCount(0);
+    // 双栏：左欢迎文案 + 右登录卡；主/副标题只在左栏出现一次，不在卡内重复
+    await expect(page.locator('.login-intro').getByText('欢迎登录')).toBeVisible();
+    await expect(page.locator('.login-intro').getByText('使用账号或邮箱进入工作台')).toBeVisible();
+    await expect(page.locator('.login-layout').getByText('欢迎登录')).toHaveCount(1);
+    await expect(page.locator('.login-panel .data-card').getByText('欢迎登录')).toHaveCount(0);
+    // 整体略偏页面左侧：双栏主体盒子中心在视口中心左侧
+    const loginLayoutBox = await page.locator('.login-layout').boundingBox();
+    expect((loginLayoutBox?.x ?? 0) + (loginLayoutBox?.width ?? 0) / 2).toBeLessThan(1440 / 2);
+    await expectSharedCardLook('login-card', '.login-panel .data-card', {
+      backgroundColor: 'rgba(255, 255, 255, 0.92)',
+      borderRadius: '14px',
+      boxShadow: 'rgba(15, 23, 42, 0.06) 0px 10px 30px 0px',
+      padding: '16px',
+    });
     await shoot('kb-shared-login-1440x900.png');
 
-    // 2) 用户管理（SUPER_ADMIN）
+    // 收窄到 1280：双栏主体居中且不撑破页面
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await expectNoPageOverflow('login@1280');
+    // 手机视口：双栏改纵向堆叠（欢迎文案在卡片上方），窄屏不得溢出
+    await page.setViewportSize({ height: 844, width: 390 });
+    await expectNoPageOverflow('login@390');
+    expect(
+      await page.locator('.login-layout').evaluate((el) => getComputedStyle(el).flexDirection),
+    ).toBe('column');
+    const introBox = await page.locator('.login-intro').boundingBox();
+    const loginCardBox = await page.locator('.login-panel').boundingBox();
+    expect(loginCardBox?.y ?? 0).toBeGreaterThanOrEqual(
+      (introBox?.y ?? 0) + (introBox?.height ?? 0),
+    );
+    await shoot('kb-shared-login-390x844.png');
+    await page.setViewportSize({ height: 900, width: 1440 });
+
     await seedAuthSession(page, 'SUPER_ADMIN');
+
+    // 2) 管理员首页（SUPER_ADMIN）
+    await page.goto('/admin');
+    await expect(page.getByRole('heading', { name: '管理员工作台' })).toBeVisible();
+    await expect(page.getByText('ADMIN WORKSPACE')).toBeVisible();
+    await expectDefaultShell('admin-home');
+    // 「当前账号」卡：方形头像 + 昵称 + 只读角色标签 + 账号 ID + 「账号设置」快捷入口
+    await expect(page.getByRole('heading', { name: '当前账号' })).toBeVisible();
+    await expect(page.getByText('账号 ID：900201')).toBeVisible();
+    await expect(page.getByRole('main').getByRole('button', { name: /账号设置/ })).toBeVisible();
+    // 卡内不再有退出登录；侧栏左下角常驻退出登录保持原样，仍是唯一退出入口
+    await expect(page.getByRole('main').getByRole('button', { name: /退出登录/ })).toHaveCount(0);
+    await expect(
+      page.getByRole('complementary').getByRole('button', { name: /退出登录/ }),
+    ).toBeVisible();
+    // 明确禁止：右上角「系统管理员」按钮/下拉不得出现
+    await expect(page.getByRole('button', { name: '系统管理员' })).toHaveCount(0);
+    expect(await readAvatarRadius('.admin-account .user-avatar')).toBe('12px');
+    // 功能入口卡只做导航
+    await expect(page.getByRole('button', { name: '进入用户管理' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '进入文档数据库' })).toBeVisible();
+    // 「账号设置」可点击并导航到路由表中已存在的账号设置页（不是新增路由）
+    await page
+      .getByRole('main')
+      .getByRole('button', { name: /账号设置/ })
+      .click();
+    await expect(page).toHaveURL(/\/account\/settings$/);
+    await page.goto('/admin');
+    await expect(page.getByRole('heading', { name: '当前账号' })).toBeVisible();
+    await shoot('kb-shared-admin-home-1440x900.png');
+
+    // 收窄到 1024（侧栏自动折叠）：首页不整页横滚
+    await page.setViewportSize({ height: 800, width: 1024 });
+    await expectNoPageOverflow('admin-home@1024');
+    await shoot('kb-shared-admin-home-1024x800.png');
+    await page.setViewportSize({ height: 900, width: 1440 });
+
+    // 3) 用户管理（SUPER_ADMIN）：叠加 AdminUsers 行数据覆盖（LIFO：仅本页取样生效，
+    //    其余 operation 用 fallback 交回通用 mock，不改变通用 mock 契约）
+    await page.route('**/graphql', async (route) => {
+      const payload = route.request().postDataJSON() as { operationName?: string };
+
+      if (payload.operationName !== 'AdminUsers') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        body: JSON.stringify({
+          data: {
+            adminUsers: {
+              items: [
+                {
+                  companyName: '光刻机智能支持平台',
+                  contactEmail: null,
+                  createdAt: '2026-08-01T02:00:00.000Z',
+                  id: 900201,
+                  loginEmail: 'super.admin@lithography.mock',
+                  loginName: 'mock_super_admin',
+                  nickname: '系统管理员',
+                  phone: '13800000001',
+                  role: 'SUPER_ADMIN',
+                  status: 'ACTIVE',
+                  updatedAt: '2026-08-20T02:00:00.000Z',
+                },
+                {
+                  companyName: '光刻机智能支持平台',
+                  contactEmail: 'chen.contact@lithography.mock',
+                  createdAt: '2026-08-02T02:00:00.000Z',
+                  id: 900101,
+                  loginEmail: 'engineer.chen@lithography.mock',
+                  loginName: 'mock_engineer_chen',
+                  nickname: '陈工',
+                  phone: '13800000101',
+                  role: 'ENGINEER',
+                  status: 'ACTIVE',
+                  updatedAt: '2026-08-21T02:00:00.000Z',
+                },
+              ],
+              page: 1,
+              pageSize: 10,
+              total: 2,
+            },
+          },
+        }),
+        contentType: 'application/json',
+        status: 200,
+      });
+    });
+
     await page.goto('/admin/users');
     await expect(page.getByRole('heading', { name: '用户管理' })).toBeVisible();
     await expectDefaultShell('admin-users');
+    await expectSharedCardLook('admin-users-table', '.table-container', {
+      backgroundColor: 'rgba(255, 255, 255, 0.92)',
+      borderRadius: '14px',
+      boxShadow: 'rgba(15, 23, 42, 0.06) 0px 10px 30px 0px',
+      padding: '16px',
+    });
+    await expectSharedCardLook('admin-users-filter', '.filter-bar', {
+      backgroundColor: 'rgb(248, 250, 252)',
+      borderRadius: '10px',
+      boxShadow: 'none',
+      padding: '8px 11px',
+    });
+
+    // 工具栏：可伸缩主搜索 + 筛选开关 + 创建用户；展开前不渲染精确条件
+    await expect(page.getByLabel('搜索登录名 / 登录邮箱 / 昵称')).toBeVisible();
+    const filterToggle = page.getByRole('button', { name: '筛选', exact: true });
+    await expect(filterToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByRole('button', { name: '创建用户' })).toBeVisible();
     await shoot('kb-shared-admin-users-1440x900.png');
 
-    // 3) 独立参考资料页（SUPER_ADMIN）：PR5 整页视觉计划起切换为自己的工作区变体，
+    // 分组列只用后端真实字段
+    for (const header of [
+      '用户信息',
+      '联系方式',
+      '所属公司',
+      '角色',
+      '账号状态',
+      '创建时间 / 最近更新',
+      '操作',
+    ]) {
+      await expect(page.getByRole('columnheader', { name: header })).toBeVisible();
+    }
+    // 行内方形头像（12px 圆角，禁止圆形）
+    expect(await readAvatarRadius('.table-container .user-avatar')).toBe('12px');
+    // SUPER_ADMIN 行继续只读：三个写入口全部禁用
+    const superAdminRow = page.getByRole('row', { name: /系统管理员/ });
+    await expect(superAdminRow.getByRole('button', { name: '编辑资料' })).toBeDisabled();
+    await expect(superAdminRow.getByRole('button', { name: '启停' })).toBeDisabled();
+    await expect(superAdminRow.getByRole('button', { name: '重置密码' })).toBeDisabled();
+
+    // 展开筛选：条件在搜索工具栏下方展开/收起
+    await filterToggle.click();
+    await expect(filterToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByText('角色筛选')).toBeVisible();
+    await expect(page.getByText('状态筛选')).toBeVisible();
+    await expect(page.getByRole('button', { name: '清除筛选' })).toBeVisible();
+    await shoot('kb-shared-admin-users-filter-open-1440x900.png');
+    await filterToggle.click();
+    await expect(filterToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByRole('button', { name: '清除筛选' })).toHaveCount(0);
+
+    // 页头介绍已精简：保留「平台账号、基本资料与账号状态」，删去角色选择时机半句
+    await expect(page.getByText('查看和管理平台账号、基本资料与账号状态。')).toBeVisible();
+    await expect(page.getByText(/角色在创建时选择/)).toHaveCount(0);
+
+    // 联系方式区块：整块是可聚焦的复制区域（只读行同样存在，复制不涉及权限范围外字段）
+    const engineerContact = page.getByRole('button', { name: '复制「陈工」的用户信息' });
+    const superAdminContact = page.getByRole('button', { name: '复制「系统管理员」的用户信息' });
+    await expect(engineerContact).toBeVisible();
+    await expect(superAdminContact).toBeVisible();
+    // 空字段只显示占位符，不显示空提示
+    await expect(superAdminContact).toContainText('联系邮箱：—');
+    // 长值仍按现有列宽省略：省略口径落在值所在行（截断 + 省略号 + 不换行）
+    expect(
+      await page.evaluate(() => {
+        const line = document.querySelector<HTMLElement>('.admin-user-contact span');
+        if (line === null) {
+          return null;
+        }
+
+        const style = getComputedStyle(line);
+
+        return {
+          overflow: style.overflow,
+          textOverflow: style.textOverflow,
+          whiteSpace: style.whiteSpace,
+        };
+      }),
+    ).toEqual({ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+    // 新增交互不撑宽单元格：区块自身不产生横向内容溢出
+    expect(
+      await page.evaluate(() => {
+        const block = document.querySelector<HTMLElement>('.admin-user-contact');
+
+        return block === null ? null : block.scrollWidth - block.clientWidth;
+      }),
+    ).toBe(0);
+
+    // 收窄到 1280 / 1024：宽表由自身滚动容器兜底，页面不得整页横滚
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await expectNoPageOverflow('admin-users@1280');
+    await page.setViewportSize({ height: 800, width: 1024 });
+    await expectNoPageOverflow('admin-users@1024');
+    await page.setViewportSize({ height: 900, width: 1440 });
+
+    // 悬停被省略的值：用现有 Tooltip 展示完整值（默认 trigger 只有 hover，
+    // 键盘聚焦可见性由 panel 单测钉住「focus 也在 trigger 内」）
+    const engineerCopyIcon = engineerContact.locator('.admin-user-contact-copy-icon');
+    await expect(engineerCopyIcon).toHaveCSS('opacity', '0');
+
+    await engineerContact.getByText('engineer.chen@lithography.mock').hover();
+
+    await expect(page.getByRole('tooltip')).toContainText('engineer.chen@lithography.mock');
+    // 悬停区块时出现轻量复制图标（绝对定位，不参与列宽计算）
+    await expect(engineerCopyIcon).toHaveCSS('opacity', '1');
+    // 移开鼠标，避免浮层影响后续页面取证
+    await page.mouse.move(0, 0);
+
+    // 4) 独立参考资料页（SUPER_ADMIN）：PR5 整页视觉计划起切换为自己的工作区变体，
     //    不再属于「保持默认外观」集合（S1-4 更新旧回归假设）
     await page.goto('/reference-documents');
     await expect(page.getByRole('heading', { name: '参考资料库' })).toBeVisible();
@@ -972,7 +1296,7 @@ test.describe('mocked admin document database - knowledge base visual baseline (
     expect(kbShell.mainMaxWidth).toBe('none');
     evidence['admin-document-database'] = kbShell;
 
-    // 4) 客户申请（CUSTOMER）：退出后换预置客户会话
+    // 5) 客户申请（CUSTOMER）：退出后换预置客户会话
     await page.getByRole('button', { name: /退出登录/ }).click();
     await expect(page).toHaveURL(/\/login/);
     await seedAuthSession(page, 'CUSTOMER');
