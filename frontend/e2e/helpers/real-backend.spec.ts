@@ -311,7 +311,9 @@ describe('real-backend 参考资料物理清理安全门（收紧为精确 ID + 
     const sql = executedSqls()[0] as string;
 
     expect(sql).toContain('DELETE FROM reference_document WHERE id IN (970100,970101)');
-    expect(sql).toContain(`storage_reference = '${STORAGE_REFERENCE}'`);
+    // 可空字段用 NULL 安全比较（<=>）：非空预期引用绝不能退化为 `=`，否则实际被改成 NULL 时漏计
+    expect(sql).toContain(`storage_reference <=> '${STORAGE_REFERENCE}'`);
+    expect(sql).not.toContain(`storage_reference = '${STORAGE_REFERENCE}'`);
     expect(sql).not.toContain('970102');
   });
 
@@ -1454,10 +1456,16 @@ describe('real-backend 存储物理文件清理（入口自证失败关闭 + 先
 
     expect(() => deleteE2EReferenceDocumentStorageFiles([storageFileTarget()])).not.toThrow();
 
-    // 删除前只读核验：核对行字段（含文件元数据）与引用唯一性
-    expect(executedSql()).toContain('original_filename');
-    expect(executedSql()).toContain('mime_type');
+    // 删除前只读核验：核对行字段（含文件元数据）与引用唯一性；三个可空字段一律 NULL 安全比较
+    expect(executedSql()).toContain(`storage_reference <=> '${VALID_REFERENCE}'`);
+    expect(executedSql()).toContain(`original_filename <=> 'optics-check-run1.md'`);
+    expect(executedSql()).toContain(`mime_type <=> 'text/markdown'`);
+    expect(executedSql()).not.toContain(`original_filename = '`);
+    expect(executedSql()).not.toContain(`mime_type = '`);
     expect(executedSql()).toContain('shared_reference_rows');
+    // 核验先于删除：核验是单条只读 SELECT，绝不携带 DELETE / UPDATE；文件删除在其之后
+    expect(executedSql()).toMatch(/^SELECT /);
+    expect(executedSql()).not.toMatch(/\b(DELETE|UPDATE)\b/i);
     expect(rmSyncMock).toHaveBeenCalledTimes(1);
 
     const removedPath = rmSyncMock.mock.calls[0]?.[0] as string;
@@ -1585,6 +1593,23 @@ describe('real-backend 参考资料软删前归属预检（只读，失败即停
     );
     expect(executedSql()).not.toMatch(/\b(DELETE|UPDATE)\b/i);
     expect(rmSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('可空存储引用用 NULL 安全比较：非空预期生成 <=>，实际被改成 NULL 时会计入不符', () => {
+    execFileSyncMock.mockReturnValue(ownershipDiagnostics());
+    const reference = `${'a'.repeat(32)}.md`;
+
+    expect(() =>
+      assertE2EReferenceDocumentOwnershipBeforeCleanup([
+        cleanupTarget({ storageReference: reference }),
+      ]),
+    ).not.toThrow();
+
+    expect(executedSql()).toContain(`storage_reference <=> '${reference}'`);
+    expect(executedSql()).not.toContain(`storage_reference = '${reference}'`);
+    // 预检仍是只读 SELECT：绝不携带 DELETE / UPDATE
+    expect(executedSql()).toMatch(/^SELECT /);
+    expect(executedSql()).not.toMatch(/\b(DELETE|UPDATE)\b/i);
   });
 });
 

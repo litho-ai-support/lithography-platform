@@ -518,9 +518,11 @@ function buildReferenceDocumentCleanupSql(
         `id = ${id}`,
         `title = '${expected.title}'`,
         `created_by_account_id = ${expected.createdByAccountId}`,
+        // 可空字段用 NULL 安全比较（<=>）：预期非 NULL 而实际为 NULL 时 `=` 求值为 NULL，
+        // NOT(NULL) 仍为 NULL，不计入 field_mismatch_rows，会放行删除；<=> 才判为不符。
         expected.storageReference === null
           ? 'storage_reference IS NULL'
-          : `storage_reference = '${expected.storageReference}'`,
+          : `storage_reference <=> '${expected.storageReference}'`,
       ];
 
       return `(${facts.join(' AND ')})`;
@@ -632,9 +634,10 @@ function buildReferenceDocumentOwnershipVerificationSql(
           `(id = ${id}`,
           `title = '${expected.title}'`,
           `created_by_account_id = ${expected.createdByAccountId}`,
+          // 可空字段同用 NULL 安全比较（<=>）：实际为 NULL 而预期非 NULL 时必须计入不符
           expected.storageReference === null
             ? 'storage_reference IS NULL'
-            : `storage_reference = '${expected.storageReference}'`,
+            : `storage_reference <=> '${expected.storageReference}'`,
         ].join(' AND ') + ')',
     )
     .join(' OR ');
@@ -1333,6 +1336,29 @@ export function findReferenceDocumentStorageReferenceById(id: number): string | 
 }
 
 /**
+ * 解析存储目录内某个引用的精确文件路径（与 deleteE2EReferenceDocumentStorageFileByReference 同一口径）：
+ * 存储目录取自 env（缺省 var/reference-documents），并执行同一「解析后仍在存储目录内」的越界防御。
+ * 仅供真实 E2E 夹具在删除前写入 / 核对目标文件，避免测试侧另写一套路径口径造成漂移。
+ */
+export function resolveReferenceDocumentStorageFilePath(
+  env: Record<string, string>,
+  reference: string,
+): string {
+  const storageDir = path.resolve(
+    fileURLToPath(new URL('../../../backend', import.meta.url)),
+    env.REFERENCE_DOCUMENT_STORAGE_DIR || 'var/reference-documents',
+  );
+  const filePath = path.resolve(storageDir, reference);
+
+  // 双保险：断言解析后的精确路径仍在存储目录内（与后端 resolve 防御同口径）
+  if (!filePath.startsWith(`${storageDir}${path.sep}`)) {
+    throw new Error(`存储文件路径越界，拒绝删除：${JSON.stringify(filePath)}`);
+  }
+
+  return filePath;
+}
+
+/**
  * 按精确存储引用删除单个物理文件（PR5 归属核验后调用：先核验行归属并取引用，再删文件）。
  * 引用必须命中服务端生成格式白名单，且解析后必须落在存储目录内，否则拒绝删除。
  * 返回解析后的精确文件路径，供调用方在删除后复核零残留。
@@ -1351,16 +1377,7 @@ export function deleteE2EReferenceDocumentStorageFileByReference(reference: stri
 
   assertPhysicalCleanupAllowed(env);
   assertDedicatedReferenceDocumentCleanupDatabase(env);
-  const storageDir = path.resolve(
-    fileURLToPath(new URL('../../../backend', import.meta.url)),
-    env.REFERENCE_DOCUMENT_STORAGE_DIR || 'var/reference-documents',
-  );
-  const filePath = path.resolve(storageDir, reference);
-
-  // 双保险：断言解析后的精确路径仍在存储目录内（与后端 resolve 防御同口径）
-  if (!filePath.startsWith(`${storageDir}${path.sep}`)) {
-    throw new Error(`存储文件路径越界，拒绝删除：${JSON.stringify(filePath)}`);
-  }
+  const filePath = resolveReferenceDocumentStorageFilePath(env, reference);
 
   if (existsSync(filePath)) {
     rmSync(filePath, { force: true });
@@ -1444,9 +1461,10 @@ function buildStorageFileCleanupVerificationSql(
         `(id = ${id}`,
         `title = '${expected.title}'`,
         `created_by_account_id = ${expected.createdByAccountId}`,
-        `storage_reference = '${expected.storageReference}'`,
-        `original_filename = '${expected.originalFilename}'`,
-        `mime_type = '${expected.mimeType}')`,
+        // 三个可空字段一律用 NULL 安全比较（<=>）：实际被改成 NULL 时必须计入 field_mismatch_rows
+        `storage_reference <=> '${expected.storageReference}'`,
+        `original_filename <=> '${expected.originalFilename}'`,
+        `mime_type <=> '${expected.mimeType}')`,
       ].join(' AND '),
     )
     .join(' OR ');

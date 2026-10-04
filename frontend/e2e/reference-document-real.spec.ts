@@ -20,7 +20,8 @@
 // 前提不满足（无本地后端 / 无 env）时用例自动跳过，不会以失败阻塞。
 
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
   assertE2EReferenceDocumentOwnershipBeforeCleanup,
@@ -28,6 +29,7 @@ import {
   deleteE2EReferenceDocumentStorageFiles,
   findReferenceDocumentStorageReferenceById,
   isPhysicalCleanupEnabled,
+  mysqlQuery,
   planReferenceDocumentSoftDelete,
   readBackendEnv,
   realGraphqlCall,
@@ -41,6 +43,7 @@ import {
   requirePositiveReferenceDocumentId,
   requireResolvedStorageReference,
   resolveRealBackendPrerequisite,
+  resolveReferenceDocumentStorageFilePath,
 } from './helpers/real-backend';
 
 const LIST_PATH = '/reference-documents';
@@ -196,6 +199,125 @@ async function runWithCleanup(
   if (primaryError !== null) {
     throw primaryError;
   }
+}
+
+// ---- P3b 真实 SQL 回归夹具 ----
+//
+// 单测（helpers/real-backend.spec.ts）只断言入口生成的 SQL 文本；此处用本轮直接落库并「插入即登记
+// 精确 ID」的真实夹具 + 存储目录真实文件执行真实 SQL：覆盖可空字段被改成 NULL 的各条失败路径——
+// 核验必须把 NULL 不一致计入 field_mismatch_rows → 失败关闭 → 零软删 / 零物理删行 / 零文件删除。
+// 夹具标题使用独立前缀（不含 RUN_TITLE_KEYWORD），避免被主链路用例的标题反查命中；清理只按本轮
+// 登记的精确 ID 恢复 / 删除，绝不按标题前缀扩大范围。
+
+/** SQL 回归夹具标题前缀：与主链路 RUN_TITLE_KEYWORD 区分，避免跨用例互相命中反查 */
+const SQL_FIXTURE_TITLE_PREFIX = 'E2E 参考资料SQL回归';
+
+/** 真实 SQL 夹具行：id 与「插入后立即登记」的本轮预期事实 */
+interface SqlFixtureRow {
+  readonly id: number;
+  readonly title: string;
+  readonly createdByAccountId: number;
+  readonly documentType: string;
+  readonly contentText: string | null;
+  readonly storageBackend: string | null;
+  readonly storageReference: string | null;
+  readonly originalFilename: string | null;
+  readonly mimeType: string | null;
+}
+
+/** 文件资料夹具：存储引用 / 文件元数据 / 磁盘路径均非空 */
+interface FileSqlFixtureRow extends SqlFixtureRow {
+  readonly storageBackend: string;
+  readonly storageReference: string;
+  readonly originalFilename: string;
+  readonly mimeType: string;
+  readonly filePath: string;
+}
+
+/** 单个 SQL 夹具值的字面量白名单：拒绝单引号 / 反斜杠（终止符 / 默认转义符）与超长值 */
+function sqlLiteral(value: string | null): string {
+  if (value === null) {
+    return 'NULL';
+  }
+
+  if (!/^[^'\\]{0,255}$/.test(value)) {
+    throw new Error(`真实 SQL 夹具值未通过白名单校验，拒绝拼接：${JSON.stringify(value)}`);
+  }
+
+  return `'${value}'`;
+}
+
+/**
+ * 直插一条夹具行并立即取回精确 ID。同一 mysql 进程 = 同一连接，故 INSERT 后的
+ * LAST_INSERT_ID() 必为该行主键；取回后立即登记为本轮清理边界。
+ */
+function insertSqlFixtureRow(facts: {
+  readonly title: string;
+  readonly createdByAccountId: number;
+  readonly documentType: string;
+  readonly contentText: string | null;
+  readonly storageBackend: string | null;
+  readonly storageReference: string | null;
+  readonly originalFilename: string | null;
+  readonly mimeType: string | null;
+}): number {
+  if (!Number.isSafeInteger(facts.createdByAccountId) || facts.createdByAccountId <= 0) {
+    throw new Error(
+      `真实 SQL 夹具创建人账号非法，拒绝拼接：${JSON.stringify(facts.createdByAccountId)}`,
+    );
+  }
+
+  const output = mysqlQuery(
+    [
+      'INSERT INTO reference_document',
+      '(title, document_type, content_text, storage_backend, storage_reference, original_filename, mime_type, created_by_account_id)',
+      `VALUES (${sqlLiteral(facts.title)}, ${sqlLiteral(facts.documentType)}, ${sqlLiteral(
+        facts.contentText,
+      )}, ${sqlLiteral(facts.storageBackend)}, ${sqlLiteral(facts.storageReference)}, ${sqlLiteral(
+        facts.originalFilename,
+      )}, ${sqlLiteral(facts.mimeType)}, ${facts.createdByAccountId});`,
+      'SELECT LAST_INSERT_ID();',
+    ].join(' '),
+  );
+
+  return requirePositiveReferenceDocumentId(Number(output.split('\n').pop()), 'SQL 夹具插入');
+}
+
+/** 只读回读夹具行状态：不存在时 exists=false；存在时带回 deprecated 与当前存储引用 */
+function readSqlFixtureRowState(id: number): {
+  readonly exists: boolean;
+  readonly deprecated: number;
+  readonly storageReference: string | null;
+} {
+  const output = mysqlQuery(
+    `SELECT CONCAT(deprecated, '|', IFNULL(storage_reference, '<null>')) FROM reference_document WHERE id = ${id}`,
+  );
+
+  if (output === '') {
+    return { exists: false, deprecated: -1, storageReference: null };
+  }
+
+  const [deprecated, storageReference] = output.split('|');
+
+  return {
+    exists: true,
+    deprecated: Number(deprecated),
+    storageReference: storageReference === '<null>' ? null : storageReference,
+  };
+}
+
+/** 仅按本轮登记的精确 ID 清理夹具行（绝不触碰任何未登记行） */
+function deleteSqlFixtureRowsByIds(ids: readonly number[]): void {
+  if (ids.length === 0) {
+    return;
+  }
+
+  mysqlQuery(`DELETE FROM reference_document WHERE id IN (${ids.join(',')})`);
+}
+
+/** 服务端生成格式的随机存储引用（32 位小写 hex + 白名单扩展名），保证不与既有文件撞名 */
+function newStorageReference(ext: string): string {
+  return `${randomBytes(16).toString('hex')}${ext}`;
 }
 
 /**
@@ -639,17 +761,24 @@ test.describe('real backend reference document flow', () => {
         // 仍存在，故文件清理先于物理删行），再走受保护的数据库行清理；两者错误一并报告，
         // 任一失败即让用例转红，不再以 console.warn 吞掉。
         const failures: string[] = [];
+        // 顺序收紧：文件核验 / 删除失败即「失败关闭」——跳过本批资料行的软删与物理删行，
+        // 保留行与文件供人工核查。否则（如文件名 / MIME 变为 NULL）修正 SQL 后文件虽被保留，
+        // 行仍可能被删除，现场被破坏。
+        let fileCleanupFailed = false;
 
         try {
           deleteE2EReferenceDocumentStorageFiles(toStorageFileTargets(createdDocuments));
         } catch (error) {
+          fileCleanupFailed = true;
           failures.push(`上传文件物理清理失败：${toErrorMessage(error)}`);
         }
 
-        try {
-          await cleanupE2EDocuments(env, createdDocuments);
-        } catch (error) {
-          failures.push(toErrorMessage(error));
+        if (!fileCleanupFailed) {
+          try {
+            await cleanupE2EDocuments(env, createdDocuments);
+          } catch (error) {
+            failures.push(toErrorMessage(error));
+          }
         }
 
         if (failures.length > 0) {
@@ -657,5 +786,197 @@ test.describe('real backend reference document flow', () => {
         }
       },
     );
+  });
+
+  // P3b 真实 SQL 回归：可空字段（storage_reference / original_filename / mime_type）被改成 NULL 时，
+  // 三条受保护入口的核验 SQL 必须把不一致计入 field_mismatch_rows 并失败关闭——行保持未软删 /
+  // 未物理删除、文件保留；同批一条不符时整批零删除。反向对照：预期与实际均为 NULL 的文本资料、
+  // 正常文件资料必须核验通过并完成清理（NULL 安全比较不得误判）。
+  test('nullable column NULL mismatch fails closed with zero deletion (real sql)', async () => {
+    test.setTimeout(90_000);
+    const env = readBackendEnv();
+
+    // 本文件只由专用入口收集（lithography_e2e + 显式授权）；仍自行复查，缺失即硬失败，不以 skip 掩盖。
+    if (!isPhysicalCleanupEnabled(env)) {
+      throw new Error(
+        `真实 SQL 回归要求专用隔离库 lithography_e2e 且显式设置 E2E_ALLOW_PHYSICAL_CLEANUP=1，当前 DB_NAME=${JSON.stringify(env.DB_NAME)}，拒绝在非专用环境执行`,
+      );
+    }
+
+    const createdByAccountId = await realLoginAccountId(env, 'mock_super_admin');
+    const fixtureIds: number[] = [];
+    const fixtureFilePaths: string[] = [];
+
+    const fileFixture = (suffix: string): FileSqlFixtureRow => {
+      const storageReference = newStorageReference('.md');
+      const facts = {
+        title: `${SQL_FIXTURE_TITLE_PREFIX}·${RUN_ID}·${suffix}`,
+        createdByAccountId,
+        documentType: 'MANUAL',
+        contentText: null,
+        storageBackend: 'local',
+        storageReference,
+        originalFilename: `${suffix}.md`,
+        mimeType: 'text/markdown',
+      };
+      const id = insertSqlFixtureRow(facts);
+
+      fixtureIds.push(id);
+      const filePath = resolveReferenceDocumentStorageFilePath(env, storageReference);
+
+      writeFileSync(filePath, `sql fixture ${suffix}`);
+      fixtureFilePaths.push(filePath);
+
+      return { id, ...facts, filePath };
+    };
+
+    const textFixture = (suffix: string): SqlFixtureRow => {
+      const facts = {
+        title: `${SQL_FIXTURE_TITLE_PREFIX}·${RUN_ID}·${suffix}`,
+        createdByAccountId,
+        documentType: 'MANUAL',
+        contentText: `SQL 夹具正文 ${suffix}`,
+        storageBackend: null,
+        storageReference: null,
+        originalFilename: null,
+        mimeType: null,
+      };
+      const id = insertSqlFixtureRow(facts);
+
+      fixtureIds.push(id);
+
+      return { id, ...facts };
+    };
+
+    const cleanupTargetOf = (row: SqlFixtureRow): ReferenceDocumentCleanupTarget => ({
+      id: row.id,
+      expected: { title: row.title, createdByAccountId, storageReference: row.storageReference },
+    });
+
+    const fileTargetOf = (row: FileSqlFixtureRow): ReferenceDocumentStorageFileCleanupTarget => ({
+      id: row.id,
+      expected: {
+        title: row.title,
+        createdByAccountId,
+        storageReference: row.storageReference,
+        originalFilename: row.originalFilename,
+        mimeType: row.mimeType,
+      },
+    });
+
+    try {
+      // 用例 1：预期非空引用 → 实际 NULL。归属预检 / 物理清理 / 文件核验三条入口都失败关闭，
+      // 行未软删、文件保留。（同时改 storage_backend、补 content_text 以满足表 CHECK 约束）
+      const refNullCase = fileFixture('ref-null');
+
+      mysqlQuery(
+        `UPDATE reference_document SET storage_reference = NULL, storage_backend = NULL, content_text = 'mutated' WHERE id = ${refNullCase.id}`,
+      );
+
+      expect(() =>
+        assertE2EReferenceDocumentOwnershipBeforeCleanup([cleanupTargetOf(refNullCase)]),
+      ).toThrow(/归属预检/);
+      expect(() => deleteE2EReferenceDocumentRowsByIds([cleanupTargetOf(refNullCase)])).toThrow();
+      expect(() => deleteE2EReferenceDocumentStorageFiles([fileTargetOf(refNullCase)])).toThrow(
+        /核验失败/,
+      );
+      expect(readSqlFixtureRowState(refNullCase.id)).toEqual({
+        exists: true,
+        deprecated: 0,
+        storageReference: null,
+      });
+      expect(existsSync(refNullCase.filePath)).toBe(true);
+
+      // 用例 2：预期非空原始文件名 → 实际 NULL。文件核验失败关闭，行未软删、文件保留。
+      const filenameNullCase = fileFixture('filename-null');
+
+      mysqlQuery(
+        `UPDATE reference_document SET original_filename = NULL WHERE id = ${filenameNullCase.id}`,
+      );
+
+      expect(() =>
+        deleteE2EReferenceDocumentStorageFiles([fileTargetOf(filenameNullCase)]),
+      ).toThrow(/核验失败/);
+      expect(readSqlFixtureRowState(filenameNullCase.id)).toEqual({
+        exists: true,
+        deprecated: 0,
+        storageReference: filenameNullCase.storageReference,
+      });
+      expect(existsSync(filenameNullCase.filePath)).toBe(true);
+
+      // 用例 3：预期非空 MIME → 实际 NULL。同上。
+      const mimeNullCase = fileFixture('mime-null');
+
+      mysqlQuery(`UPDATE reference_document SET mime_type = NULL WHERE id = ${mimeNullCase.id}`);
+
+      expect(() => deleteE2EReferenceDocumentStorageFiles([fileTargetOf(mimeNullCase)])).toThrow(
+        /核验失败/,
+      );
+      expect(readSqlFixtureRowState(mimeNullCase.id)).toEqual({
+        exists: true,
+        deprecated: 0,
+        storageReference: mimeNullCase.storageReference,
+      });
+      expect(existsSync(mimeNullCase.filePath)).toBe(true);
+
+      // 用例 4：预期与实际均为 NULL 的文本资料。NULL 安全比较不得误判为不符：只读归属预检通过，
+      // 随后按精确 ID 物理清理成功。
+      const textNullCase = textFixture('both-null');
+
+      expect(() =>
+        assertE2EReferenceDocumentOwnershipBeforeCleanup([cleanupTargetOf(textNullCase)]),
+      ).not.toThrow();
+      expect(() =>
+        deleteE2EReferenceDocumentRowsByIds([cleanupTargetOf(textNullCase)]),
+      ).not.toThrow();
+      expect(readSqlFixtureRowState(textNullCase.id).exists).toBe(false);
+
+      // 用例 5：正常文件资料。核验通过 → 文件被删除 → 行被物理删除。
+      const normalCase = fileFixture('normal');
+
+      expect(() =>
+        deleteE2EReferenceDocumentStorageFiles([fileTargetOf(normalCase)]),
+      ).not.toThrow();
+      expect(existsSync(normalCase.filePath)).toBe(false);
+      expect(() =>
+        deleteE2EReferenceDocumentRowsByIds([cleanupTargetOf(normalCase)]),
+      ).not.toThrow();
+      expect(readSqlFixtureRowState(normalCase.id).exists).toBe(false);
+
+      // 用例 6：同批两条目标、一条不符即整批零删除（行与文件都不动）。
+      const batchMismatch = fileFixture('batch-mismatch');
+      const batchIntact = fileFixture('batch-intact');
+
+      mysqlQuery(
+        `UPDATE reference_document SET storage_reference = NULL, storage_backend = NULL, content_text = 'mutated' WHERE id = ${batchMismatch.id}`,
+      );
+
+      expect(() =>
+        deleteE2EReferenceDocumentRowsByIds([
+          cleanupTargetOf(batchMismatch),
+          cleanupTargetOf(batchIntact),
+        ]),
+      ).toThrow();
+      expect(readSqlFixtureRowState(batchMismatch.id).exists).toBe(true);
+      expect(readSqlFixtureRowState(batchIntact.id).exists).toBe(true);
+
+      expect(() =>
+        deleteE2EReferenceDocumentStorageFiles([
+          fileTargetOf(batchMismatch),
+          fileTargetOf(batchIntact),
+        ]),
+      ).toThrow(/核验失败/);
+      expect(existsSync(batchMismatch.filePath)).toBe(true);
+      expect(existsSync(batchIntact.filePath)).toBe(true);
+    } finally {
+      // 只按本轮登记的精确 ID 恢复 / 清理夹具：先删行（含被刻意改成 NULL 的行），再删残留文件。
+      deleteSqlFixtureRowsByIds(fixtureIds);
+
+      for (const filePath of fixtureFilePaths) {
+        if (existsSync(filePath)) {
+          rmSync(filePath, { force: true });
+        }
+      }
+    }
   });
 });
