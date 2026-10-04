@@ -1962,15 +1962,13 @@ describe('real-backend 真实 E2E 夹具写入与「先核验后恢复」安全�
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
-  // ---- restoreMutatedReferenceDocumentFixtureRow：事务内「逐列制造状态核验先于 UPDATE」----
+  // ---- restoreMutatedReferenceDocumentFixtureRow：事务内「锁行 → 写前核验 → 更新 → 影响行数守卫」----
 
-  it('恢复脚本单次 mysql 调用内先按逐列制造状态核验（NULL 安全），命中后才 UPDATE 恢复并提交', () => {
+  it('恢复脚本先锁行、写前核验、更新后核对影响行数，全部在同一 mysql 事务内', () => {
     process.env[OPT_IN_ENV] = '1';
     execFileSyncMock
       .mockReturnValueOnce('lithography_e2e')
-      .mockReturnValueOnce(
-        'database=lithography_e2e existing_rows=1 mismatch_rows=0\nrestored_rows=1',
-      );
+      .mockReturnValueOnce('database=lithography_e2e existing_rows=1 restored_rows=1');
 
     restoreMutatedReferenceDocumentFixtureRow(readBackendEnv(), restoreTarget());
 
@@ -1980,14 +1978,14 @@ describe('real-backend 真实 E2E 夹具写入与「先核验后恢复」安全�
 
     const restoreSql = sqls[1] ?? '';
 
-    // 同一事务：核验、恢复、提交都在一个 mysql 进程的连接里
+    // 同一事务：锁行、写前核验、恢复、提交都在一个 mysql 进程的连接里
     expect(restoreSql).toContain('START TRANSACTION');
     expect(restoreSql.trimEnd().endsWith('COMMIT')).toBe(true);
 
-    // 逐列「当前值仍是本轮制造状态」用 NULL 安全比较（制造值可为 NULL）
-    expect(restoreSql).toContain('storage_reference <=> NULL');
-    expect(restoreSql).toContain('storage_backend <=> NULL');
-    expect(restoreSql).toContain("content_text <=> 'mutated'");
+    // 按精确 ID 锁定现有行
+    expect(restoreSql).toContain(
+      'SELECT id FROM reference_document WHERE id = 980001 LIMIT 1 FOR UPDATE',
+    );
 
     // 逐列恢复为登记原值
     expect(restoreSql).toContain(`storage_reference = '${'a'.repeat(32)}.md'`);
@@ -1999,29 +1997,40 @@ describe('real-backend 真实 E2E 夹具写入与「先核验后恢复」安全�
     expect(restoreSql).toContain(`title = '${TITLE}'`);
     expect(restoreSql).toContain(`created_by_account_id = ${CREATED_BY_ACCOUNT_ID}`);
 
-    // 守卫核验（含逐列制造状态统计）必须先于 UPDATE：否则会把已被意外改动的列一并恢复
-    const guardIndex = restoreSql.indexOf(
+    // UPDATE 的 WHERE 同时含身份与逐列「当前值仍是本轮制造状态」（NULL 安全）条件
+    expect(restoreSql).toContain(
+      `UPDATE reference_document SET storage_reference = '${'a'.repeat(32)}.md', storage_backend = 'local', content_text = NULL WHERE id = 980001 AND title = '${TITLE}' AND created_by_account_id = ${CREATED_BY_ACCOUNT_ID} AND (storage_reference <=> NULL AND storage_backend <=> NULL AND content_text <=> 'mutated')`,
+    );
+
+    const lockIndex = restoreSql.indexOf('FOR UPDATE');
+    const firstGuardIndex = restoreSql.indexOf(
       'INSERT INTO e2e_reference_document_fixture_restore_guard',
     );
     const updateIndex = restoreSql.indexOf('UPDATE reference_document SET');
+    const captureIndex = restoreSql.indexOf('SET @restored_rows = ROW_COUNT()');
+    const secondGuardIndex = restoreSql.lastIndexOf(
+      'INSERT INTO e2e_reference_document_fixture_restore_guard',
+    );
 
-    expect(guardIndex).toBeGreaterThanOrEqual(0);
-    expect(updateIndex).toBeGreaterThan(guardIndex);
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    // 写前核验守卫先于 UPDATE（锁行亦先于 UPDATE）：不符时绝不执行 UPDATE
+    expect(firstGuardIndex).toBeGreaterThan(lockIndex);
+    expect(firstGuardIndex).toBeLessThan(updateIndex);
+    // 更新后立即捕获影响行数，并在 COMMIT 前经第二道守卫
+    expect(captureIndex).toBeGreaterThan(updateIndex);
+    expect(secondGuardIndex).toBeGreaterThan(captureIndex);
     expect(restoreSql).toContain('CHECK (violations = 0)');
-    // 身份须恰好命中 1 行：违例用 (1 - 命中数)，而非「列数 - 命中数」（后者会让健康行恒判违例）
+    // 写前守卫含库名 + 身份/逐列制造值核验
+    expect(restoreSql).toContain("(DATABASE() <> 'lithography_e2e')");
     expect(restoreSql).toContain('(1 - (SELECT COUNT(*) FROM reference_document WHERE id = 980001');
+    // 更新后守卫要求影响行数恰好 1
+    expect(restoreSql).toContain('(1 - @restored_rows)');
   });
 
   it.each([
-    [
-      '制造状态已被意外改动',
-      'database=lithography_e2e existing_rows=1 mismatch_rows=1\nrestored_rows=0',
-    ],
-    ['目标行缺失', 'database=lithography_e2e existing_rows=0 mismatch_rows=0\nrestored_rows=0'],
-    [
-      '实际库名非专用隔离库',
-      'database=lithography_drill existing_rows=1 mismatch_rows=0\nrestored_rows=1',
-    ],
+    ['制造状态已被意外改动', 'database=lithography_e2e existing_rows=1 restored_rows=0'],
+    ['目标行缺失', 'database=lithography_e2e existing_rows=0 restored_rows=0'],
+    ['实际库名非专用隔离库', 'database=lithography_drill existing_rows=1 restored_rows=1'],
   ])('恢复诊断不达标（%s）时抛错并保留行与文件', (_label, diagnosticOutput) => {
     process.env[OPT_IN_ENV] = '1';
     execFileSyncMock.mockReturnValueOnce('lithography_e2e').mockReturnValueOnce(diagnosticOutput);

@@ -355,6 +355,184 @@ function newStorageReference(ext: string): string {
   return `${randomBytes(16).toString('hex')}${ext}`;
 }
 
+/** 真实 SQL 夹具的共享上下文：环境、创建人与本轮登记清单（创建 / 收尾函数都以此为准） */
+interface SqlFixtureContext {
+  readonly env: Record<string, string>;
+  readonly createdByAccountId: number;
+  readonly fixtures: RegisteredFixture[];
+}
+
+function registerFixture(
+  ctx: SqlFixtureContext,
+  row: SqlFixtureRow,
+  fileRow: FileSqlFixtureRow | null,
+): void {
+  ctx.fixtures.push({ row, fileRow, mutations: null });
+}
+
+/**
+ * 创建文件夹具：先按已生成的引用解析路径（纯函数、不落库）→ 插入取得 ID → **立即**登记清理边界
+ * → 最后才执行写入。写入动作可注入，便于测试「写文件失败」路径；写失败时该行与路径已在
+ * ctx.fixtures 中，收尾仍能按精确 ID 清理该行与可能留下的部分文件。
+ */
+function createFileFixture(
+  ctx: SqlFixtureContext,
+  suffix: string,
+  write: (filePath: string) => void = (filePath) =>
+    writeFileSync(filePath, `sql fixture ${suffix}`),
+): FileSqlFixtureRow {
+  const storageReference = newStorageReference('.md');
+  const filePath = resolveReferenceDocumentStorageFilePath(ctx.env, storageReference);
+  const facts = {
+    title: `${SQL_FIXTURE_TITLE_PREFIX}·${RUN_ID}·${suffix}`,
+    createdByAccountId: ctx.createdByAccountId,
+    documentType: 'MANUAL',
+    contentText: null,
+    storageBackend: 'local',
+    storageReference,
+    originalFilename: `${suffix}.md`,
+    mimeType: 'text/markdown',
+  };
+  const id = insertSqlFixtureRow(ctx.env, facts);
+  const row: FileSqlFixtureRow = { id, ...facts, filePath };
+
+  registerFixture(ctx, row, row);
+
+  write(filePath);
+
+  return row;
+}
+
+/** 创建文本资料夹具（无存储引用 / 无文件），插入取得 ID 后立即登记 */
+function createTextFixture(ctx: SqlFixtureContext, suffix: string): SqlFixtureRow {
+  const facts = {
+    title: `${SQL_FIXTURE_TITLE_PREFIX}·${RUN_ID}·${suffix}`,
+    createdByAccountId: ctx.createdByAccountId,
+    documentType: 'MANUAL',
+    contentText: `SQL 夹具正文 ${suffix}`,
+    storageBackend: null,
+    storageReference: null,
+    originalFilename: null,
+    mimeType: null,
+  };
+  const row: SqlFixtureRow = { id: insertSqlFixtureRow(ctx.env, facts), ...facts };
+
+  registerFixture(ctx, row, null);
+
+  return row;
+}
+
+/** 登记某夹具本轮故意改成 NULL 的列（含制造值与原值），供收尾「先核验后恢复」使用 */
+function recordFixtureMutation(
+  ctx: SqlFixtureContext,
+  id: number,
+  mutations: ReferenceDocumentFixtureColumnMutation[],
+): void {
+  const fixture = ctx.fixtures.find(({ row }) => row.id === id);
+
+  if (fixture === undefined) {
+    throw new Error(`未登记的夹具 ID，拒绝记录改 NULL 状态：${id}`);
+  }
+
+  fixture.mutations = mutations;
+}
+
+/** 物理清理目标一律取登记的本轮原始事实（未被改动的值），使恢复后受保护 helper 的核验可通过 */
+function cleanupTargetOf(row: SqlFixtureRow): ReferenceDocumentCleanupTarget {
+  return {
+    id: row.id,
+    expected: {
+      title: row.title,
+      createdByAccountId: row.createdByAccountId,
+      storageReference: row.storageReference,
+    },
+  };
+}
+
+function fileTargetOf(row: FileSqlFixtureRow): ReferenceDocumentStorageFileCleanupTarget {
+  return {
+    id: row.id,
+    expected: {
+      title: row.title,
+      createdByAccountId: row.createdByAccountId,
+      storageReference: row.storageReference,
+      originalFilename: row.originalFilename,
+      mimeType: row.mimeType,
+    },
+  };
+}
+
+/**
+ * 共享收尾（创建函数与写失败用例共用同一份逻辑，不复制第二套）：只以本轮登记的精确 ID 为边界，
+ * 已在用例主体清理的行据只读回读跳过；
+ * 1. 对仍在库且被故意改 NULL 的夹具「先核验后恢复」（同一事务；字段被意外改动即保留行与文件）；
+ * 2. 复用受保护的文件清理 helper（批量；失败即停止行清理并保留现场）；
+ * 3. 文件清理成功后，复用受保护的资料行清理 helper；
+ * 4. 任一步失败聚合抛错，由调用方与原测试错误一并报告。
+ */
+function cleanupFixtures(ctx: SqlFixtureContext): void {
+  const teardownErrors: string[] = [];
+  const existingIds = readExistingFixtureIds(ctx.fixtures.map(({ row }) => row.id));
+  const preservedIds = new Set<number>();
+
+  for (const fixture of ctx.fixtures) {
+    if (!existingIds.has(fixture.row.id) || fixture.mutations === null) {
+      continue;
+    }
+
+    try {
+      restoreMutatedReferenceDocumentFixtureRow(ctx.env, {
+        id: fixture.row.id,
+        title: fixture.row.title,
+        createdByAccountId: fixture.row.createdByAccountId,
+        mutations: fixture.mutations,
+      });
+    } catch (error) {
+      preservedIds.add(fixture.row.id);
+      teardownErrors.push(
+        `夹具 ${fixture.row.id} 恢复失败（保留行与文件）：${toErrorMessage(error)}`,
+      );
+    }
+  }
+
+  const cleanable = ctx.fixtures.filter(
+    ({ row }) => existingIds.has(row.id) && !preservedIds.has(row.id),
+  );
+
+  const fileTargets = cleanable
+    .filter((fixture) => fixture.fileRow !== null)
+    .map((fixture) => fileTargetOf(requireFileFixture(fixture)));
+
+  let filesCleaned = true;
+
+  if (fileTargets.length > 0) {
+    try {
+      deleteE2EReferenceDocumentStorageFiles(fileTargets);
+    } catch (error) {
+      filesCleaned = false;
+      teardownErrors.push(
+        `夹具上传文件清理失败（停止资料行清理，保留现场）：${toErrorMessage(error)}`,
+      );
+    }
+  }
+
+  if (filesCleaned) {
+    const rowTargets = cleanable.map(({ row }) => cleanupTargetOf(row));
+
+    if (rowTargets.length > 0) {
+      try {
+        deleteE2EReferenceDocumentRowsByIds(rowTargets);
+      } catch (error) {
+        teardownErrors.push(`夹具资料行清理失败：${toErrorMessage(error)}`);
+      }
+    }
+  }
+
+  if (teardownErrors.length > 0) {
+    throw new Error(teardownErrors.join('；'));
+  }
+}
+
 /**
  * 兜底清理（仅以本轮创建响应记录的精确 ID + 预期事实为删除边界）：
  * 1. 软删前的只读归属预检（评审 P2）：按精确 ID 核对目标行存在且标题 / 创建人 / 存储引用与
@@ -844,84 +1022,18 @@ test.describe('real backend reference document flow', () => {
     }
 
     const createdByAccountId = await realLoginAccountId(env, 'mock_super_admin');
-    const fixtures: RegisteredFixture[] = [];
+    const ctx: SqlFixtureContext = { env, createdByAccountId, fixtures: [] };
 
-    const registerFixture = (row: SqlFixtureRow, fileRow: FileSqlFixtureRow | null): void => {
-      fixtures.push({ row, fileRow, mutations: null });
-    };
+    const fileFixture = (suffix: string): FileSqlFixtureRow => createFileFixture(ctx, suffix);
 
-    const fileFixture = (suffix: string): FileSqlFixtureRow => {
-      const storageReference = newStorageReference('.md');
-      const facts = {
-        title: `${SQL_FIXTURE_TITLE_PREFIX}·${RUN_ID}·${suffix}`,
-        createdByAccountId,
-        documentType: 'MANUAL',
-        contentText: null,
-        storageBackend: 'local',
-        storageReference,
-        originalFilename: `${suffix}.md`,
-        mimeType: 'text/markdown',
-      };
-      const id = insertSqlFixtureRow(env, facts);
-      const filePath = resolveReferenceDocumentStorageFilePath(env, storageReference);
+    const textFixture = (suffix: string): SqlFixtureRow => createTextFixture(ctx, suffix);
 
-      writeFileSync(filePath, `sql fixture ${suffix}`);
-
-      const row: FileSqlFixtureRow = { id, ...facts, filePath };
-
-      registerFixture(row, row);
-
-      return row;
-    };
-
-    const textFixture = (suffix: string): SqlFixtureRow => {
-      const facts = {
-        title: `${SQL_FIXTURE_TITLE_PREFIX}·${RUN_ID}·${suffix}`,
-        createdByAccountId,
-        documentType: 'MANUAL',
-        contentText: `SQL 夹具正文 ${suffix}`,
-        storageBackend: null,
-        storageReference: null,
-        originalFilename: null,
-        mimeType: null,
-      };
-      const id = insertSqlFixtureRow(env, facts);
-      const row: SqlFixtureRow = { id, ...facts };
-
-      registerFixture(row, null);
-
-      return row;
-    };
-
-    /** 登记某夹具本轮故意改成 NULL 的列（含制造值与原值），供收尾「先核验后恢复」使用 */
     const recordMutation = (
       id: number,
       mutations: ReferenceDocumentFixtureColumnMutation[],
     ): void => {
-      const fixture = fixtures.find(({ row }) => row.id === id);
-
-      if (fixture === undefined) {
-        throw new Error(`未登记的夹具 ID，拒绝记录改 NULL 状态：${id}`);
-      }
-
-      fixture.mutations = mutations;
+      recordFixtureMutation(ctx, id, mutations);
     };
-
-    const cleanupTargetOf = (row: SqlFixtureRow): ReferenceDocumentCleanupTarget => ({
-      id: row.id,
-      expected: { title: row.title, createdByAccountId, storageReference: row.storageReference },
-    });
-
-    const fileTargetOf = (row: FileSqlFixtureRow): ReferenceDocumentStorageFileCleanupTarget => ({
-      id: row.id,
-      expected: {
-        title: row.title,
-        createdByAccountId,
-        storageReference: row.storageReference,
-        originalFilename: row.originalFilename,
-        mimeType: row.mimeType,
-      },
-    });
 
     await runWithCleanup(
       async () => {
@@ -1071,73 +1183,55 @@ test.describe('real backend reference document flow', () => {
         expect(existsSync(batchMismatch.filePath)).toBe(true);
         expect(existsSync(batchIntact.filePath)).toBe(true);
       },
-      () => {
-        // 收尾（只以本轮登记的精确 ID 为边界；已在用例主体清理的行据只读回读跳过）：
-        // 1. 对仍在库且被故意改 NULL 的夹具「先核验后恢复」（同一事务；字段被意外改动即保留行与文件）；
-        // 2. 复用受保护的文件清理 helper（批量；失败即停止行清理并保留现场）；
-        // 3. 文件清理成功后，复用受保护的资料行清理 helper；
-        // 4. 任一步失败聚合抛错，由 runWithCleanup 与原测试错误一并报告。
-        const teardownErrors: string[] = [];
-        const existingIds = readExistingFixtureIds(fixtures.map(({ row }) => row.id));
-        const preservedIds = new Set<number>();
-
-        for (const fixture of fixtures) {
-          if (!existingIds.has(fixture.row.id) || fixture.mutations === null) {
-            continue;
-          }
-
-          try {
-            restoreMutatedReferenceDocumentFixtureRow(env, {
-              id: fixture.row.id,
-              title: fixture.row.title,
-              createdByAccountId,
-              mutations: fixture.mutations,
-            });
-          } catch (error) {
-            preservedIds.add(fixture.row.id);
-            teardownErrors.push(
-              `夹具 ${fixture.row.id} 恢复失败（保留行与文件）：${toErrorMessage(error)}`,
-            );
-          }
-        }
-
-        const cleanable = fixtures.filter(
-          ({ row }) => existingIds.has(row.id) && !preservedIds.has(row.id),
-        );
-
-        const fileTargets = cleanable
-          .filter((fixture) => fixture.fileRow !== null)
-          .map((fixture) => fileTargetOf(requireFileFixture(fixture)));
-
-        let filesCleaned = true;
-
-        if (fileTargets.length > 0) {
-          try {
-            deleteE2EReferenceDocumentStorageFiles(fileTargets);
-          } catch (error) {
-            filesCleaned = false;
-            teardownErrors.push(
-              `夹具上传文件清理失败（停止资料行清理，保留现场）：${toErrorMessage(error)}`,
-            );
-          }
-        }
-
-        if (filesCleaned) {
-          const rowTargets = cleanable.map(({ row }) => cleanupTargetOf(row));
-
-          if (rowTargets.length > 0) {
-            try {
-              deleteE2EReferenceDocumentRowsByIds(rowTargets);
-            } catch (error) {
-              teardownErrors.push(`夹具资料行清理失败：${toErrorMessage(error)}`);
-            }
-          }
-        }
-
-        if (teardownErrors.length > 0) {
-          throw new Error(teardownErrors.join('；'));
-        }
-      },
+      () => cleanupFixtures(ctx),
     );
+  });
+
+  // 写文件失败回归：登记必须先于写入——向创建函数注入会抛错的写入动作，验证「取到 ID 并登记后
+  // 写文件失败」时收尾仍能按已登记的精确 ID 清理该资料行与路径（与主用例共享同一份 cleanupFixtures）。
+  test('file fixture registers its id before writing so teardown still cleans when the write fails (real sql)', async () => {
+    test.setTimeout(60_000);
+    const env = readBackendEnv();
+
+    if (!isPhysicalCleanupEnabled(env)) {
+      throw new Error(
+        `真实 SQL 回归要求专用隔离库 lithography_e2e 且显式设置 E2E_ALLOW_PHYSICAL_CLEANUP=1，当前 DB_NAME=${JSON.stringify(env.DB_NAME)}，拒绝在非专用环境执行`,
+      );
+    }
+
+    const createdByAccountId = await realLoginAccountId(env, 'mock_super_admin');
+    const ctx: SqlFixtureContext = { env, createdByAccountId, fixtures: [] };
+
+    await runWithCleanup(
+      async () => {
+        expect(() =>
+          createFileFixture(ctx, 'write-fail', () => {
+            throw new Error('注入的写文件失败');
+          }),
+        ).toThrow('注入的写文件失败');
+
+        // 写失败后该行仍在本轮登记清单中（登记早于写文件），并可被只读回读命中
+        expect(ctx.fixtures).toHaveLength(1);
+
+        const registered = ctx.fixtures[0];
+
+        if (registered === undefined) {
+          throw new Error('写文件失败后未在本轮登记清单中看到已创建的资料行');
+        }
+
+        expect(readExistingFixtureIds([registered.row.id]).has(registered.row.id)).toBe(true);
+      },
+      () => cleanupFixtures(ctx),
+    );
+
+    // 收尾后：登记的资料行已删除、登记的文件路径无残留
+    const registered = ctx.fixtures[0];
+
+    if (registered === undefined) {
+      throw new Error('夹具登记丢失，无法核对零残留');
+    }
+
+    expect(readExistingFixtureIds([registered.row.id]).has(registered.row.id)).toBe(false);
+    expect(existsSync(requireFileFixture(registered).filePath)).toBe(false);
   });
 });

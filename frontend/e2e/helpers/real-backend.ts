@@ -1649,7 +1649,6 @@ function assertFixtureRestoreDiagnostics(output: string): void {
   const expectedDiagnostics: Array<[string, string]> = [
     ['database', DEDICATED_E2E_DB_NAME],
     ['existing_rows', '1'],
-    ['mismatch_rows', '0'],
     ['restored_rows', '1'],
   ];
   const mismatched = expectedDiagnostics.filter(([key, value]) => diagnostics[key] !== value);
@@ -1667,8 +1666,10 @@ function assertFixtureRestoreDiagnostics(output: string): void {
 
 /**
  * 夹具「先核验后恢复」：把本轮故意改成 NULL 的列恢复为登记原值，仅当标题 / 创建人 / 各列当前值
- * 仍等于本轮制造的状态时才执行。核验与恢复在同一事务（同一 mysql 进程）：守卫表 CHECK 约束
- * 在任一列已被意外改动（或行被删）时中止事务并回滚（零写入），抛出后调用方必须保留行与文件。
+ * 仍等于本轮制造的状态时才执行。核验与恢复在同一事务（同一 mysql 进程）：先按精确 ID 锁定目标行
+ * （SELECT ... FOR UPDATE），在 UPDATE 之前用守卫表 CHECK 核验库名 / 身份 / 逐列制造值，更新后再以
+ * 影响行数（恰好 1）经第二道守卫把关，任一不符都在 COMMIT 前中止并回滚（零写入）；抛出后调用方
+ * 必须保留行与文件。
  */
 export function restoreMutatedReferenceDocumentFixtureRow(
   env: Record<string, string>,
@@ -1705,23 +1706,22 @@ export function restoreMutatedReferenceDocumentFixtureRow(
   const restoreAssignments = target.mutations
     .map(({ column, originalValue }) => `${column} = ${fixtureSqlLiteral(originalValue)}`)
     .join(', ');
-  const existingRows = `(SELECT COUNT(*) FROM reference_document WHERE ${identity})`;
-  const mismatchRows = `(SELECT COUNT(*) FROM reference_document WHERE ${identity} AND NOT (${manufacturedPredicate}))`;
-  // 违例一律非负：身份须恰好命中 1 行（缺失或重复都 > 0），逐列制造状态不符也会 > 0，
-  // 从而在 UPDATE 之前中止事务（列被意外改动或行缺失时零写入、保留现场）
-  const guardViolations = [
-    `(DATABASE() <> '${DEDICATED_E2E_DB_NAME}')`,
-    `(1 - ${existingRows})`,
-    mismatchRows,
-  ].join(' + ');
+  // 身份 + 逐列制造值须恰好命中 1 行：行缺失 / 标题或创建人被改 / 任一列已变动都会令其为 0
+  const rowByManufacturedState = `(SELECT COUNT(*) FROM reference_document WHERE ${identity} AND (${manufacturedPredicate}))`;
 
   const sql = [
     'START TRANSACTION',
     `CREATE TEMPORARY TABLE ${FIXTURE_RESTORE_GUARD_TABLE} (violations INT NOT NULL, CONSTRAINT ${FIXTURE_RESTORE_GUARD_CONSTRAINT} CHECK (violations = 0))`,
-    `SELECT CONCAT('database=', DATABASE(), ' existing_rows=', ${existingRows}, ' mismatch_rows=', ${mismatchRows})`,
-    `INSERT INTO ${FIXTURE_RESTORE_GUARD_TABLE} (violations) SELECT ${guardViolations}`,
-    `UPDATE reference_document SET ${restoreAssignments} WHERE ${identity}`,
-    `SELECT CONCAT('restored_rows=', ROW_COUNT())`,
+    // 按精确 ID 锁定现有行：核验与更新期间不允许并发改动（行不存在时锁定不命中，由下方核验守卫拒绝）
+    `SELECT id FROM reference_document WHERE id = ${target.id} LIMIT 1 FOR UPDATE`,
+    // 写入前完成库名 / 身份 / 逐列制造值核验：不符即在此中止回滚，绝不执行 UPDATE
+    `INSERT INTO ${FIXTURE_RESTORE_GUARD_TABLE} (violations) SELECT (DATABASE() <> '${DEDICATED_E2E_DB_NAME}') + (1 - ${rowByManufacturedState})`,
+    // UPDATE 的 WHERE 再次包含身份与逐列 <=> 条件，与预检口径一致
+    `UPDATE reference_document SET ${restoreAssignments} WHERE ${identity} AND (${manufacturedPredicate})`,
+    'SET @restored_rows = ROW_COUNT()',
+    // 更新后要求恰好 1 行：不是 1 即在 COMMIT 前经第二道守卫中止回滚
+    `INSERT INTO ${FIXTURE_RESTORE_GUARD_TABLE} (violations) SELECT (1 - @restored_rows)`,
+    `SELECT CONCAT('database=', DATABASE(), ' existing_rows=', (SELECT COUNT(*) FROM reference_document WHERE id = ${target.id}), ' restored_rows=', @restored_rows)`,
     'COMMIT',
   ].join(';\n');
 
