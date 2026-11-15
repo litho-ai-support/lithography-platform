@@ -18,6 +18,7 @@ import { useParams } from 'react-router';
 import { useAuthSession } from '@/features/auth-session';
 import { EngineerRepairRequestDetailPanel } from '@/features/repair-request';
 
+import { useI18n } from '@/shared/i18n';
 import { PageHeader } from '@/shared/ui/page-header';
 
 function parseRequestId(raw: string | undefined): number | null {
@@ -31,6 +32,7 @@ function parseRequestId(raw: string | undefined): number | null {
 
 export function EngineerRepairRequestDetailPage() {
   const { requestId } = useParams<{ requestId: string }>();
+  const { t } = useI18n();
   const { session, status } = useAuthSession();
   const parsedRequestId = parseRequestId(requestId);
 
@@ -42,9 +44,9 @@ export function EngineerRepairRequestDetailPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        description="查看维修申请详情与工程师回复，工程师可直接接单跟进处理。"
+        description={t('engineer.detailDescription')}
         eyebrow="Repair Request Detail"
-        title="维修申请详情"
+        title={t('engineer.detailTitle')}
       />
       <EngineerRepairRequestDetailPanel
         canHandleAsEngineer={canHandleAsEngineer}

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 
 import { isGraphQLIngressError } from '@/shared/graphql';
+import { translateNow } from '@/shared/i18n';
 
 import type {
   EngineerRepairRequestDetail,
@@ -10,7 +11,7 @@ import type {
   EngineerRepairRequestResponseItem,
 } from '../infrastructure/engineer-repair-request.types';
 import {
-  ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE,
+  ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE_KEY,
   fetchEngineerRepairRequestDetail,
 } from '../infrastructure/engineer-repair-request-adapter';
 
@@ -77,7 +78,9 @@ function mergeEngineerResponseSorted(
 }
 
 function toDetailUserMessage(error: unknown): string {
-  return isGraphQLIngressError(error) ? error.userMessage : '维修申请详情加载失败，请稍后重试。';
+  return isGraphQLIngressError(error)
+    ? error.userMessage
+    : translateNow('engineerDetail.loadFailed');
 }
 
 function engineerRepairRequestDetailReducer(
@@ -202,7 +205,7 @@ export function useEngineerRepairRequestDetail(requestId: number | null) {
         type: 'load-failed',
         requestSeq: sequence,
         reason: 'not-accessible',
-        message: ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE,
+        message: translateNow(ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE_KEY),
       });
       return;
     }

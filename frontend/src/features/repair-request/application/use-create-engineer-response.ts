@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react';
 
 import { isGraphQLIngressError } from '@/shared/graphql';
+import { translateNow } from '@/shared/i18n';
 
 import type {
   CreateEngineerResponseInput,
@@ -58,7 +59,7 @@ export function useCreateEngineerResponse() {
       } catch (error) {
         const message = isGraphQLIngressError(error)
           ? error.userMessage
-          : '处理回复失败，请稍后重试';
+          : translateNow('engineerDetail.replyFailed');
         const transportResult: CreateEngineerResponseResult = {
           ok: false,
           reason: 'response-failed',

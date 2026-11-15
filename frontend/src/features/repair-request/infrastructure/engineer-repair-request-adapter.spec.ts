@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as sharedGraphql from '@/shared/graphql';
 import { GraphQLIngressError } from '@/shared/graphql';
+import { translate } from '@/shared/i18n';
 
 import type {
   EngineerRepairListScope,
@@ -22,7 +23,7 @@ import type {
 import {
   acceptRepairRequest,
   createEngineerResponse,
-  ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE,
+  ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE_KEY,
   fetchEngineerRepairRequestDetail,
   fetchEngineerRepairRequests,
 } from './engineer-repair-request-adapter';
@@ -110,6 +111,9 @@ function buildDomainIngressError(options: {
     graphqlErrors: [{ message: options.errorMessage ?? '请求处理失败。', extensions }],
   });
 }
+
+/** 默认（中文）语言下按词条真源翻译，避免在测试里复制第二份文案 */
+const NOT_ACCESSIBLE_MESSAGE = translate('zh-CN', ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE_KEY);
 
 beforeEach(() => {
   executeGraphQLMock.mockReset();
@@ -339,8 +343,8 @@ describe('fetchEngineerRepairRequestDetail', () => {
   });
 
   it.each([
-    ['NOT_FOUND', 'not-accessible', ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE],
-    ['FORBIDDEN', 'not-accessible', ENGINEER_DETAIL_NOT_ACCESSIBLE_MESSAGE],
+    ['NOT_FOUND', 'not-accessible', NOT_ACCESSIBLE_MESSAGE],
+    ['FORBIDDEN', 'not-accessible', NOT_ACCESSIBLE_MESSAGE],
     ['INTERNAL_SERVER_ERROR', 'load-failed', '维修申请详情加载失败，请稍后重试。'],
     ['BAD_USER_INPUT', 'load-failed', '维修申请详情加载失败，请稍后重试。'],
   ])(
