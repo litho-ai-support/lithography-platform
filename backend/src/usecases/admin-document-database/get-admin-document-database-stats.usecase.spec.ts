@@ -53,7 +53,7 @@ describe('GetAdminDocumentDatabaseStatsUsecase', () => {
         organizationCode: 'CLIENT_DEFAULT',
         organizationName: '甲方默认组织',
         organizationKind: 'CLIENT',
-        memberRole: 'ADMIN',
+        memberRole: 'SUPER_ADMIN',
       }),
     }) as unknown as TrustedOrganizationContextQueryService;
 
