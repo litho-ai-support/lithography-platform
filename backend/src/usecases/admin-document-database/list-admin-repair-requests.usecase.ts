@@ -16,6 +16,7 @@ import type {
   AdminRepairRequestQueryFilter,
 } from '@src/modules/lithography/admin-document-database.types';
 import { AdminRepairRequestQueryService } from '@src/modules/lithography/queries/admin-repair-request.query.service';
+import { TrustedOrganizationContextQueryService } from '@src/modules/lithography/queries/trusted-organization-context.query.service';
 import {
   ADMIN_KEYWORD_ACCOUNT_LIMIT,
   assertKeywordAccountLimit,
@@ -23,7 +24,7 @@ import {
   normalizeOptionalFilterText,
   normalizeOptionalKeyword,
 } from './admin-document-database-filter.normalize';
-import { assertAdminDocumentDatabasePermission } from './admin-document-database-permission';
+import { assertAdminDocumentDatabaseGlobalAccess } from './admin-document-database-permission';
 import { enrichAdminRepairRequestListItems } from './enrich-admin-account-display';
 
 /** 页大小上限：与 GraphQL 边界 PaginationArgs @Max(100) 对齐（统一分页策略） */
@@ -44,6 +45,7 @@ export class ListAdminRepairRequestsUsecase {
   constructor(
     private readonly adminRepairRequestQueryService: AdminRepairRequestQueryService,
     private readonly accountQueryService: AccountQueryService,
+    private readonly organizationContextService: TrustedOrganizationContextQueryService,
   ) {}
 
   async execute(params: {
@@ -51,7 +53,12 @@ export class ListAdminRepairRequestsUsecase {
     pagination: PaginationParams;
     filter?: AdminRepairRequestListFilter;
   }): Promise<AdminRepairRequestListPage> {
-    assertAdminDocumentDatabasePermission(params.session, '查看维修申请数据库');
+    await assertAdminDocumentDatabaseGlobalAccess({
+      session: params.session,
+      accountQueryService: this.accountQueryService,
+      organizationContextService: this.organizationContextService,
+      actionLabel: '查看维修申请数据库',
+    });
 
     if (!isOffsetMode(params.pagination)) {
       throw new DomainError(

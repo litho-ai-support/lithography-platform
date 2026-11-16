@@ -1,9 +1,16 @@
 // src/usecases/admin-document-database/get-admin-repair-request-summary.usecase.spec.ts
 
-import { ADMIN_DOCUMENT_DATABASE_ERROR, PERMISSION_ERROR } from '@core/common/errors/domain-error';
+import {
+  ADMIN_DOCUMENT_DATABASE_ERROR,
+  DomainError,
+  ORGANIZATION_ERROR,
+  PERMISSION_ERROR,
+} from '@core/common/errors/domain-error';
 import type { AccountQueryService } from '@src/modules/account/queries/account.query.service';
 import type { AdminRepairRequestSummaryQueryResult } from '@src/modules/lithography/admin-document-database.types';
 import type { AdminRepairRequestQueryService } from '@src/modules/lithography/queries/admin-repair-request.query.service';
+import type { TrustedOrganizationContextQueryService } from '@src/modules/lithography/queries/trusted-organization-context.query.service';
+import { createAdminDocumentDatabaseAccessMocks } from '../../../test/support/account/admin-document-database-access.fixture';
 import {
   captureThrownError,
   createSuperAdminSession,
@@ -37,18 +44,29 @@ describe('GetAdminRepairRequestSummaryUsecase', () => {
     findSummaryById: jest.fn().mockResolvedValue(summaryResult),
   } as unknown as AdminRepairRequestQueryService;
 
+  const access = createAdminDocumentDatabaseAccessMocks();
+
   const accountQueryService = {
+    findAdminLevelByAccountId: access.findAdminLevelByAccountId,
     findAccountDisplayInfosByAccountIds: jest
       .fn()
       .mockResolvedValue(new Map([[900001, { nickname: '客户甲', companyName: '甲公司' }]])),
   } as unknown as AccountQueryService;
 
+  const organizationContextService = {
+    resolveForAccount: access.resolveForAccount,
+  } as unknown as TrustedOrganizationContextQueryService;
+
   const usecase = new GetAdminRepairRequestSummaryUsecase(
     adminRepairRequestQueryService,
     accountQueryService,
+    organizationContextService,
   );
 
   beforeEach(() => {
+    access.setAdminLevel(1);
+    access.setMembershipError(null);
+    access.findAdminLevelByAccountId.mockClear();
     (adminRepairRequestQueryService.findSummaryById as jest.Mock)
       .mockClear()
       .mockResolvedValue(summaryResult);
@@ -67,8 +85,38 @@ describe('GetAdminRepairRequestSummaryUsecase', () => {
       expect(error.code).toBe(PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS);
       expect(adminRepairRequestQueryService.findSummaryById).not.toHaveBeenCalled();
       expect(accountQueryService.findAccountDisplayInfosByAccountIds).not.toHaveBeenCalled();
+      expect(access.findAdminLevelByAccountId).not.toHaveBeenCalled();
+      expect(access.resolveForAccount).not.toHaveBeenCalled();
     },
   );
+
+  it.each([2, null])('当前等级 %j 时失败关闭，摘要查询与账户富集均不触发', async (level) => {
+    access.setAdminLevel(level);
+
+    const error = (await captureThrownError(
+      usecase.execute({ session: createSuperAdminSession(), requestId: 880001 }),
+    )) as { code?: string; message?: string };
+
+    expect(error.code).toBe(PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS);
+    expect(error.message).toContain('仅一级管理员可以查看维修申请数据库');
+    expect(adminRepairRequestQueryService.findSummaryById).not.toHaveBeenCalled();
+    expect(accountQueryService.findAccountDisplayInfosByAccountIds).not.toHaveBeenCalled();
+    expect(access.resolveForAccount).not.toHaveBeenCalled();
+  });
+
+  it('可信成员事实缺失时失败关闭，不读取摘要正文', async () => {
+    access.setMembershipError(
+      new DomainError(ORGANIZATION_ERROR.NO_ACTIVE_MEMBERSHIP, '当前账号没有有效组织成员关系'),
+    );
+
+    const error = (await captureThrownError(
+      usecase.execute({ session: createSuperAdminSession(), requestId: 880001 }),
+    )) as { code?: string };
+
+    expect(error.code).toBe(ORGANIZATION_ERROR.NO_ACTIVE_MEMBERSHIP);
+    expect(adminRepairRequestQueryService.findSummaryById).not.toHaveBeenCalled();
+    expect(accountQueryService.findAccountDisplayInfosByAccountIds).not.toHaveBeenCalled();
+  });
 
   it('SUPER_ADMIN 读取摘要：富集展示昵称且账号 ID 不外泄', async () => {
     const view = await usecase.execute({

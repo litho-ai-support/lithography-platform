@@ -1,13 +1,19 @@
 // src/usecases/admin-document-database/list-admin-repair-requests.usecase.spec.ts
 
 import type { OffsetParams, PaginationParams } from '@core/pagination/pagination.types';
-import { PERMISSION_ERROR } from '@core/common/errors/domain-error';
+import {
+  DomainError,
+  ORGANIZATION_ERROR,
+  PERMISSION_ERROR,
+} from '@core/common/errors/domain-error';
 import type {
   AdminRepairRequestListItemQueryResult,
   AdminRepairRequestListPage,
 } from '@src/modules/lithography/admin-document-database.types';
 import type { AccountQueryService } from '@src/modules/account/queries/account.query.service';
 import type { AdminRepairRequestQueryService } from '@src/modules/lithography/queries/admin-repair-request.query.service';
+import type { TrustedOrganizationContextQueryService } from '@src/modules/lithography/queries/trusted-organization-context.query.service';
+import { createAdminDocumentDatabaseAccessMocks } from '../../../test/support/account/admin-document-database-access.fixture';
 import {
   captureThrownError,
   createSuperAdminSession,
@@ -57,19 +63,30 @@ describe('ListAdminRepairRequestsUsecase', () => {
     listAll: jest.fn().mockResolvedValue(makeListPage()),
   } as unknown as AdminRepairRequestQueryService;
 
+  const access = createAdminDocumentDatabaseAccessMocks();
+
   const accountQueryService = {
+    findAdminLevelByAccountId: access.findAdminLevelByAccountId,
     findAccountIdsByDisplayKeyword: jest
       .fn()
       .mockResolvedValue({ accountIds: [], totalMatched: 0 }),
     findAccountDisplayInfosByAccountIds: jest.fn().mockResolvedValue(new Map()),
   } as unknown as AccountQueryService;
 
+  const organizationContextService = {
+    resolveForAccount: access.resolveForAccount,
+  } as unknown as TrustedOrganizationContextQueryService;
+
   const usecase = new ListAdminRepairRequestsUsecase(
     adminRepairRequestQueryService,
     accountQueryService,
+    organizationContextService,
   );
 
   beforeEach(() => {
+    access.setAdminLevel(1);
+    access.setMembershipError(null);
+    access.findAdminLevelByAccountId.mockClear();
     (adminRepairRequestQueryService.listAll as jest.Mock)
       .mockClear()
       .mockResolvedValue(makeListPage());
@@ -91,8 +108,40 @@ describe('ListAdminRepairRequestsUsecase', () => {
       expect(error.code).toBe(PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS);
       expect(adminRepairRequestQueryService.listAll).not.toHaveBeenCalled();
       expect(accountQueryService.findAccountIdsByDisplayKeyword).not.toHaveBeenCalled();
+      // 角色断言先行：等级与成员事实均不读取
+      expect(access.findAdminLevelByAccountId).not.toHaveBeenCalled();
+      expect(access.resolveForAccount).not.toHaveBeenCalled();
     },
   );
+
+  it.each([2, null])('当前等级 %j 时失败关闭，本域与账户域零读取', async (level) => {
+    access.setAdminLevel(level);
+
+    const error = (await captureThrownError(
+      usecase.execute({ session: createSuperAdminSession(), pagination: offsetPagination() }),
+    )) as { code?: string; message?: string };
+
+    expect(error.code).toBe(PERMISSION_ERROR.INSUFFICIENT_PERMISSIONS);
+    expect(error.message).toContain('仅一级管理员可以查看维修申请数据库');
+    expect(adminRepairRequestQueryService.listAll).not.toHaveBeenCalled();
+    expect(accountQueryService.findAccountIdsByDisplayKeyword).not.toHaveBeenCalled();
+    expect(accountQueryService.findAccountDisplayInfosByAccountIds).not.toHaveBeenCalled();
+    expect(access.resolveForAccount).not.toHaveBeenCalled();
+  });
+
+  it('可信成员事实缺失时失败关闭，不返回任何维修申请数据', async () => {
+    access.setMembershipError(
+      new DomainError(ORGANIZATION_ERROR.NO_ACTIVE_MEMBERSHIP, '当前账号没有有效组织成员关系'),
+    );
+
+    const error = (await captureThrownError(
+      usecase.execute({ session: createSuperAdminSession(), pagination: offsetPagination() }),
+    )) as { code?: string };
+
+    expect(error.code).toBe(ORGANIZATION_ERROR.NO_ACTIVE_MEMBERSHIP);
+    expect(adminRepairRequestQueryService.listAll).not.toHaveBeenCalled();
+    expect(accountQueryService.findAccountDisplayInfosByAccountIds).not.toHaveBeenCalled();
+  });
 
   it('非 OFFSET 分页拒绝（管理员聚合仅支持 OFFSET）', async () => {
     const error = (await captureThrownError(

@@ -2,13 +2,14 @@
 
 import { Injectable } from '@nestjs/common';
 import type { UsecaseSession } from '@app-types/auth/session.types';
+import { AccountQueryService } from '@src/modules/account/queries/account.query.service';
 import { ReferenceDocumentQueryService } from '@src/modules/lithography/queries/reference-document.query.service';
 import { AdminAiConversationQueryService } from '@src/modules/lithography/queries/admin-ai-conversation.query.service';
 import { AdminAiReportQueryService } from '@src/modules/lithography/queries/admin-ai-report.query.service';
 import { AdminRepairRequestQueryService } from '@src/modules/lithography/queries/admin-repair-request.query.service';
 import type { AdminDocumentDatabaseStatsView } from '@src/modules/lithography/admin-document-database.types';
 import { TrustedOrganizationContextQueryService } from '@src/modules/lithography/queries/trusted-organization-context.query.service';
-import { assertAdminDocumentDatabasePermission } from './admin-document-database-permission';
+import { assertAdminDocumentDatabaseGlobalAccess } from './admin-document-database-permission';
 
 /**
  * 管理员文档数据库统计用例（PR3）。
@@ -30,14 +31,16 @@ export class GetAdminDocumentDatabaseStatsUsecase {
     private readonly adminAiReportQueryService: AdminAiReportQueryService,
     private readonly referenceDocumentQueryService: ReferenceDocumentQueryService,
     private readonly organizationContextService: TrustedOrganizationContextQueryService,
+    private readonly accountQueryService: AccountQueryService,
   ) {}
 
   async execute(params: { session: UsecaseSession }): Promise<AdminDocumentDatabaseStatsView> {
-    assertAdminDocumentDatabasePermission(params.session, '查看文档数据库统计');
-
-    // 组织范围先解析：无有效成员关系/多关系歧义在此拒绝，不进入任何统计查询
-    const membership = await this.organizationContextService.resolveForAccount({
-      accountId: params.session.accountId,
+    // 等级与成员事实先于任何统计读取完成（F1：二级/缺级/缺成员一律失败关闭）
+    const membership = await assertAdminDocumentDatabaseGlobalAccess({
+      session: params.session,
+      accountQueryService: this.accountQueryService,
+      organizationContextService: this.organizationContextService,
+      actionLabel: '查看文档数据库统计',
     });
 
     const [repairRequestTotal, aiConversationTotal, aiReportTotal, referenceDocumentPage] =
